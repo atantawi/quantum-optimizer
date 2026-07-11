@@ -78,3 +78,7 @@ See also:
 
 - `docs/superpowers/specs/2026-07-10-optimizer-design.md` — authoritative design spec.
 - `docs/optimizer-brainstorm-summary.md` — problem statement and design rationale.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
