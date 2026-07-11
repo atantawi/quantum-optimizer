@@ -127,7 +127,8 @@ changing station data or the allocator/optimizer.
   station's `mu` and `alloc_cost`.
 - **Optimizer** — owns the stations, budget `C`, tolerance `ε`, `max_iter`, and optional
   initial ζ. `run() -> Result` executes the loop. `Result` carries: `S*`, per-station
-  `E[T_i]`, objective `Σ ω_i·E[T_i]`, iteration count, and `converged: bool`.
+  `E[T_i]`, objective `Σ ω_i·E[T_i]`, iteration count, `converged: bool`, and the final
+  `residual` (`‖Sₖ₊₁ − Sₖ‖∞`).
 
 Default initial ζ (a strictly-positive starting guess; see §5): single-server → `1`,
 fork-join → `3/2`. The loop converges from any positive start regardless of the true ζ(S).
@@ -141,8 +142,11 @@ fork-join → `3/2`. The loop converges from any positive start regardless of th
   With positive ζ⁽⁰⁾ and a feasible budget, `ζ_i⁽ᵏ⁺¹⁾ = E[T_i]·(S_i·µ̂_i − γ_i) > 0` holds
   throughout, so no station is driven to instability during iteration.
 - **Stability guard:** `sojourn_time`/`zeta` raise if `S·µ̂ ≤ γ`.
-- **Construction validation:** positive `gamma`, `mu`, costs, `weight`; `r ≥ 1`.
-- **Non-convergence:** after `max_iter`, return `Result` with `converged=False` (no hang).
+- **Construction validation:** finite and positive `gamma`, `mu`, costs, `weight`; `r ≥ 1`.
+  `budget` and initial ζ are likewise required finite (a NaN would slip past the `≤`/`>`
+  guards, since every ordering comparison against NaN is false).
+- **Non-convergence:** after `max_iter`, return `Result` with `converged=False` and the final
+  `residual`, and emit a `RuntimeWarning` (no hang, but the caller is actively signalled).
 
 ## 6. Package layout & dependencies
 

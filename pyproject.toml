@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qopt"
+version = "0.1.0"
+description = "Capacity allocation optimizer for a network of queues"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qopt*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
