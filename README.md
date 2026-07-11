@@ -20,6 +20,37 @@ The network is a collection of **stations**. Two types:
 Arrival rates `γ` are fixed per-station constants; the optimizer iterates on the capacity
 vector `S` until the optimal `S*` is reached.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    IN["Stations (γ, μ, weight)<br/>+ budget"] --> OPT
+
+    subgraph LOOP["fixed-point loop — until ‖ΔS‖∞ &lt; tol"]
+        direction LR
+        OPT["<b>Optimizer</b><br/>driver / convergence"]
+        ALLOC["<b>allocator</b><br/>eq 21 · min_feasible_budget"]
+        STA["<b>Station models</b><br/>sojourn_time · zeta (eq 22)"]
+        OPT -- "allocate(ζ)" --> ALLOC
+        ALLOC -- "capacities S" --> OPT
+        OPT -- "Sᵢ" --> STA
+        STA -- "ζᵢ = E[T]·(Sμ − γ)" --> OPT
+    end
+
+    OPT --> RES["<b>Result</b><br/>S* · E[T] · objective · converged"]
+
+    STA -. subtypes .-> GG1["GG1Station<br/>M/M/1 · M/D/1"]
+    STA -. subtypes .-> FJ["ForkJoinStation<br/>→ t_ul (UL bound)"]
+    STA -. "extension seam" .-> FUT(["future:<br/>simulation analyzer"]):::future
+
+    classDef future stroke-dasharray: 4 4,fill:#f6f6f6;
+```
+
+Each iteration re-allocates capacities from the current `ζ` (eq 21), then recomputes `ζ`
+from the resulting capacities (eq 22); the loop repeats until the capacity vector stops
+moving. Stations are the pluggable analyzer layer — each owns its own queueing math behind
+the `Station` interface, which is also the seam for a future network-simulation analyzer.
+
 ## Scope & limitations
 
 Each station is analyzed **independently** from its own arrival rate and coefficients of
