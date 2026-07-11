@@ -17,7 +17,8 @@ Quantum-Centric Supercomputing Environments").
 
 The network is a collection of **stations** (a.k.a. nodes). Two station types:
 
-- **Single-server queue** — analyzed with the M/M/1 mean response time.
+- **Single-server queue** — a G/G/1 queue analyzed with the Kingman / Allen–Cunneen
+  mean-value approximation (M/M/1 and M/D/1 are presets). See §3.5.
 - **Fork-join (FJ) queue** — a pair of parallel servers; analyzed with a closed-form
   approximation lifted from the local `~/Projects/fork-join` repo.
 
@@ -94,11 +95,13 @@ The paper ties the non-bottleneck server's capacity as `S₂ = S₁/r`, which fo
 effective rates are `m₁ = S·µ̂₁` and `m₂ = S·r·µ̂₁`, and their ratio stays `r` for any `S`,
 independent of the allocation. Knock-on effects:
 
-- Functional form stays `E[T_FJ] = ζ/(S·µ̂₁ − γ)`, using the **bottleneck** base rate `µ̂₁`
-  (the smaller of the two). `µ̂₁` is the station's `mu` field; `µ̂₂ = r·µ̂₁`.
+- Functional form stays `E[T_FJ] = ζ/(S·mu − γ)`, where the station's `mu` field is the
+  **slower** server's rate (the smaller of the two); the faster server's rate is `r·mu`.
+  (The paper calls the slower one the "bottleneck µ̂₁"; we just call it `mu`.)
 - FJ budget spend is `S·c₁ + S·c₂`, so the allocator's cost coefficient is
   **`c_FJ = c₁ + c₂`** (not the paper's `c₁ + c₂/r`).
-- Stability condition: `S·µ̂₁ > γ` (bottleneck). Since `m₁ < m₂`, this implies `m₂ > γ` too.
+- Stability condition: `S·mu > γ` (slower server binds). Since `m₁ < m₂`, this implies
+  `m₂ > γ` too.
 
 ### 3.3 FJ cost representation
 Decision: a FJ station stores **`c₁` and `c₂` separately**; the allocator forms
@@ -114,6 +117,29 @@ giving `E[T_i] = 1/0 → ∞`; and all-zero ζ makes eq 21 a `0/0`. Therefore:
   `ζ_i⁽ᵏ⁺¹⁾ = E[T_i]·(S_i·µ̂_i − γ_i) > 0` throughout — no station is ever driven to the
   boundary during iteration.
 
+### 3.5 Single-server generalized to G/G/1
+Rather than hard-coding M/M/1, the single-server type is an abstract `SingleServerStation`
+with a concrete **`GG1Station`** using the Kingman / Allen–Cunneen mean-value approximation,
+parameterized by the coefficients of variation of interarrival (`cov_a`) and service
+(`cov_s`) times:
+
+```
+ζ = 1 − ρ·(1 − (cov_a² + cov_s²)/2),   ρ = γ/(S·mu)
+```
+
+M/M/1 (`cov_a=1, cov_s=1` → ζ ≡ 1) and M/D/1 (`cov_a=1, cov_s=0` → ζ = 1 − ρ/2) are presets;
+the approximation is exact for any M/G/1 (Poisson arrivals). This confirmed that ζ is **not**
+generally 1 — M/D/1 gives a load-dependent ζ — so the loop treats ζ generically (the earlier
+`ζ = 1` was only an M/M/1 sanity check, never an assumption).
+
+**Scope note — variability propagation (deferred).** `cov_a` is taken as a fixed per-station
+input. In a real network, an upstream station's *departure* variability drives its
+downstream neighbors' *arrival* variability; analyzing stations independently does not
+capture that coupling. Doing so faithfully requires **simulation** of the whole network, not
+independent per-station closed forms. This is beyond the current scope — treated as a current
+approximation and a subject for future incorporation (same seam as the future
+`SimulationAnalyzer`). Recorded in the spec §8 and the README.
+
 ---
 
 ## 4. Agreed architecture
@@ -125,17 +151,18 @@ analyzer — the seam where a future `SimulationAnalyzer` could be swapped in).
 Station (ABC)                      # queueing entity + its math
 ├─ fields: gamma, mu, S, weight
 ├─ sojourn_time(S) -> float        # THE analysis ("Analyzer" role)
-├─ mu_bottleneck -> float          # µ̂ in eqs 20–22 (= mu)
 ├─ alloc_cost    -> float          # cost coefficient in budget / eq 21
-└─ zeta(S)       -> float          # E[T]·(S·µ̂ − γ)         (eq 22)
+└─ zeta(S)       -> float          # E[T]·(S·mu − γ)         (eq 22)
 
-SingleServerStation(Station)       # extra field: c
-   sojourn_time(S) = 1/(S·mu − gamma)              # ζ ≡ 1
-   alloc_cost = c
+SingleServerStation(Station)       # ABC for one-server queues; extra field: c; alloc_cost=c
+   └─ GG1Station                   # G/G/1 (Kingman/Allen-Cunneen); extra: cov_a, cov_s
+        sojourn_time(S) via E[T] = (1/µ)[1 + ((cov_a²+cov_s²)/2)·ρ/(1−ρ)], µ=S·mu, ρ=γ/µ
+        ζ = 1 − ρ·(1 − (cov_a²+cov_s²)/2)
+        presets: mm1() → (1,1), ζ≡1 ;  md1() → (1,0), ζ = 1 − ρ/2   (both exact)
 
 ForkJoinStation(Station)           # extra fields: r, c1, c2
-   sojourn_time(S) = T_UL(gamma, S·mu, S·r·mu)     # mu = µ̂₁ (bottleneck)
-   mu_bottleneck = mu ;  alloc_cost = c1 + c2
+   sojourn_time(S) = T_UL(gamma, S·mu, S·r·mu)     # mu = slower server
+   alloc_cost = c1 + c2
 
 Allocator
    allocate(stations, C, zeta_vec) -> S_vec        # eq 21

@@ -10,12 +10,25 @@ Quantum-Centric Supercomputing Environments").
 
 The network is a collection of **stations**. Two types:
 
-- **Single-server queue** — analyzed with the M/M/1 mean response time.
+- **Single-server queue** — a G/G/1 queue analyzed with the Kingman / Allen–Cunneen
+  mean-value approximation, parameterized by the coefficients of variation of interarrival
+  (`cov_a`) and service (`cov_s`) times. M/M/1 (`cov_a=1, cov_s=1`) and M/D/1
+  (`cov_a=1, cov_s=0`) are presets; the approximation is exact for any M/G/1.
 - **Fork-join queue** — two parallel servers (ratio `r ≥ 1`), analyzed with the UL
   (upper–lower bound interpolation) approximation.
 
 Arrival rates `γ` are fixed per-station constants; the optimizer iterates on the capacity
 vector `S` until the optimal `S*` is reached.
+
+## Scope & limitations
+
+Each station is analyzed **independently** from its own arrival rate and coefficients of
+variation. The optimizer does **not** model how one station's *departure* process shapes the
+*arrival* variability of downstream stations — i.e. variability propagation through the
+network is not captured. Doing so faithfully requires **simulation** of the whole network
+rather than closed-form per-station analysis. The current per-station analysis is therefore
+an **approximation**, and full network coupling is a planned area for **future work**
+(the same extension seam as a future simulation-based analyzer).
 
 ## Status
 
