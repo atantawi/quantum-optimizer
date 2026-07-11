@@ -32,7 +32,49 @@ an **approximation**, and full network coupling is a planned area for **future w
 
 ## Status
 
-Design phase. See:
+Implemented. Core library (`qopt`) with single-server (G/G/1) and fork-join stations,
+the eq-21 allocator, and the fixed-point `Optimizer`. Test suite passes.
+
+## Usage
+
+Install the package (editable) so `qopt` is importable:
+
+```
+pip install -e .
+```
+
+```python
+from qopt import GG1Station, ForkJoinStation, Optimizer, min_feasible_budget
+
+stations = [
+    GG1Station.mm1(gamma=0.6, mu=1.0, c=2.0, name="ingest"),
+    GG1Station.md1(gamma=0.4, mu=1.0, c=1.0, name="transform"),
+    ForkJoinStation(gamma=0.5, mu=1.0, r=2.0, c1=1.0, c2=1.0, name="fork-join"),
+]
+result = Optimizer(stations, budget=6 * min_feasible_budget(stations)).run()
+print(result.capacities, result.objective, result.converged)
+```
+
+See `examples/mixed_network.py` for a runnable version. Running it prints the optimal
+allocation (illustrative output; regenerate with `python -m examples.mixed_network`):
+
+```
+budget = 15.6000   converged = True in 6 iterations
+station                        S*       E[T]       zeta
+ingest (M/M/1)             2.9601     0.4237     1.0000
+transform (M/D/1)          3.6448     0.2913     0.9451
+fork-join                  3.0175     0.4520     1.1378
+objective (sum w*E[T]) = 1.166933
+```
+
+Note the M/M/1 station's `zeta = 1.0000` exactly, while the M/D/1 and fork-join stations
+have load-dependent `zeta` — which is what makes the fixed-point iteration necessary.
+
+If the fixed point is not reached within `max_iter`, `run()` still returns a `Result` (the
+last iterate) but sets `converged=False`, records the final `residual` (`‖Sₖ₊₁−Sₖ‖∞`), and
+emits a `RuntimeWarning` — inspect `result.converged` before trusting the allocation.
+
+See also:
 
 - `docs/superpowers/specs/2026-07-10-optimizer-design.md` — authoritative design spec.
 - `docs/optimizer-brainstorm-summary.md` — problem statement and design rationale.
