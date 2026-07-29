@@ -41,7 +41,7 @@ flowchart LR
 
     STA -. subtypes .-> GG1["GG1Station<br/>M/M/1 · M/D/1"]
     STA -. subtypes .-> FJ["ForkJoinStation<br/>→ t_ul (UL bound)"]
-    STA -. "extension seam" .-> FUT(["future:<br/>simulation analyzer"]):::future
+    STA -. "extension seam" .-> FUT(["designed, not yet built:<br/>Analyzer seam →<br/>qsim-service simulation"]):::future
 
     classDef future stroke-dasharray: 4 4,fill:#f6f6f6;
 ```
@@ -58,8 +58,19 @@ variation. The optimizer does **not** model how one station's *departure* proces
 *arrival* variability of downstream stations — i.e. variability propagation through the
 network is not captured. Doing so faithfully requires **simulation** of the whole network
 rather than closed-form per-station analysis. The current per-station analysis is therefore
-an **approximation**, and full network coupling is a planned area for **future work**
-(the same extension seam as a future simulation-based analyzer).
+an **approximation**.
+
+**Simulation support is designed but not yet implemented.** The plan closes exactly this gap
+by adding a network topology and obtaining `E[T]` from a whole-network discrete-event
+simulation via the sister [`qsim-service`](https://github.com/atantawi/qsim-service) — one
+HTTP call per optimizer iteration, behind an `Analyzer` seam so the allocator, eq 21/22, and
+the fixed-point loop stay untouched and analytic-vs-simulated results remain directly
+comparable. See
+[`docs/superpowers/specs/2026-07-29-simulation-support-design.md`](docs/superpowers/specs/2026-07-29-simulation-support-design.md).
+
+Out of scope even then, and remaining honest limitations: closed chains and multi-class
+networks (eq 21 assumes a fixed scalar `γ` per station), and non-exponential fork-join
+branches (the `t_ul` approximation assumes exponential servers).
 
 ## Status
 
@@ -108,6 +119,8 @@ emits a `RuntimeWarning` — inspect `result.converged` before trusting the allo
 See also:
 
 - `docs/superpowers/specs/2026-07-10-optimizer-design.md` — authoritative design spec.
+- `docs/superpowers/specs/2026-07-29-simulation-support-design.md` — simulation support
+  (topology, `Analyzer` seam, `qsim-service` client). Approved design; not yet implemented.
 - `docs/optimizer-brainstorm-summary.md` — problem statement and design rationale.
 
 ## License
