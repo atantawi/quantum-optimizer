@@ -158,12 +158,53 @@ disagree about arrival rates.
 | `gamma` passed **and** bound to a `Network` | `ValueError`. γ is derived-only; there is no silent override path |
 | `gamma` omitted, never bound | `ValueError` on first use — never a `None` propagating into the math |
 
-This also resolves an inconsistency worth recording: `examples/mixed_network.py` uses
-`γ = 0.6, 0.4, 0.5` for three stations, while `qsim-service`'s `qopt-3station.json` fixture
-wires those same three stations as a tandem chain fed by one source at rate 1.0 — in which
-every station sees λ = 1.0. Both cannot describe the same network. Under this design the
-example remains a *standalone analytic* network (no topology, so no contradiction), and the
-chain becomes a new example (§9).
+### 4.1.1 The existing example is a realizable topology
+
+`examples/mixed_network.py` uses `γ = 0.6, 0.4, 0.5`. Those are not arbitrary — they are
+exactly the traffic-equation solution of a Poisson source at λ₀ = 1.0 feeding `mm1` and `md1`
+in **parallel**, both then routing into the fork-join station:
+
+```
+source (λ₀ = 1.0)
+   ├─ 0.6 ─► mm1 ──┬─ 0.5 ─► fj ─ 1.0 ─► sink
+   └─ 0.4 ─► md1 ──┤
+                   └─ 0.5 ─► sink
+```
+
+```
+λ_mm1 = 1.0 · 0.6                = 0.6
+λ_md1 = 1.0 · 0.4                = 0.4
+λ_fj  = 0.6 · 0.5 + 0.4 · 0.5    = 0.5
+```
+
+Out-edge probabilities sum to 1 at every node, so this satisfies §4.2 as written. There is one
+degree of freedom — any `(p_mm1, p_md1)` with `0.6·p_mm1 + 0.4·p_md1 = 0.5` reproduces the same
+γ — and this spec pins the symmetric choice `p_mm1 = p_md1 = 0.5` so the golden fixture (§8) is
+deterministic.
+
+**Why this is the right example to build on.** `min_feasible_budget` for these stations is
+`2.0(0.6) + 1.0(0.4) + 2.0(0.5) = 2.6`, and `6 × 2.6 = 15.6` — the exact budget in the current
+README output. So the network form with *derived* γ reproduces today's analytic table
+bit-for-bit, making it a **regression test** rather than a new example needing its own
+baseline (§8, §11).
+
+It also isolates the phenomenon this whole feature exists to capture, because γ is identical on
+both paths — so any analytic-vs-simulated difference is attributable to variability propagation
+alone, not to differing arrival rates:
+
+- A Poisson source split by Bernoulli probabilities yields streams into `mm1` and `md1` that
+  **are** Poisson. Their `cov_a = 1` is therefore exactly right, and analytic should closely
+  match simulated at those two stations.
+- `fj` receives a thinned **superposition of two departure streams**, which is not Poisson —
+  yet `t_ul` is documented as taking a *Poisson* arrival rate. So `fj` is precisely where the
+  analytic approximation is unjustified and where simulation is expected to diverge.
+
+An expected-divergence-location prediction like that is worth far more as a demonstration than a
+tandem chain, where every station is equally suspect.
+
+Note that `qsim-service`'s `qopt-3station.json` fixture wires the same three stations as a
+*tandem* chain at λ = 1.0. That is simply **a different network**, not a conflict: it is a
+translation-layer test on the qsim side (§8.1), not a description of this example.
 
 ### 4.2 Structural validation at construction
 
@@ -414,8 +455,10 @@ The entire simulation path is unit-testable with no Java, no network, and no con
 | Test | What it pins |
 |---|---|
 | Fake transport returning canned JSON | spec build, measure mapping, degraded handling, every error branch |
-| Golden request fixture | a **qopt-authored** `tests/fixtures/qopt_chain_request.json`; `Network.to_model_dict(S)` at a known `S` must reproduce it byte-for-byte. Locks our emission against accidental drift (see §8.1 on why qsim's own fixture is not the golden file) |
+| Golden request fixture | a **qopt-authored** `tests/fixtures/qopt_mixed_network_request.json`, built from the §4.1.1 topology; `Network.to_model_dict(S)` at a known `S` must reproduce it byte-for-byte. Locks our emission against accidental drift (see §8.1 on why qsim's own fixture is not the golden file) |
 | Traffic equations | tandem (λ equal throughout), branch (λ splits by probability), feedback loop (λ = λ₀/(1−p)) — all closed-form expected values |
+| Mixed-network γ derivation | the §4.1.1 topology derives exactly `γ = (0.6, 0.4, 0.5)` |
+| Mixed-network regression | the §4.1.1 `Network` on the analytic path reproduces the legacy standalone result bit-for-bit — same budget 15.6, same `S*`, `E[T]`, `ζ`, and objective. This is the strongest single check that deriving γ changed nothing |
 | ζ-scaling invariance | asserts `allocate` really is invariant to uniform ζ scaling — the property §6.4 depends on |
 | Noise floor | synthetic analyzer with dialed CI widths; `stop_reason` flips `"tol"` → `"noise-floor"` as widths grow; κ=0 restores naive behavior |
 | Naive-equivalence | all knobs off plus a deterministic fake analyzer mirroring `sojourn_time` ⇒ bit-identical to `Optimizer(stations, budget)` |
@@ -435,21 +478,27 @@ assumes **exponential** servers. qopt can therefore only emit exponential fork-j
 and that fixture is not reproducible from any `Network`.
 
 Its single-server nodes *are* consistent with §5.2 (`exponential rate 3.0` ⇒ `S·µ = 3`;
-`deterministic 0.25` ⇒ `S·µ = 4`), and its tandem-at-λ=1.0 topology is what §4.1 refers to.
-So it remains a useful cross-repo reference for the shared vocabulary — just not a
-byte-comparison target. Per-branch `cov_s` on `ForkJoinStation` would require a fork-join
+`deterministic 0.25` ⇒ `S·µ = 4`), and its tandem-at-λ=1.0 wiring is simply a different network
+from §4.1.1's. So it remains a useful cross-repo reference for the shared vocabulary — just not
+a byte-comparison target. Per-branch `cov_s` on `ForkJoinStation` would require a fork-join
 approximation that admits non-exponential servers, which is a modeling change, not plumbing
 (§10).
 
 ## 9. Documentation deliverables
 
-- `examples/simulated_chain.py` — the three-station chain solved analytically and by
-  simulation, side by side, so the variability-propagation difference is visible.
+- `examples/mixed_network.py` — **converted** to the §4.1.1 topology, with γ derived rather
+  than hand-supplied. Its analytic output must remain byte-identical to today's (budget 15.6,
+  same `S*` / `E[T]` / `ζ` table), so the conversion is verifiable rather than a rewrite.
+- `examples/simulated_mixed_network.py` — the same network solved analytically and by
+  simulation, side by side. Because γ is identical on both paths, the printed difference is
+  attributable to variability propagation alone. Expected to show close agreement at `mm1` and
+  `md1` (Poisson-split arrivals, so `cov_a = 1` is exact) and visible divergence at `fj`
+  (non-Poisson superposition, where `t_ul`'s Poisson assumption does not hold) — a prediction
+  the example should state up front and then demonstrate.
 - README: replace the dashed `future: simulation analyzer` box in the architecture diagram
   with the real path, and update **Scope & limitations** — network coupling moves from
   "future work" to "supported via simulation", with closed/multi-class remaining the honest
   open limitations.
-- `examples/mixed_network.py` stays as-is: the standalone analytic example.
 
 ## 10. Out of scope
 
@@ -469,8 +518,10 @@ approximation that admits non-exponential servers, which is a modeling change, n
    existing test suite passes unmodified.
 2. `Network` derives `γ` for tandem, branching, and feedback topologies, matching
    closed-form expected values.
-3. `Network.to_model_dict(S)` reproduces the committed `tests/fixtures/qopt_chain_request.json`
-   golden fixture byte-for-byte.
+2a. The §4.1.1 topology derives `γ = (0.6, 0.4, 0.5)` and, on the analytic path, reproduces the
+   current `examples/mixed_network.py` output bit-for-bit at budget 15.6.
+3. `Network.to_model_dict(S)` reproduces the committed
+   `tests/fixtures/qopt_mixed_network_request.json` golden fixture byte-for-byte.
 4. The naive-equivalence test (§8) passes: knobs off ⇒ today's loop with a substituted
    `E[T]`.
 5. Against a live `qsim-service`, a single-station M/M/1 network's simulated CI brackets the
