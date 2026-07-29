@@ -1,7 +1,9 @@
 # Design Spec: Simulation Support — network topology and a `qsim-service`-backed analyzer
 
 Date: 2026-07-29
-Status: Approved design — pending final review before implementation planning.
+Status: Approved design. §5.3 corrected to the as-built `qsim-service` measure contract after
+[qsim-service#7](https://github.com/atantawi/qsim-service/pull/7) merged; nothing is externally
+blocked. Implementation plan: `docs/superpowers/plans/2026-07-29-simulation-support.md`.
 
 Companion specs:
 
@@ -280,54 +282,74 @@ existing shared-capacity semantics (both servers receive capacity `S`, preservin
 | Station type | qsim measure | Status |
 |---|---|---|
 | single-server queue | per-station `response-time` | available |
-| fork-join | `fork-join-response-time` | **blocked on wiring** — see §5.3 |
+| fork-join | per-station `response-time` | available — qsim resolves it to the fork-to-join sojourn (§5.3) |
 
 A fork-join station's sojourn time is the **fork-to-join** interval: the time from a job being
 forked into the branches until the join completes. It is *not* the response time of any single
-branch, nor of the fork node.
+branch, nor of the fork node. `qsim-service` now honors exactly that reading — `response-time` on a
+`fork-join` node is *defined* as the fork-to-join sojourn (§5.3) — so both station types request the
+same domain measure type and `Station.sim_measure_type` is uniformly `"response-time"`.
 
-### 5.3 Fork-join measurement is blocked on qsim-service#5
+### 5.3 Fork-join measurement, as built
 
-The metric exists in the engine. Decompiling the bundled JMT jar:
+**Resolved.** An earlier revision of this section declared fork-join measurement blocked on
+[qsim-service#5](https://github.com/atantawi/qsim-service/issues/5) and specified a
+`fork-join-response-time` domain type. Both are now superseded by
+[qsim-service#7](https://github.com/atantawi/qsim-service/pull/7) (merged `51a99c7`, closing #5 and
+its duplicate #6). The as-built contract, verified against the merged Java source:
 
-```
-FORK_JOIN_RESPONSE_TIME  = 27      (jmt.engine.QueueNet.SimConstants)
-FORK_JOIN_NUMBER_OF_JOBS = 26
-NODE_TYPE_REGION = "region"   NODE_TYPE_STATION = "station"
-```
+| | |
+|---|---|
+| Domain type qopt requests for a fork-join station | `response-time` |
+| Literal `fork-join-response-time` | **not a type** — `MeasureMapper.SUPPORTED` rejects it with **400**. Never request it |
+| JMT measure qsim emits underneath | `"Fork Join Response Time"` (`SimConstants.FORK_JOIN_RESPONSE_TIME = 27`), anchored on the **fork** station |
+| `station` name in the response | the **domain** name (e.g. `fj`) — `SolutionsParser` reverse-maps `"Fork Join Response Time"` → `response-time`, so the no-internal-names contract holds |
 
-and the JSIMG `<measure type=...>` display string `"Fork Join Response Time"` is present in the
-jar. So fork-to-join response time is a first-class JMT measure, and this table's
-`fork-join-response-time` mapping is the correct target.
+`MeasureMapper.FORK_JOIN_STATION` overrides the station-level mapping for `ForkJoinNode`s only, so
+`response-time` means "station response time" at a queue and "fork-to-join sojourn" at a fork-join
+node. That is the semantics §5.2 needs, obtained without a distinct domain type — which is why
+`Station.sim_measure_type` is `"response-time"` for every station type this spec ships.
 
-What is missing is the **wiring in `qsim-service`**, in two parts:
+**Why the fork and not the join.** The fork-to-join sojourn is a different JMT *measure type*, not a
+station response time read at a different station. `Simulation.java` wires it through
+`getSection(INPUT).analyzeFJ(...)`, and the fork's `Queue` input section is what maintains the
+`FJList` between fork and join; a plain `Join`'s own `FJList` is populated only when *its* output is
+a `Fork`, which never occurs in `JsimgWriter`'s expansion. So the join was never a valid anchor at
+any measure type.
 
-1. `MeasureMapper.SUPPORTED` contains only `response-time`, `residence-time`, `queue-time`,
-   `queue-length`, `utilization`, `throughput`, `drop-rate`, and `system-response-time`.
-   `fork-join-response-time` is listed in `qsim-service` design spec §5.2 but never
-   implemented, so requesting it returns 400.
-2. Plain `response-time` on a fork-join node is a **silent wrong answer**, so it is not a usable
-   fallback. `JsimgWriter.writeForkJoin` expands one fork-join node into `fj` (the *Fork* node:
-   `Queue` + `ServiceTunnel` + `Fork`, no server), branch Server stations `fj__b0`/`fj__b1` at
-   `S·µ` and `S·r·µ`, and `fj__join` (Join). `MeasureMapper` builds every station spec from the
-   domain node name, so the measure resolves against the Fork node and the engine returns *its*
-   response time. With no server there, that value is expected to be ≈ 0 — which would drive
-   `ζ ≈ 0` and allocate almost no capacity to fork-join stations, silently.
+**Correction to the recorded impact.** This section previously predicted that the pre-fix answer
+would be ≈ 0 (the Fork node has no server), driving `ζ ≈ 0` and starving fork-join stations. A run
+on the qsim side measured it instead — the shipped code remapped measures onto `fj__join`, not onto
+the fork, so the number returned was the join's per-sibling synchronization wait:
 
-Tracked as **[qsim-service#5](https://github.com/atantawi/qsim-service/issues/5)**. The blocking
-change is small: map `fork-join-response-time` → `"Fork Join Response Time"` for fork-join nodes,
-keeping `referenceNode` as the domain name. The exact `referenceNode`/`nodeType` pairing (station
-vs. region scope) has to be settled empirically on the qsim side; it does not affect this spec,
-because qopt addresses stations by their domain names either way.
+| encoding | mean |
+|---|---|
+| `Response Time` @ `fj__join` — what actually shipped | 0.0987 |
+| `Response Time` @ `fj` (the Fork station) — what this spec predicted | 0.0 |
+| `Fork Join Response Time` @ `fj` — correct | 0.2885 |
+| `System Response Time` — independent oracle | 0.2885 |
 
-**Consequence for delivery.** Simulated `ForkJoinStation` support is sequenced last in the
-implementation plan and gated on that issue. Until it lands, `ForkJoinStation.sim_measure_type`
-raises a clear error naming qsim-service#5 rather than returning a number nobody should trust.
-Note that `ForkJoinStation.sim_node` is **not** blocked — emitting the fork-join node, its two
-heterogeneous branches, and the join is entirely qopt-side, so the golden fixture (§8) covers
-fork-join emission from the start. Only reading the measure back is gated. Everything else —
-topology, γ derivation, the `Analyzer` seam, the client, and the whole noise-aware loop — is
-unblocked and ships for single-server networks.
+(Probe: `src → fj → snk`, λ = 1.0, exponential branches mean 0.2 / 0.1, seed 20260729.) So the error
+was **≈ 3× low, not zero** — fork-join stations would have been under-provisioned by a finite,
+model-dependent factor rather than starved. No qopt result was ever affected, because this spec's
+`SimulationAnalyzer` is unimplemented and the analytic path uses `t_ul` rather than qsim.
+
+**Two as-built gotchas qopt must respect.**
+
+1. **Only `response-time` has fork-join-region semantics.** `residence-time`, `queue-time`,
+   `queue-length`, `utilization`, `throughput`, and `drop-rate` on a fork-join node are still
+   *join-station* numbers ([qsim-service#8](https://github.com/atantawi/qsim-service/issues/8)).
+   qopt therefore requests exactly `response-time` and `system-response-time` and nothing else —
+   not as a temporary limitation but because no other measure enters eq 22.
+2. **System-level measures come back with `station: ""`**, not `station: "system"` as the
+   `qsim-service` spec §5.2 example comment claims. `measures.py` must key system measures on the
+   empty station name.
+
+**Consequence for delivery.** Nothing here is gated. `ForkJoinStation.sim_node` was never blocked
+(emitting the node, its two heterogeneous branches, and the join is entirely qopt-side), and reading
+the measure back now works too. Simulated fork-join support is still sequenced **last** in the
+implementation plan — it is the one path whose verification needs a live service and a non-trivial
+oracle — but as an ordering choice, not an external dependency.
 
 `system-response-time` is recorded as a diagnostic on `Result`, **not** optimized — the
 objective stays `Σ ωᵢ E[Tᵢ]` for continuity with the analytic path.
@@ -523,8 +545,10 @@ The entire simulation path is unit-testable with no Java, no network, and no con
 | Naive-equivalence | all knobs off plus a deterministic fake analyzer mirroring `sojourn_time` ⇒ bit-identical to `Optimizer(stations, budget)` |
 | Topology validation | one test per §4.2 row |
 | M/M/1 bracket *(integration)* | single-station network against the live service: the simulated CI must bracket the analytic `1/(Sµ − γ)`. Gated on `QOPT_QSIM_URL`, skipped by default |
+| Fork-join sojourn *(integration)* | a symmetric two-branch fork-join network against the live service: simulated `response-time` at the fork-join node must bracket `t_ul` (exact for `r = 1`), and must exceed the slower branch's own mean — the bound that caught qsim's join-anchored bug. Same `QOPT_QSIM_URL` gate |
+| Unsupported measure type | requesting the literal `fork-join-response-time` maps qsim's 400 to `SimulationRequestError`; pins that qopt never emits it (§5.3) |
 
-The M/M/1 bracket test is the actual validation of the idea; everything above it is
+The two bracket tests are the actual validation of the idea; everything above them is
 plumbing correctness.
 
 ### 8.1 Why qsim's `qopt-3station.json` is not the golden file
@@ -548,12 +572,12 @@ approximation that admits non-exponential servers, which is a modeling change, n
 - `examples/mixed_network.py` — **converted** to the §4.1.1 topology, with γ derived rather
   than hand-supplied. Its analytic output must remain byte-identical to today's (budget 15.6,
   same `S*` / `E[T]` / `ζ` table), so the conversion is verifiable rather than a rewrite.
-- `examples/simulated_tandem.py` — **ships first**, because it needs only single-server
-  stations and so is not blocked by §5.3. A Poisson source feeding `M/D/1 → M/M/1` in series:
+- `examples/simulated_tandem.py` — **ships first**, because it isolates variability propagation
+  with the fewest moving parts. A Poisson source feeding `M/D/1 → M/M/1` in series:
   the M/D/1's departure process is not Poisson, so the downstream station's true `cov_a ≠ 1`
   while the analytic path assumes whatever `cov_a` it was given. That divergence *is*
   variability propagation, demonstrated with no fork-join involved.
-- `examples/simulated_mixed_network.py` — **gated on §5.3.** The §4.1.1 network solved
+- `examples/simulated_mixed_network.py` — sequenced last (§5.3), no longer gated. The §4.1.1 network solved
   analytically and by simulation side by side. Because γ is identical on both paths, the printed
   difference is attributable to variability propagation alone. Expected to show close agreement
   at `mm1` and `md1` (Bernoulli-split Poisson arrivals, so `cov_a = 1` is exact) and visible
@@ -591,9 +615,9 @@ approximation that admits non-exponential servers, which is a modeling change, n
 5. Against a live `qsim-service`, a single-station M/M/1 network's simulated CI brackets the
    analytic `1/(Sµ − γ)`.
 5a. `ForkJoinStation.sim_node` emits the fork-join node with both heterogeneous branches
-   (`S·µ`, `S·r·µ`) and `join: "all"`, covered by the golden fixture. Reading the measure back
-   raises a clear error naming qsim-service#5 until that issue lands; afterwards, a symmetric
-   two-branch fork-join's simulated `fork-join-response-time` CI brackets `t_ul`. This is the
-   only criterion with an external dependency (§5.3).
+   (`S·µ`, `S·r·µ`) and `join: "all"`, covered by the golden fixture, and
+   `ForkJoinStation.sim_measure_type == "response-time"` — the same type single-server stations
+   request (§5.3). Against a live service, a symmetric two-branch fork-join's simulated
+   `response-time` CI brackets `t_ul` and exceeds the slower branch's own mean.
 6. `qopt` still declares zero runtime dependencies.
 7. Every §4.2 validation row and every §7.1 exception branch has a test.
