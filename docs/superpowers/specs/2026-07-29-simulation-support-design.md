@@ -126,10 +126,21 @@ Network(
   branches internally see that λ; the branch service rates live in the node fragment (§5.2).
 
 **Serialization.** `Network.to_model_dict(S)` emits exactly qsim's `model` block — topology
-plus per-station service at capacity `S`. `Network.from_model_dict` gives the round trip.
-`qsim/spec.py` wraps the model with the `seed` / `stopping` / `measures` envelope, so
-`Network` owns the *model* vocabulary and knows nothing of the *request* envelope.
-`Network.to_dot()` emits Graphviz DOT for diagrams — a small string emitter, no dependency.
+plus per-station service at capacity `S`. `qsim/spec.py` wraps the model with the `seed` /
+`stopping` / `measures` envelope, so `Network` owns the *model* vocabulary and knows nothing of
+the *request* envelope. `Network.to_dot()` emits Graphviz DOT for diagrams — a small string
+emitter, no dependency.
+
+**No `from_model_dict`.** A round trip is not well-defined: the emitted service rate is the
+*product* `S·µ`, and `S` is not recoverable from it, so stations cannot be reconstructed from a
+model dict. Deserialization would therefore have to be topology-only with caller-supplied
+stations, which no consumer needs yet — deferred as YAGNI rather than shipped half-defined.
+
+**Station naming rules** (enforced in §4.2). Names become JSON node names, routing keys, and DOT
+identifiers, so they must be non-empty, unique, and must not contain `__` — qsim's `JsimgWriter`
+mints internal fork-join station names as `<node>__b0` / `<node>__join`, and a domain name
+containing `__` could collide with them. `src` and `snk` are reserved for the emitted source and
+sink nodes.
 
 ## 4. Traffic equations and the derivation of γ
 
@@ -211,6 +222,7 @@ translation-layer test on the qsim side (§8.1), not a description of this examp
 | Check | Rationale |
 |---|---|
 | Station names non-empty and unique | names are the routing keys |
+| Station names contain no `__`, and are not `src`/`snk` | avoids collision with qsim's internal `<node>__b0`/`<node>__join` names and our emitted source/sink node names |
 | Every route endpoint resolves to a station or `SOURCE`/`SINK` | catches typos locally instead of as a qsim 422 |
 | `SOURCE` has no in-edges; `SINK` has no out-edges | well-formed open chain |
 | Per-node out-edge probabilities sum to 1 (single edge defaults to 1.0) | matches qsim contract invariant §5.3 |
@@ -265,10 +277,57 @@ existing shared-capacity semantics (both servers receive capacity `S`, preservin
 **Measure mapping.** Eq 22 needs *per-visit* sojourn time against the *total* arrival rate
 `γᵢ` — which is the convention that makes `ζ = 1` come out exactly for M/M/1. So:
 
-| Station type | qsim measure |
-|---|---|
-| single-server queue | per-station `response-time` |
-| fork-join | `fork-join-response-time` |
+| Station type | qsim measure | Status |
+|---|---|---|
+| single-server queue | per-station `response-time` | available |
+| fork-join | `fork-join-response-time` | **blocked on wiring** — see §5.3 |
+
+A fork-join station's sojourn time is the **fork-to-join** interval: the time from a job being
+forked into the branches until the join completes. It is *not* the response time of any single
+branch, nor of the fork node.
+
+### 5.3 Fork-join measurement is blocked on qsim-service#5
+
+The metric exists in the engine. Decompiling the bundled JMT jar:
+
+```
+FORK_JOIN_RESPONSE_TIME  = 27      (jmt.engine.QueueNet.SimConstants)
+FORK_JOIN_NUMBER_OF_JOBS = 26
+NODE_TYPE_REGION = "region"   NODE_TYPE_STATION = "station"
+```
+
+and the JSIMG `<measure type=...>` display string `"Fork Join Response Time"` is present in the
+jar. So fork-to-join response time is a first-class JMT measure, and this table's
+`fork-join-response-time` mapping is the correct target.
+
+What is missing is the **wiring in `qsim-service`**, in two parts:
+
+1. `MeasureMapper.SUPPORTED` contains only `response-time`, `residence-time`, `queue-time`,
+   `queue-length`, `utilization`, `throughput`, `drop-rate`, and `system-response-time`.
+   `fork-join-response-time` is listed in `qsim-service` design spec §5.2 but never
+   implemented, so requesting it returns 400.
+2. Plain `response-time` on a fork-join node is a **silent wrong answer**, so it is not a usable
+   fallback. `JsimgWriter.writeForkJoin` expands one fork-join node into `fj` (the *Fork* node:
+   `Queue` + `ServiceTunnel` + `Fork`, no server), branch Server stations `fj__b0`/`fj__b1` at
+   `S·µ` and `S·r·µ`, and `fj__join` (Join). `MeasureMapper` builds every station spec from the
+   domain node name, so the measure resolves against the Fork node and the engine returns *its*
+   response time. With no server there, that value is expected to be ≈ 0 — which would drive
+   `ζ ≈ 0` and allocate almost no capacity to fork-join stations, silently.
+
+Tracked as **[qsim-service#5](https://github.com/atantawi/qsim-service/issues/5)**. The blocking
+change is small: map `fork-join-response-time` → `"Fork Join Response Time"` for fork-join nodes,
+keeping `referenceNode` as the domain name. The exact `referenceNode`/`nodeType` pairing (station
+vs. region scope) has to be settled empirically on the qsim side; it does not affect this spec,
+because qopt addresses stations by their domain names either way.
+
+**Consequence for delivery.** Simulated `ForkJoinStation` support is sequenced last in the
+implementation plan and gated on that issue. Until it lands, `ForkJoinStation.sim_measure_type`
+raises a clear error naming qsim-service#5 rather than returning a number nobody should trust.
+Note that `ForkJoinStation.sim_node` is **not** blocked — emitting the fork-join node, its two
+heterogeneous branches, and the join is entirely qopt-side, so the golden fixture (§8) covers
+fork-join emission from the start. Only reading the measure back is gated. Everything else —
+topology, γ derivation, the `Analyzer` seam, the client, and the whole noise-aware loop — is
+unblocked and ships for single-server networks.
 
 `system-response-time` is recorded as a diagnostic on `Result`, **not** optimized — the
 objective stays `Σ ωᵢ E[Tᵢ]` for continuity with the analytic path.
@@ -489,12 +548,17 @@ approximation that admits non-exponential servers, which is a modeling change, n
 - `examples/mixed_network.py` — **converted** to the §4.1.1 topology, with γ derived rather
   than hand-supplied. Its analytic output must remain byte-identical to today's (budget 15.6,
   same `S*` / `E[T]` / `ζ` table), so the conversion is verifiable rather than a rewrite.
-- `examples/simulated_mixed_network.py` — the same network solved analytically and by
-  simulation, side by side. Because γ is identical on both paths, the printed difference is
-  attributable to variability propagation alone. Expected to show close agreement at `mm1` and
-  `md1` (Poisson-split arrivals, so `cov_a = 1` is exact) and visible divergence at `fj`
-  (non-Poisson superposition, where `t_ul`'s Poisson assumption does not hold) — a prediction
-  the example should state up front and then demonstrate.
+- `examples/simulated_tandem.py` — **ships first**, because it needs only single-server
+  stations and so is not blocked by §5.3. A Poisson source feeding `M/D/1 → M/M/1` in series:
+  the M/D/1's departure process is not Poisson, so the downstream station's true `cov_a ≠ 1`
+  while the analytic path assumes whatever `cov_a` it was given. That divergence *is*
+  variability propagation, demonstrated with no fork-join involved.
+- `examples/simulated_mixed_network.py` — **gated on §5.3.** The §4.1.1 network solved
+  analytically and by simulation side by side. Because γ is identical on both paths, the printed
+  difference is attributable to variability propagation alone. Expected to show close agreement
+  at `mm1` and `md1` (Bernoulli-split Poisson arrivals, so `cov_a = 1` is exact) and visible
+  divergence at `fj` (non-Poisson superposition, where `t_ul`'s Poisson assumption does not
+  hold) — a prediction the example should state up front and then demonstrate.
 - README: replace the dashed `future: simulation analyzer` box in the architecture diagram
   with the real path, and update **Scope & limitations** — network coupling moves from
   "future work" to "supported via simulation", with closed/multi-class remaining the honest
@@ -526,5 +590,10 @@ approximation that admits non-exponential servers, which is a modeling change, n
    `E[T]`.
 5. Against a live `qsim-service`, a single-station M/M/1 network's simulated CI brackets the
    analytic `1/(Sµ − γ)`.
+5a. `ForkJoinStation.sim_node` emits the fork-join node with both heterogeneous branches
+   (`S·µ`, `S·r·µ`) and `join: "all"`, covered by the golden fixture. Reading the measure back
+   raises a clear error naming qsim-service#5 until that issue lands; afterwards, a symmetric
+   two-branch fork-join's simulated `fork-join-response-time` CI brackets `t_ul`. This is the
+   only criterion with an external dependency (§5.3).
 6. `qopt` still declares zero runtime dependencies.
 7. Every §4.2 validation row and every §7.1 exception branch has a test.
