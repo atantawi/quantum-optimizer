@@ -49,7 +49,9 @@ flowchart LR
 Each iteration re-allocates capacities from the current `ζ` (eq 21), then recomputes `ζ`
 from the resulting capacities (eq 22); the loop repeats until the capacity vector stops
 moving. Stations are the pluggable analyzer layer — each owns its own queueing math behind
-the `Station` interface, which is also the seam for a future network-simulation analyzer.
+the `Station` interface. Whole-network simulation plugs in one level *up*, at a network-level
+`Analyzer` seam, because a simulation answers for every station in a single run rather than
+station by station.
 
 ## Scope & limitations
 
