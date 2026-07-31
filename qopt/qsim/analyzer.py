@@ -14,7 +14,15 @@ _SEED_POLICIES = ("fixed", "vary", None)
 
 
 class SimulationAnalyzer(Analyzer):
-    """Obtains E[T] for the whole network from one qsim-service run per evaluate()."""
+    """Obtains E[T] for the whole network from one qsim-service run per evaluate().
+
+    `strict=True` here is deliberately EARLY, not late: it fails at the first degraded
+    `evaluate()` call (this instance's own `degraded` list is checked at the end of that
+    one call). This is a different timing from `Optimizer(strict=True)`, which only
+    raises after the whole loop plus the final evaluation have run, so it can report the
+    whole run's accumulated audit trail at once. Both are deliberate (finding 7); this
+    class's strict does not propagate to or from the optimizer's.
+    """
 
     is_stochastic = True
 

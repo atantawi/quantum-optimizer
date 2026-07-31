@@ -77,8 +77,12 @@ def _print_table(title, network, result):
     )):
         row = f"  {st.name:6s} {st.gamma:7.4f} {S:9.4f} {t:9.4f} {z:9.4f}"
         if result.sojourn_ci is not None:
-            lower, upper = result.sojourn_ci[i]
-            row += f"   ({lower:.6f}, {upper:.6f})"
+            entry = result.sojourn_ci[i]
+            if entry is None:
+                row += f"   {'--':>22s}"     # no CI for this station (spec 7.1)
+            else:
+                lower, upper = entry
+                row += f"   ({lower:.6f}, {upper:.6f})"
         print(row)
     print(f"  objective (sum w*E[T]) = {result.objective:.6f}")
     if result.system_response_time is not None:
@@ -133,23 +137,29 @@ def main():
     S_fj = simulated.capacities[-1]
     approximation = t_ul(fj.gamma, S_fj * fj.mu, S_fj * fj.r * fj.mu)
     measured = simulated.sojourn_times[-1]
-    lower, upper = simulated.sojourn_ci[-1]
-    half_width = 0.5 * (upper - lower)
+    fj_ci = simulated.sojourn_ci[-1]
     gap = measured - approximation
     print(f"\nFORK-JOIN: t_ul vs simulation at S* = {S_fj:.6f} "
           f"(branch rates {S_fj * fj.mu:.4f} and {S_fj * fj.r * fj.mu:.4f}, r = {fj.r:g})")
     print(f"  t_ul (heterogeneous, approximate) = {approximation:.6f}")
-    print(f"  simulated                         = {measured:.6f} "
-          f"CI ({lower:.6f}, {upper:.6f}), half-width {half_width:.6f}")
     print(f"  gap                               = {gap:+.6f} "
           f"({100.0 * gap / approximation:+.2f}%)")
-    if abs(gap) > half_width:
-        print("  The gap exceeds the CI half-width, so it is approximation bias, not "
-              "noise: t_ul is exact only for equal branch rates (r = 1), and r "
-              f"= {fj.r:g} here.")
+    if fj_ci is None:
+        print(f"  simulated                         = {measured:.6f} CI unavailable")
+        print("  No CI for 'fj', so this run cannot separate approximation bias from "
+              "sampling noise (spec 7.1).")
     else:
-        print("  The gap is within the CI half-width, so this run cannot separate "
-              "approximation bias from sampling noise. Tighten `precision` to see it.")
+        lower, upper = fj_ci
+        half_width = 0.5 * (upper - lower)
+        print(f"  simulated                         = {measured:.6f} "
+              f"CI ({lower:.6f}, {upper:.6f}), half-width {half_width:.6f}")
+        if abs(gap) > half_width:
+            print("  The gap exceeds the CI half-width, so it is approximation bias, not "
+                  "noise: t_ul is exact only for equal branch rates (r = 1), and r "
+                  f"= {fj.r:g} here.")
+        else:
+            print("  The gap is within the CI half-width, so this run cannot separate "
+                  "approximation bias from sampling noise. Tighten `precision` to see it.")
     print("  This comparison is deliberately not an acceptance test — see spec 8.2.")
 
     if simulated.degraded:

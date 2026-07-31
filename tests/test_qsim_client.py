@@ -136,3 +136,104 @@ def test_transport_exceptions_are_not_swallowed():
     client = _client(broken)
     with pytest.raises(SimulationTransportError, match="connection refused"):
         client.post_simulate({"model": {}})
+
+
+# --- the default transport itself (spec 7.4) --------------------------------
+#
+# Every test above injects a fake, so urllib_transport — the default, and the only
+# transport that ever touches a socket — was previously exercised by nothing offline.
+# These monkeypatch urlopen so no test makes a real network call.
+
+def test_urllib_transport_maps_urlerror_to_transport_error(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    from qopt.qsim.client import urllib_transport
+
+    def refuse(request, timeout=None):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    with pytest.raises(SimulationTransportError, match="Connection refused"):
+        urllib_transport("http://qsim.test/simulate", b"{}", 5.0)
+
+
+def test_urllib_transport_maps_plain_oserror_to_transport_error(monkeypatch):
+    import urllib.request
+
+    from qopt.qsim.client import urllib_transport
+
+    def blow_up(request, timeout=None):
+        raise OSError("socket timed out")
+
+    monkeypatch.setattr(urllib.request, "urlopen", blow_up)
+    with pytest.raises(SimulationTransportError, match="socket timed out"):
+        urllib_transport("http://qsim.test/simulate", b"{}", 5.0)
+
+
+def test_urllib_transport_returns_the_error_body_rather_than_raising(monkeypatch):
+    """A 4xx/5xx must come back as (status, body): the body carries the detail."""
+    import io
+    import urllib.error
+    import urllib.request
+
+    from qopt.qsim.client import urllib_transport
+
+    body = b'{"error": "unprocessable model", "details": ["probabilities"]}'
+
+    def http_error(request, timeout=None):
+        raise urllib.error.HTTPError(
+            "http://qsim.test/simulate", 422, "Unprocessable", {}, io.BytesIO(body)
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", http_error)
+    status, raw = urllib_transport("http://qsim.test/simulate", b"{}", 5.0)
+    assert status == 422
+    assert raw == body
+
+
+def test_urllib_transport_error_body_reaches_the_mapped_exception(monkeypatch):
+    """End to end: the default transport's 422 body must surface in the message."""
+    import io
+    import urllib.error
+    import urllib.request
+
+    def http_error(request, timeout=None):
+        raise urllib.error.HTTPError(
+            "http://qsim.test/simulate", 422, "Unprocessable", {},
+            io.BytesIO(b'{"error": "unprocessable model", "details": ["bad split"]}'),
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", http_error)
+    client = QsimClient("http://qsim.test")          # default urllib transport
+    with pytest.raises(SimulationRequestError, match="bad split"):
+        client.post_simulate({"model": {}})
+
+
+def test_urllib_transport_sends_get_when_body_is_none(monkeypatch):
+    import io
+    import urllib.request
+
+    from qopt.qsim.client import urllib_transport
+
+    seen = {}
+
+    class Response:
+        status = 200
+        def read(self):
+            return b'{"status":"ok"}'
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+
+    def capture(request, timeout=None):
+        seen["method"] = request.get_method()
+        seen["data"] = request.data
+        return Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", capture)
+    status, raw = urllib_transport("http://qsim.test/health", None, 5.0)
+    assert (status, raw) == (200, b'{"status":"ok"}')
+    assert seen["method"] == "GET"
+    assert seen["data"] is None

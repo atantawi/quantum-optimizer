@@ -27,7 +27,7 @@ flowchart LR
     NET["<b>Network</b><br/>topology + solve_traffic<br/>→ derived γ"] --> IN
     IN["Stations (γ, μ, weight)<br/>+ budget"] --> OPT
 
-    subgraph LOOP["fixed-point loop — until ‖ΔS‖∞ &lt; tol"]
+    subgraph LOOP["fixed-point loop — until the step falls below tol or the noise floor"]
         direction LR
         OPT["<b>Optimizer</b><br/>driver / convergence"]
         ALLOC["<b>allocator</b><br/>eq 21 · min_feasible_budget"]
@@ -90,8 +90,12 @@ for the full design.
 
 ## Status
 
-Implemented. Core library (`qopt`) with single-server (G/G/1) and fork-join stations,
-the eq-21 allocator, and the fixed-point `Optimizer`. Test suite passes.
+Implemented. Core library (`qopt`) with single-server (G/G/1) and fork-join stations, the
+eq-21 allocator, and the fixed-point `Optimizer`; plus `Network` (topology with `γ` derived
+from the traffic equations) and the simulation-backed evaluation path (`Analyzer` seam,
+`SimulationAnalyzer`, `qopt/qsim/` client). Test suite passes; the simulation path's
+end-to-end oracles run against a live `qsim-service` and are skipped unless
+`QOPT_QSIM_URL` is set. Zero runtime dependencies.
 
 ## Usage
 
@@ -113,15 +117,17 @@ result = Optimizer(stations, budget=6 * min_feasible_budget(stations)).run()
 print(result.capacities, result.objective, result.converged)
 ```
 
-See `examples/mixed_network.py` for a runnable version. Running it prints the optimal
-allocation (illustrative output; regenerate with `python -m examples.mixed_network`):
+That form — a plain list of stations with hand-supplied `gamma` — remains fully supported.
+`examples/mixed_network.py` is the same three stations wired into a `Network` instead, so
+`gamma` is *derived* from the topology rather than supplied; it reaches the identical
+numbers. Running it (`python -m examples.mixed_network`) prints:
 
 ```
 budget = 15.6000   converged = True in 6 iterations
-station                        S*       E[T]       zeta
-ingest (M/M/1)             2.9601     0.4237     1.0000
-transform (M/D/1)          3.6448     0.2913     0.9451
-fork-join                  3.0175     0.4520     1.1378
+station                   gamma         S*       E[T]       zeta
+mm1                      0.6000     2.9601     0.4237     1.0000
+md1                      0.4000     3.6448     0.2913     0.9451
+fj                       0.5000     3.0175     0.4520     1.1378
 objective (sum w*E[T]) = 1.166933
 ```
 

@@ -26,6 +26,11 @@ def extract(response, stations, job_class):
     input at all, so warn-and-proceed does not apply. The other two requested measures
     are diagnostics, and their absence must not abort a run that has everything the
     mathematics requires (spec 7.1).
+
+    A station's `ci` entry is None, rather than a (lower, upper) tuple, when the mean is
+    present but the confidence interval is not: the mean is still usable for eq 22, but
+    the noise floor cannot be estimated for that station (mirrors the throughput handling
+    in qsim/analyzer.py's gamma-conservation check).
     """
     degraded = []
     if not response.get("completed", True):
@@ -52,7 +57,17 @@ def extract(response, stations, job_class):
             )
         degraded.extend(_flag_weak(measure))
         sojourn_times.append(measure["mean"])
-        ci.append((measure.get("lower"), measure.get("upper")))
+        lower, upper = measure.get("lower"), measure.get("upper")
+        if lower is None or upper is None:
+            message = (
+                f"{st.name}: simulated response-time {measure['mean']:.6f} has no "
+                f"confidence interval, so the noise floor cannot be estimated for it"
+            )
+            warnings.warn(message, RuntimeWarning, stacklevel=2)
+            degraded.append(message)
+            ci.append(None)
+        else:
+            ci.append((lower, upper))
 
     extras = {}
     system = index.get((SYSTEM_STATION, job_class, "system-response-time"))

@@ -644,7 +644,7 @@ git commit -m "feat: solve_traffic — traffic equations by fixed-point iteratio
 
 **Note on `__len__` / `__iter__`:** they exist so `tests/test_example.py` — which does `len(build_network())` and `zip(build_network(), ...)` — keeps passing **unmodified** after `build_network()` starts returning a `Network`. That is a hard constraint (spec §11 criterion 1), not a convenience.
 
-**Note on station names:** the example's stations are renamed from `"ingest (M/M/1)"` / `"transform (M/D/1)"` / `"fork-join"` to `mm1` / `md1` / `fj`, because §4.2 forbids the spaces and parentheses that would otherwise become JSON node names and DOT identifiers. So the example's printed *labels* change while every printed *number* stays bit-identical. The spec §9 wording "output must remain byte-identical" is satisfied in the sense that matters and cannot be satisfied literally — the naming rules the same spec mandates forbid the old labels. The regression test therefore compares numbers.
+**Note on station names:** the example's stations are renamed from `"ingest (M/M/1)"` / `"transform (M/D/1)"` / `"fork-join"` to `mm1` / `md1` / `fj`. **This is a choice, not a requirement** — §4.2 rejects only names that are empty, non-unique, contain `__`, or collide with the reserved `src`/`snk`, so `"ingest (M/M/1)"` would have validated fine. Short identifiers simply read better once a name doubles as a JSON node key and a DOT identifier. The consequence is that the example's printed *labels* change while every printed *number* stays bit-identical, so spec §9's "output must remain byte-identical" is traded away **deliberately** rather than forced by the naming rules. The regression test therefore compares numbers.
 
 - [ ] **Step 1: Write the failing test** — `tests/test_network.py`
 
@@ -1041,8 +1041,12 @@ class Network:
 
 The gammas (0.6, 0.4, 0.5) are the traffic-equation solution of this topology, so they
 are derived here rather than hand-supplied. Every printed number is unchanged from the
-version that supplied them by hand; only the station labels differ, because 4.2 requires
-routing-safe names.
+version that supplied them by hand; only the station labels differ.
+
+The labels were shortened by choice, not by requirement: 4.2 rejects only names that are
+empty, non-unique, contain `__`, or collide with the reserved `src`/`snk`, so the previous
+`"ingest (M/M/1)"` would have validated fine. Short identifiers simply read better once a
+name doubles as a JSON node key and a DOT identifier.
 """
 
 from qopt import ForkJoinStation, GG1Station, Network, Optimizer, Route, min_feasible_budget
@@ -2917,7 +2921,9 @@ The last core task. Wires the `Analyzer` seam into `Optimizer.run()`, adds the w
 
 Perturbed ζ is clamped to `ZETA_FLOOR = 1e-12` before `allocate` takes its square root, because a wide CI can drive `ζ − δζ` negative.
 
-**The threshold is scaled by θ, which the design spec's §6.3 formula omits.** `residual` measures a *damped* step, `θ·|S_target − S|`, while `noise_floor` measures the spread in `allocate`'s **output** — an undamped, target-space quantity. Noise in ζ moves `S_target` by up to `floor`, but moves the iterate by only `θ·floor`. Comparing them unscaled makes the effective tolerance `noise_kappa/θ` noise widths, so at the stochastic defaults (`θ = 0.5`, `κ = 1.0`) the loop would stop at 2 noise widths while reporting κ = 1. It fails safe — stopping early, returning a less-converged `S*`, never looping forever — which is exactly why it is easy to miss. Spec §6.3 says `‖ΔS‖∞ < max(tol, κ·noise_floor)`; **this plan deliberately implements `max(tol, κ·θ·noise_floor)`** so the knob means what it says. The scaling is a no-op at `θ = 1.0`.
+**Convergence is tested in target space, which the design spec's original §6.3 formula was not.** `residual` measures a *damped* step, `θ·|S_target − S|`, while **both** stopping terms are target-space quantities: `noise_floor` is the spread in `allocate`'s **output**, and `tol` is a tolerance on how far `allocate` still wants to move. Noise in ζ moves `S_target` by up to `floor` but moves the iterate by only `θ·floor`, so comparing the damped step against either term scales it by `1/θ` — at the stochastic defaults (`θ = 0.5`, `κ = 1.0`) the loop would stop at 2 noise widths while reporting κ = 1, and `tol = 1e-9` would behave as `2e-9`. Both errors fail safe — stopping early, returning a less-converged `S*`, never looping forever — which is exactly why they are easy to miss.
+
+The fix normalizes the step **once**, `step = residual / self.damping`, rather than scaling each term, so both knobs mean what they say at every damping and `tol` means the same thing on the analytic and simulated paths. That cross-path comparability is the premise §1.1 rests on. Division by `1.0` is exact in IEEE 754, so this is bit-for-bit inert at `θ = 1.0`. Spec §6.3 is amended to match; note the κ arm's behavior is identical either way (`θd < κθf ⟺ d < κf`), so normalizing changed only the `tol` arm.
 
 **A test for this must discriminate, not merely agree.** An assertion like
 `residual < κ·θ·floor` holds under *both* the scaled and unscaled thresholds whenever the
@@ -3587,7 +3593,7 @@ class Optimizer:
                 # `floor` but moves the iterate by only theta * floor. Scaling by theta is
                 # what makes noise_kappa mean literally "stop once the step is within
                 # kappa noise widths" at every damping value.
-                threshold = max(self.tol, self.noise_kappa * self.damping * floor)
+                threshold = max(self.tol, self.noise_kappa * floor)
             if residual < threshold:
                 # Label by where the residual actually landed, not by which term won the
                 # max(): a run that met `tol` outright is a "tol" stop even when the
@@ -4464,7 +4470,7 @@ Verify each against a real command before calling the feature done.
 
 - **`station: ""` for system measures is an inference**, not a verified fact (§5.3 gotcha 2). `measures.py` keys on `""`; Task 10 Step 6 settles it on the first live run. If wrong, the symptom is `Result.system_response_time is None` plus a `RuntimeWarning`, Task 11's identity test fails outright, and the fix is the one-line `SYSTEM_STATION` constant.
 - **Fork-join throughput is exempt from the γ-conservation check** pending [qsim-service#8](https://github.com/atantawi/qsim-service/issues/8). Under `join: "all"` it *ought* to equal λ and one probe measured `0.985` against λ = 1.0, but that is one measurement, not an upstream guarantee, and it is unverified beyond two branches. When #8 lands, deleting `ForkJoinStation.sim_conservation_checked = False` is the whole change.
-- **`examples/mixed_network.py`'s station labels change** (`"ingest (M/M/1)"` → `mm1`, etc.) because §4.2 forbids spaces and parentheses in names that become JSON node names and DOT identifiers. Every printed *number* is unchanged; spec §9's "byte-identical output" cannot be met literally, and the regression test compares numbers.
+- **`examples/mixed_network.py`'s station labels change** (`"ingest (M/M/1)"` → `mm1`, etc.) **by choice, not by requirement.** §4.2 rejects only names that are empty, non-unique, contain `__`, or collide with reserved `src`/`snk` — `"ingest (M/M/1)"` would have validated. Short identifiers just read better once a name doubles as a JSON node key and a DOT identifier. Every printed *number* is unchanged, so spec §9's "byte-identical output" was traded away deliberately rather than forced, and the regression test compares numbers.
 - **Tracking issue [#2](https://github.com/atantawi/quantum-optimizer/issues/2)** covers this implementation. **PR [#3](https://github.com/atantawi/quantum-optimizer/pull/3)**'s body describes only its first two commits; the 2026-07-30 revision (closed measure list, γ-conservation check, oracle shapes) is not reflected there. Worth folding in before the implementation PR references it.
 
 

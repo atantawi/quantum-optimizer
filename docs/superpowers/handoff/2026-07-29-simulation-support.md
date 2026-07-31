@@ -1,7 +1,34 @@
 # Handoff — Simulation Support (session state, 2026-07-29, revised 2026-07-30)
 
-Resume point for the simulation-support work. The **spec is finished and committed**; the
-**implementation plan is not yet written**. That is the next action.
+> ## SUPERSEDED — the feature is implemented
+>
+> This note captured the resume point *before* implementation. It is kept because its
+> cross-repo findings and locked decisions are still the best record of why the design is
+> what it is, and because reconstructing them meant reading the GPL sister repo's Java
+> source and decompiling the bundled JMT jar.
+>
+> **Everything below describing work as "not yet written" or "not started" is stale.** The
+> plan was written and all 11 of its tasks were implemented on branch
+> `feat/simulation-support`. For current state read, in order:
+>
+> 1. `docs/superpowers/plans/2026-07-29-simulation-support.md` — the plan as executed
+> 2. `.superpowers/sdd/2026-07-29-simulation-support/progress.md` — per-task ledger, the
+>    three human rulings, and the 12 triaged review findings
+>
+> **Three items below were open questions and are now answered:**
+>
+> - The `station: ""` key for system measures is **verified**, not inferred — a live run
+>   returned `{"station": "", "type": "system-response-time"}` with nothing under `"system"`.
+> - The fork-join identity holds **exactly**: `response-time == system-response-time ==
+>   0.2884507654809945`, matching `qsim-service`'s own committed fixture digit-for-digit.
+> - Spec §6.3's stopping rule needed a θ factor it did not have; the spec has been amended
+>   and the implementation departs from the original formula deliberately.
+>
+> Fork-join throughput remains exempt from the γ-conservation check pending
+> [qsim-service#8](https://github.com/atantawi/qsim-service/issues/8) — still accurate.
+
+Resume point for the simulation-support work (as of 2026-07-29). The **spec is finished and
+committed**; the **implementation plan is not yet written**. That was the next action then.
 
 ## Where things stand
 
@@ -180,7 +207,8 @@ names must be non-empty, unique, free of `__`, and not `src`/`snk`.
 
 Golden fixture: the §4.1.1 topology at `S = (3.0, 4.0, 5.0)` ⇒ `mm1` exponential rate `3.0`,
 `md1` deterministic `0.25`, `fj` branches exponential `5.0` and `10.0`. Station names must be
-renamed to routing-safe identifiers (the current `"ingest (M/M/1)"` has spaces and parens), so
+renamed to short identifiers by choice — §4.2 would have accepted `"ingest (M/M/1)"`, since it
+rejects only empty, non-unique, `__`-containing, and `src`/`snk` names — so
 the regression test compares **numbers**, not labels.
 
 ## Planned task decomposition (11 tasks)

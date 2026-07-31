@@ -57,6 +57,10 @@ def test_mm1_simulated_ci_brackets_the_analytic_sojourn_time(client):
     assert analytic == pytest.approx(1.0, rel=1e-12)      # 1/(S*mu - gamma)
 
     evaluation = SimulationAnalyzer(network, client).evaluate(network.stations, S)
+    assert evaluation.ci[0] is not None, (
+        "the service returned no confidence interval for this station, so the "
+        "bracket cannot be evaluated"
+    )
     lower, upper = evaluation.ci[0]
     assert lower <= analytic <= upper, (
         f"simulated CI ({lower}, {upper}) does not bracket analytic {analytic}"
@@ -135,6 +139,9 @@ def test_optimizer_runs_against_the_live_service(client):
     assert result.sim_calls == result.iterations + 1
     assert result.warm_start_iterations > 0
     assert len(result.sojourn_ci) == 3
+    assert all(entry is not None for entry in result.sojourn_ci), (
+        f"a station came back without a confidence interval: {result.sojourn_ci}"
+    )
     assert result.stop_reason in ("tol", "noise-floor", "max_iter")
     for st, S in zip(network.stations, result.capacities):
         assert S * st.mu > st.gamma
@@ -212,6 +219,10 @@ def test_symmetric_forkjoin_ci_brackets_t_ul(fj_client):
 
     evaluation = SimulationAnalyzer(network, fj_client).evaluate(network.stations, S)
     simulated = evaluation.sojourn_times[0]
+    assert evaluation.ci[0] is not None, (
+        "the service returned no confidence interval for this station, so the "
+        "bracket cannot be evaluated"
+    )
     lower, upper = evaluation.ci[0]
     assert lower <= expected <= upper, (
         f"simulated CI ({lower}, {upper}) does not bracket the exact t_ul {expected}"

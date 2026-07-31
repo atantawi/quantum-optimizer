@@ -56,8 +56,12 @@ def _print_table(title, network, result, budget):
     )):
         row = f"  {st.name:10s} {st.gamma:7.4f} {S:9.4f} {t:9.4f} {z:9.4f}"
         if result.sojourn_ci is not None:
-            lower, upper = result.sojourn_ci[i]
-            row += f"   ({lower:.4f}, {upper:.4f})"
+            entry = result.sojourn_ci[i]
+            if entry is None:
+                row += f"   {'--':>22s}"     # no CI for this station (spec 7.1)
+            else:
+                lower, upper = entry
+                row += f"   ({lower:.4f}, {upper:.4f})"
         print(row)
     print(f"  objective (sum w*E[T]) = {result.objective:.6f}")
 

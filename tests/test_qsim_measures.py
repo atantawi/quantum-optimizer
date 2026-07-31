@@ -13,7 +13,7 @@ def _stations():
 
 
 def test_system_station_key_is_the_empty_string():
-    # Inferred from referenceNode="" (spec 5.3 gotcha 2), not pinned by a fixture.
+    # Verified against a live qsim-service (spec 5.3 gotcha 2; module docstring above).
     assert SYSTEM_STATION == ""
 
 
@@ -53,6 +53,27 @@ def test_null_mean_counts_as_missing(sim_response):
             m["mean"] = None
     with pytest.raises(MeasureMissingError):
         extract(response, stations, "jobs")
+
+
+def test_missing_response_time_bounds_are_treated_as_a_miss(sim_response):
+    # Mirrors test_qsim_analyzer.py::test_missing_throughput_bounds_are_treated_as_a_miss,
+    # but for the measure eq 22 actually needs: a mean without a CI must not raise, only
+    # degrade (finding 1) — that CI feeds the noise floor (optimizer.py's _noise_floor),
+    # not eq 22 itself.
+    stations = _stations()
+    response = sim_response(
+        sojourn={"mm1": 0.42, "fj": 0.29}, throughput={"mm1": 0.6, "fj": 0.5}, system=1.15
+    )
+    for m in response["measures"]:
+        if m["station"] == "mm1" and m["type"] == "response-time":
+            m["lower"] = None
+            m["upper"] = None
+    with pytest.warns(RuntimeWarning, match="mm1"):
+        T, ci, degraded, extras = extract(response, stations, "jobs")
+    assert T == [0.42, 0.29]                      # the mean is still usable for eq 22
+    assert ci[0] is None
+    assert ci[1] == pytest.approx((0.28, 0.30))
+    assert any("mm1" in d for d in degraded)
 
 
 def test_missing_system_response_time_warns_and_records(sim_response):

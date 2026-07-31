@@ -229,13 +229,19 @@ def test_stop_reason_flips_to_noise_floor_as_ci_widens():
     assert wide.converged is True
 
 
-def test_threshold_scales_by_damping_so_kappa_means_what_it_says():
-    # A DISCRIMINATING case for the theta scaling, not merely a consistent one. At
-    # damping=0.5 with half_width=0.02 the first step is residual = 0.098019 while the
-    # noise floor is 0.137007, so the two candidate thresholds straddle it:
-    #   scaled   kappa*theta*floor = 0.068504  ->  0.098019 >= it, the loop keeps going
-    #   unscaled kappa*floor       = 0.137007  ->  0.098019 <  it, the loop would stop
-    # So reverting the scaling flips this run from a max_iter exit to a noise-floor stop.
+def test_noise_threshold_compares_a_target_space_step_so_kappa_means_what_it_says():
+    # Guards the kappa arm against comparing a DAMPED step to a target-space floor. At
+    # damping=0.5 with half_width=0.02 the first iteration gives residual = 0.098019, so
+    # the target-space step is 0.196038, while the noise floor is 0.137007:
+    #   normalized  step 0.196038 vs kappa*floor 0.137007 -> >= it, the loop keeps going
+    #   un-normalized residual 0.098019 vs the same 0.137007 -> < it, it would stop
+    # So dropping the `/ self.damping` flips this run from a max_iter exit to a
+    # noise-floor stop, and the expected "did not converge" warning never fires.
+    #
+    # It does NOT discriminate this form from the interim `max(tol, kappa*theta*floor)`
+    # one: those two are algebraically identical on this arm (theta*d < kappa*theta*f is
+    # d < kappa*f), so there is no behavioural difference for any test to catch. What
+    # changed between them was the `tol` arm, which the next test covers.
     with pytest.warns(RuntimeWarning, match="did not converge"):
         result = Optimizer(_stations(), budget=BUDGET,
                            analyzer=DeterministicFake(half_width=0.02),
@@ -243,10 +249,33 @@ def test_threshold_scales_by_damping_so_kappa_means_what_it_says():
                            max_iter=1).run()
     assert result.noise_floor == pytest.approx(0.137007, rel=1e-3)
     assert result.residual == pytest.approx(0.098019, rel=1e-3)
-    # The scaled threshold sits below the residual and the unscaled one above it.
-    assert 1.0 * 0.5 * result.noise_floor < result.residual < 1.0 * result.noise_floor
-    assert result.stop_reason == "max_iter"     # unscaled would report "noise-floor"
+    # The damped residual sits below the threshold while the target-space step sits above
+    # it — the whole point of normalizing rather than comparing the iterate's movement.
+    step = result.residual / 0.5
+    assert result.residual < 1.0 * result.noise_floor < step
+    assert result.stop_reason == "max_iter"     # un-normalized would say "noise-floor"
     assert result.converged is False
+
+
+def test_tol_is_a_target_space_tolerance_at_every_damping():
+    # DISCRIMINATING case for `tol`, which carried the same damped-vs-target mismatch the
+    # noise term did. At damping=0.5 with kappa=0 the target-space step sequence passes
+    # through 8.910166e-07 on iteration 19, so with tol = 6e-07:
+    #   normalized    step_19 = 8.91e-07 >= tol -> keeps going, stops on iteration 20
+    #   un-normalized residual_19 = 4.46e-07 < tol -> stops on iteration 19
+    # The iteration count is therefore the discriminator, and `tol` means the same thing
+    # here as it does on the analytic path.
+    result = Optimizer(_stations(), budget=BUDGET, analyzer=DeterministicFake(),
+                       warm_start=False, damping=0.5, noise_kappa=0.0,
+                       tol=6e-07, max_iter=200).run()
+    assert result.converged is True
+    assert result.stop_reason == "tol"
+    assert result.iterations == 20          # un-normalized would stop at 19
+    # The target-space step is what cleared tol. The damped residual is below tol as well
+    # — by a further factor of theta — which is exactly why comparing it directly stops
+    # too early, one iteration sooner here.
+    assert result.residual / 0.5 < 6e-07
+    assert result.residual < 6e-07
 
 
 def test_stop_reason_is_tol_when_tol_was_met_despite_a_wide_noise_floor():
@@ -287,7 +316,7 @@ def test_noise_floor_is_computed_at_the_capacities_the_ci_was_measured_at():
     S_eval = seen[0]                            # the S the single loop iteration evaluated
     ev = DeterministicFake(half_width=0.02).evaluate(stations, S_eval)
     zeta = [st.zeta_from(T, Si) for st, T, Si in zip(stations, ev.sojourn_times, S_eval)]
-    dzeta = [0.5 * (hi - lo) * (Si * st.mu - st.gamma)
+    dzeta = [st.zeta_from(0.5 * (hi - lo), Si)
              for st, Si, (lo, hi) in zip(stations, S_eval, ev.ci)]
     assert result.noise_floor == nf(stations, BUDGET, zeta, dzeta)
     assert result.capacities != S_eval          # the returned S really is the damped one
@@ -310,6 +339,39 @@ def test_ci_and_system_response_time_reach_the_result():
     for (lo, hi), t in zip(result.sojourn_ci, result.sojourn_times):
         assert lo < t < hi
     assert result.system_response_time is not None
+
+
+def test_missing_response_time_ci_does_not_crash_the_loop(sim_response):
+    # Before the finding-1 fix, _noise_floor's zip(..., ci) unpacking a None entry as
+    # (lower, upper) raised TypeError mid-loop, in the default configuration
+    # (noise_kappa=1.0). This proves the run COMPLETES instead: mm1's response-time
+    # measure has no CI, so its dzeta contribution is 0, but md1 and fj still have
+    # theirs and the loop finishes normally.
+    from conftest import FakeTransport
+    from qopt.qsim.analyzer import SimulationAnalyzer
+    from qopt.qsim.client import QsimClient
+
+    network = _network()
+    response = sim_response(
+        sojourn={"mm1": 0.42, "md1": 0.29, "fj": 0.45},
+        throughput={"mm1": 0.6, "md1": 0.4, "fj": 0.5},
+        system=1.16,
+    )
+    for m in response["measures"]:
+        if m["station"] == "mm1" and m["type"] == "response-time":
+            m["lower"] = None
+            m["upper"] = None
+    client = QsimClient("http://qsim.test", transport=FakeTransport((200, response)))
+    analyzer = SimulationAnalyzer(network, client)
+
+    with pytest.warns(RuntimeWarning, match="mm1"):
+        result = Optimizer(network, budget=BUDGET, analyzer=analyzer).run()
+
+    assert result.sojourn_ci[0] is None                   # mm1: no CI
+    assert result.sojourn_ci[1] is not None               # md1, fj: still have theirs
+    assert result.sojourn_ci[2] is not None
+    assert result.noise_floor is not None                 # md1 + fj still contribute
+    assert result.noise_floor >= 0.0
 
 
 # --- degraded accounting and strict -----------------------------------------

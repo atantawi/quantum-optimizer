@@ -20,11 +20,22 @@ class Result:
     objective: float
     iterations: int
     converged: bool
-    residual: float  # final ||S_new - S||_inf; how close the last iterate came to tol
+    residual: float  # final DAMPED step, theta*|S_target - S| -- what the iterate
+                      # actually moved. The loop tests convergence on residual/damping,
+                      # so `tol` and `noise_floor` are both TARGET-space quantities and
+                      # `residual` is smaller than the value compared against them by a
+                      # factor of theta. At theta = 1.0 the three coincide.
 
     # Simulation-path diagnostics. All defaulted, so analytic construction is unchanged.
-    sojourn_ci: list | None = None      # per-station (lower, upper); None when analytic
-    noise_floor: float | None = None   # final |delta S| attributable to noise (6.4)
+    sojourn_ci: list | None = None      # per-station (lower, upper), or None for a
+                                         # station whose CI was missing; None (the whole
+                                         # field) when analytic. Sourced from the fresh-
+                                         # seed FINAL evaluation, not the loop.
+    noise_floor: float | None = None   # UNDAMPED target-space spread attributable to
+                                        # noise (6.4), directly comparable to `tol` and to
+                                        # residual/damping. Taken from the last LOOP
+                                        # iteration's common-random-numbers intervals - a
+                                        # different run than sojourn_ci above.
     stop_reason: str = "tol"           # "tol" | "noise-floor" | "max_iter"
     warm_start_iterations: int = 0     # analytic iterations before the simulated phase
     degraded: list = field(default_factory=list)   # per-iteration quality audit (6.8, 7.2)
@@ -42,6 +53,14 @@ class Optimizer:
     `Optimizer(stations, budget)` is bit-identical to the pre-simulation implementation:
     it defaults to AnalyticAnalyzer with damping 1.0 and max_iter 1000, and the
     CI-driven machinery stays inert because the analytic path reports no CI.
+
+    `strict=True` here is deliberately LATE, not fast: degraded entries accumulate
+    across every loop iteration and the final evaluation, and SimulationQualityError is
+    raised only once the whole run has finished (see `run`, near the end). This is a
+    different timing from `SimulationAnalyzer(strict=True)`, which fails at the first
+    degraded `evaluate()` call. A fully-degraded run at max_iter=20 therefore still
+    burns all 21 POSTs before this raises (finding 7) - use the analyzer's strict flag
+    instead if failing fast matters more than seeing the whole audit trail.
     """
 
     def __init__(self, stations, budget, *, analyzer=None, tol=1e-9, max_iter=None,
@@ -156,19 +175,29 @@ class Optimizer:
             residual = max(abs(a - b) for a, b in zip(S_new, S))
             S = S_new
 
+            # Convergence is tested in TARGET space, not on the damped iterate.
+            #
+            # `residual` is the damped step, theta * |S_target - S|, while both stopping
+            # terms are naturally target-space quantities: `tol` is a tolerance on how far
+            # `allocate` still wants to move, and `floor` is the spread noise induces in
+            # `allocate`'s output. Comparing either against the damped step would scale it
+            # by 1/theta -- `tol=1e-9` would mean 2e-9 and `noise_kappa=1.0` would mean 2.0
+            # at the stochastic default theta=0.5.
+            #
+            # Normalizing the step once, rather than scaling each term, keeps both knobs
+            # meaning exactly what they say at every damping value, and keeps `tol`
+            # comparable across the analytic and simulated paths -- which is the premise
+            # the whole feature rests on (spec 1.1). Division by 1.0 is exact in IEEE 754,
+            # so this is bit-for-bit inert at theta = 1.0.
+            step = residual / self.damping
             threshold = self.tol
             if floor is not None:
-                # `residual` is a DAMPED step (theta * |S_target - S|), while `floor` is
-                # an undamped target-space spread: noise in zeta moves S_target by up to
-                # `floor` but moves the iterate by only theta * floor. Scaling by theta is
-                # what makes noise_kappa mean literally "stop once the step is within
-                # kappa noise widths" at every damping value.
-                threshold = max(self.tol, self.noise_kappa * self.damping * floor)
-            if residual < threshold:
-                # Label by where the residual actually landed, not by which term won the
+                threshold = max(self.tol, self.noise_kappa * floor)
+            if step < threshold:
+                # Label by where the step actually landed, not by which term won the
                 # max(): a run that met `tol` outright is a "tol" stop even when the
                 # noise floor was the larger threshold.
-                stop_reason = "noise-floor" if residual >= self.tol else "tol"
+                stop_reason = "noise-floor" if step >= self.tol else "tol"
                 break
 
         converged = stop_reason != "max_iter"
@@ -220,11 +249,18 @@ class Optimizer:
         )
 
     def _noise_floor(self, stations, S, zeta, ci):
-        """Propagate CI half-widths into zeta and measure the spread in S (spec 6.4)."""
+        """Propagate CI half-widths into zeta and measure the spread in S (spec 6.4).
+
+        A station's `ci` entry is None when its response-time measure had no confidence
+        interval (qsim/measures.py already warned about it): treat its half-width as 0,
+        so it contributes no noise instead of crashing on the missing bounds. If every
+        entry is None, every dzeta is 0 and the floor comes out 0.0 - correctly meaning
+        "no noise information", not "no noise".
+        """
         if ci is None or self.noise_kappa <= 0.0:
             return None
         dzeta = [
-            0.5 * (upper - lower) * (Si * st.mu - st.gamma)
-            for st, Si, (lower, upper) in zip(stations, S, ci)
+            0.0 if entry is None else st.zeta_from(0.5 * (entry[1] - entry[0]), Si)
+            for st, Si, entry in zip(stations, S, ci)
         ]
         return noise_floor(stations, self.budget, zeta, dzeta)

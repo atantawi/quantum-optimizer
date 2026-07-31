@@ -5,8 +5,13 @@ from qopt.analyzer import AnalyticAnalyzer, Analyzer, Evaluation
 from qopt.exceptions import (
     InfeasibleBudgetError,
     InstabilityError,
+    MeasureMissingError,
     QOptError,
+    SimulationEngineError,
+    SimulationError,
     SimulationQualityError,
+    SimulationRequestError,
+    SimulationTransportError,
     TopologyError,
 )
 from qopt.network import Network, Route
@@ -20,7 +25,12 @@ __all__ = [
     "InfeasibleBudgetError",
     "InstabilityError",
     "TopologyError",
+    "SimulationError",
+    "SimulationTransportError",
+    "SimulationRequestError",
+    "SimulationEngineError",
     "SimulationQualityError",
+    "MeasureMissingError",
     "Station",
     "SingleServerStation",
     "GG1Station",

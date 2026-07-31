@@ -204,3 +204,12 @@ def test_example_build_network_returns_a_network_with_the_same_numbers():
     result = main()
     assert result.capacities == LEGACY_S
     assert result.objective == LEGACY_OBJECTIVE
+
+
+def test_source_with_no_out_edge_rejected():
+    # Reachable branch of _validate: nothing routes out of SOURCE, so no flow enters the
+    # network at all. Distinct from the unreachable-station check, which would otherwise
+    # be the message a caller sees.
+    stations = [GG1Station.mm1(mu=1.0, c=1.0, name="a")]
+    with pytest.raises(TopologyError, match="nothing enters the network"):
+        Network(stations, [Route("a", SNK)], arrival_rate=1.0)

@@ -7,8 +7,12 @@
 
 The gammas (0.6, 0.4, 0.5) are the traffic-equation solution of this topology, so they
 are derived here rather than hand-supplied. Every printed number is unchanged from the
-version that supplied them by hand; only the station labels differ, because 4.2 requires
-routing-safe names.
+version that supplied them by hand; only the station labels differ.
+
+The labels were shortened by choice, not by requirement: 4.2 rejects only names that are
+empty, non-unique, contain `__`, or collide with the reserved `src`/`snk`, so the previous
+`"ingest (M/M/1)"` would have validated fine. Short identifiers simply read better once a
+name doubles as a JSON node key and a DOT identifier.
 """
 
 from qopt import ForkJoinStation, GG1Station, Network, Optimizer, Route, min_feasible_budget
