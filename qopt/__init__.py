@@ -1,6 +1,7 @@
 """qopt: capacity allocation optimizer for a network of queues."""
 
 from qopt.allocator import allocate, min_feasible_budget
+from qopt.analyzer import AnalyticAnalyzer, Analyzer, Evaluation
 from qopt.exceptions import (
     InfeasibleBudgetError,
     InstabilityError,
@@ -22,6 +23,9 @@ __all__ = [
     "ForkJoinStation",
     "allocate",
     "min_feasible_budget",
+    "Analyzer",
+    "AnalyticAnalyzer",
+    "Evaluation",
     "Optimizer",
     "Result",
     "Network",
