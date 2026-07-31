@@ -1,11 +1,22 @@
 # Design Spec: Simulation Support — network topology and a `qsim-service`-backed analyzer
 
-Date: 2026-07-29 (revised 2026-07-30)
-Status: Approved design; nothing is externally blocked. The `qsim-service` measure contract in
-§5.2–§5.4 is **as-built** against [qsim-service#7](https://github.com/atantawi/qsim-service/pull/7)
-(merged `51a99c7`), re-verified against that merged Java source on 2026-07-30. Re-verify if
-`MeasureMapper`, `JsimgWriter.expandedMeasureNode`, or `SolutionsParser.REVERSE` change.
-Implementation plan: `docs/superpowers/plans/2026-07-29-simulation-support.md` — not yet written.
+Date: 2026-07-29 (revised 2026-07-30; amended post-implementation 2026-07-30)
+Status: **Implemented.** The `qsim-service` measure contract in §5.2–§5.4 is **as-built** against
+[qsim-service#7](https://github.com/atantawi/qsim-service/pull/7) (merged `51a99c7`), re-verified
+against that merged Java source on 2026-07-30. Re-verify if `MeasureMapper`,
+`JsimgWriter.expandedMeasureNode`, or `SolutionsParser.REVERSE` change.
+Implementation plan: `docs/superpowers/plans/2026-07-29-simulation-support.md`.
+
+**Post-implementation amendments.** Two things this spec asserted turned out to need correction
+once the code ran against a live service. Both are marked inline below:
+
+- **§6.3's stopping rule compared a damped step against target-space thresholds**, making both
+  `tol` and `κ` off by `1/θ`. The implementation deliberately departs from the original formula:
+  it normalizes the step to target space once. Amended twice — see the note in §6.3/§6.4.
+- **§5.3 gotcha 2's `station: ""` inference is now verified**, not inferred.
+
+Everything else was confirmed as written, including the §4.1.1 arithmetic, the closed measure
+list, the γ-conservation check, and both fork-join oracle shapes in §8.2.
 
 Companion specs:
 
@@ -332,8 +343,8 @@ and declared the work blocked on
 [qsim-service#7](https://github.com/atantawi/qsim-service/pull/7), which closed #5 and its duplicate
 #6. That PR and issue hold the forensics — what the pre-fix encoding measured, why the join is not a
 valid anchor at any measure type, and the measured numbers. None of it is load-bearing here, and no
-qopt result was ever affected: `SimulationAnalyzer` is unimplemented and the analytic path uses
-`t_ul` rather than qsim.
+qopt result was ever affected: at the time `SimulationAnalyzer` did not yet exist, and the
+analytic path uses `t_ul` rather than qsim.
 
 **Two as-built gotchas qopt must respect.**
 
@@ -343,14 +354,19 @@ qopt result was ever affected: `SimulationAnalyzer` is unimplemented and the ana
    `residence-time` deserves particular care: it is the closest-looking alternative to
    `response-time` and just as wrong. §5.4 fixes the requested list; §6.8 is why `throughput` is on
    it anyway; §10 records the upstream ceiling.
-2. **System-level measures come back with `station: ""`** — *inferred, not verified*.
+2. **System-level measures come back with `station: ""`** — **verified 2026-07-30**; this was an
+   inference when the spec was written, and it held.
    `MeasureMapper` emits `referenceNode=""` for system measures and `SolutionsParser.domainStation`
-   passes an empty name through unchanged, so `""` is what the response should carry. But no
-   `qsim-service` fixture pins it (the repo has no system-measure solutions fixture), and the
-   `qsim-service` spec §5.2 example comment says `station: "system"` instead. `measures.py` keys on
-   `""`; the first live integration run settles it, and §8's fork-join identity test is what
-   surfaces it if wrong. Flagged as an inference deliberately — the last unverified inference in
-   this section, that the pre-fix answer would be ≈ 0, turned out to be wrong.
+   passes an empty name through unchanged, so `""` is what the response should carry. No
+   `qsim-service` fixture pinned it (that repo has no system-measure solutions fixture) and the
+   `qsim-service` spec §5.2 example comment says `station: "system"` instead, so it was flagged as
+   an inference deliberately.
+
+   **Settled by a live run on 2026-07-30.** A single-station M/M/1 network returned
+   `{"station": "", "class": "jobs", "type": "system-response-time", "mean": 0.994325}`, with no
+   measure keyed on `"system"`. `qopt`'s `SYSTEM_STATION = ""` is therefore correct as written, and
+   `tests/test_integration_qsim.py::test_system_measure_key_inference_holds` is now a regression
+   guard rather than a discovery.
 
 **Consequence for delivery.** Nothing here is gated. `ForkJoinStation.sim_node` was never blocked
 (emitting the node, its two heterogeneous branches, and the join is entirely qopt-side), and reading
@@ -421,7 +437,29 @@ tests untouched. The new form is `Optimizer(network, budget, analyzer=Simulation
 2. Each iteration: `E[T] ← analyzer.evaluate(S)`; `ζᵢ ← station.zeta_from(E[T]ᵢ, Sᵢ)`;
    `S_target ← allocate(stations, budget, ζ)`; then damp:
    `S ← (1−θ)·S + θ·S_target`.
-3. Stop when `‖ΔS‖∞ < max(tol, κ·noise_floor)`.
+3. Stop when `‖ΔS‖∞ / θ < max(tol, κ·noise_floor)` — that is, **test convergence in
+   target space**, on the step `allocate` still wants to take, not on the damped step the
+   iterate actually took.
+
+   > **Amended 2026-07-30, superseded 2026-07-31 (both post-implementation).** This step
+   > originally read `‖ΔS‖∞ < max(tol, κ·noise_floor)`, comparing a **damped** step against
+   > two **target-space** quantities. `‖ΔS‖∞` is `θ·|S_target − S|`, while `noise_floor`
+   > (§6.4) is the spread in `allocate`'s *output* and `tol` is a tolerance on how far
+   > `allocate` still wants to move. So *both* terms were off by `1/θ`: at the §6.6 defaults
+   > (`θ = 0.5`, `κ = 1.0`) the loop stopped at **2** noise widths while reporting `κ = 1`,
+   > and `tol = 1e-9` behaved as `2e-9`.
+   >
+   > The first amendment scaled only the noise term (`κ·θ·noise_floor`), which fixed κ and
+   > left `tol` wrong. The current form normalizes the step **once** instead, which repairs
+   > both terms together and — the reason it matters — keeps `tol` meaning the same thing on
+   > the analytic and simulated paths. Cross-path comparability is the premise §1.1 rests on.
+   >
+   > Both errors failed safe: they stopped early, returning a less-converged `S*`, and never
+   > looped forever. That is why they survived design review and two implementation passes.
+   > Division by `1.0` is exact in IEEE 754, so the normalization is bit-for-bit inert at
+   > `θ = 1.0` and the analytic path is untouched. Note the κ arm's *behavior* is identical
+   > under either amendment — `θd < κθf ⟺ d < κf` — so only the `tol` arm changed on
+   > 2026-07-31.
 4. If `final_evaluation`, evaluate once more at the converged `S*` with a fresh seed (§6.5);
    those numbers become the reported metrics.
 
@@ -442,6 +480,10 @@ half-width `hᵢ` into `ζ`:
 
 then re-run `allocate` on perturbed `ζ` and measure the resulting spread in `S`.
 
+Note that what this yields is a spread in `allocate`'s **output** — the movement noise can induce
+in `S_target`, not in the damped iterate. §6.3's stopping rule must scale it by θ to compare
+against a damped `‖ΔS‖∞`.
+
 **The perturbation direction matters.** Eq 21 is **invariant under uniform positive scaling
 of ζ**: scaling every `ζ` by `k` multiplies both `numᵢ = √(ωᵢζᵢ/(cᵢµᵢ))` and
 `denom = Σ√(ω_jζ_jc_j/µ_j)` by `√k`, which cancels in the ratio. So perturbing all stations
@@ -453,7 +495,7 @@ upward together is nearly a no-op rather than a worst case. The worst case is
 noise_floor = maxᵢ |Sᵢ(ζ⁺) − Sᵢ(ζ⁻)| / 2
 ```
 
-That is `2n+1` closed-form evaluations — negligible against one simulation run. (The same
+That is `2n` closed-form evaluations — negligible against one simulation run. (The spec first said `2n+1`, counting an unperturbed baseline the implementation does not need, since each station's pair is compared against itself.) (The same
 invariance is why an all-M/M/1 network converges in a single step: every `ζ` is identically
 1, and uniform values are a fixed point of the scaling-invariant map.)
 
@@ -558,9 +600,11 @@ Extends the existing `QOptError` root:
 QOptError
 ├── TopologyError                   structural Network failures (§4.2)
 └── SimulationError
-    ├── SimulationTransportError    refused / timeout / DNS
-    ├── SimulationRequestError      400 / 422 — our JSON was wrong: a spec.py bug
-    │                               or an invalid network
+    ├── SimulationTransportError    refused / timeout / DNS, a /health that was not
+    │                               200, or a /simulate status in neither family below
+    ├── SimulationRequestError      400 / 405 / 413 / 422 — our request was wrong, in
+    │                               its body (a spec.py bug or an invalid network), its
+    │                               method, or its size. Never the engine's fault
     ├── SimulationEngineError       500
     ├── SimulationQualityError      degraded result; raised only under strict=True
     └── MeasureMissingError         response lacked a measure a station needs
@@ -578,6 +622,17 @@ not abort a run that has everything the mathematics requires:
 | `response-time` for any station | `MeasureMissingError`. Eq 22 has no input |
 | `system-response-time` | `Result.system_response_time = None` + `RuntimeWarning`. Also the signal that §5.3's `station: ""` inference was wrong |
 | `throughput` for a conservation-checked station | `RuntimeWarning` + a `degraded` entry saying the check could not run — distinct from the check running and failing (§6.8) |
+
+A **present mean whose confidence interval is absent** is a separate axis, and a separate table:
+qsim can return `mean` without `lower`/`upper`, and a mean is enough for everything the mathematics
+requires. So no measure escalates to an error here — but none of them may pass the `None`s through
+silently either, because the caller that formats a bound is the one that discovers it.
+
+| Mean present, CI absent | Consequence |
+|---|---|
+| `response-time` for a station | `RuntimeWarning` + `degraded`. The mean still feeds eq 22; `Result.sojourn_ci[i]` is `None` and that station drops out of the noise-floor estimate (§6.4) |
+| `system-response-time` | `RuntimeWarning` + `degraded`. Reported as `(mean, (None, None))` — the tuple shape is kept, matching `throughput`, so consumers that format bounds must handle the `None`s |
+| `throughput` for a conservation-checked station | `RuntimeWarning` + `degraded`. The γ-conservation check cannot run — the same consequence as the measure being absent |
 
 ### 7.2 Degraded results
 
