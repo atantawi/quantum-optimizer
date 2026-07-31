@@ -32,3 +32,42 @@ def allocate(stations, C, zeta_vec):
         num = math.sqrt(st.weight * z / (st.alloc_cost * st.mu))
         capacities.append(b + slack * num / denom)
     return capacities
+
+
+ZETA_FLOOR = 1e-12
+"""Smallest zeta handed to `allocate`, which takes its square root."""
+
+
+def noise_floor(stations, C, zeta_vec, dzeta):
+    """How much of a capacity change is attributable to evaluation noise (spec 6.4).
+
+    `allocate` is closed-form and pure, so this costs zero simulation calls: propagate
+    each reported CI half-width h_i into zeta as dzeta_i = h_i * (S_i*mu_i - gamma_i),
+    then measure the spread in S that a perturbation of that size can produce.
+
+    The perturbation is ANTI-CORRELATED, not uniform. Eq 21 is invariant under uniform
+    positive scaling of zeta, so moving every station up together is nearly a no-op
+    rather than a worst case. For each station i we evaluate `allocate` with component i
+    up and all others down, plus the mirror:
+
+        noise_floor = max_i |S_i(zeta+) - S_i(zeta-)| / 2
+
+    That is 2n closed-form evaluations, negligible against one simulation run.
+    """
+    n = len(zeta_vec)
+    if n == 0 or all(d == 0.0 for d in dzeta):
+        return 0.0
+    worst = 0.0
+    for i in range(n):
+        up = [
+            max(zeta_vec[k] + dzeta[k] if k == i else zeta_vec[k] - dzeta[k], ZETA_FLOOR)
+            for k in range(n)
+        ]
+        down = [
+            max(zeta_vec[k] - dzeta[k] if k == i else zeta_vec[k] + dzeta[k], ZETA_FLOOR)
+            for k in range(n)
+        ]
+        S_up = allocate(stations, C, up)
+        S_down = allocate(stations, C, down)
+        worst = max(worst, abs(S_up[i] - S_down[i]) / 2.0)
+    return worst

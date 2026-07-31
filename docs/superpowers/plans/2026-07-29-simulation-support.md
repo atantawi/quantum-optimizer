@@ -2917,6 +2917,17 @@ The last core task. Wires the `Analyzer` seam into `Optimizer.run()`, adds the w
 
 Perturbed ζ is clamped to `ZETA_FLOOR = 1e-12` before `allocate` takes its square root, because a wide CI can drive `ζ − δζ` negative.
 
+**The threshold is scaled by θ, which the design spec's §6.3 formula omits.** `residual` measures a *damped* step, `θ·|S_target − S|`, while `noise_floor` measures the spread in `allocate`'s **output** — an undamped, target-space quantity. Noise in ζ moves `S_target` by up to `floor`, but moves the iterate by only `θ·floor`. Comparing them unscaled makes the effective tolerance `noise_kappa/θ` noise widths, so at the stochastic defaults (`θ = 0.5`, `κ = 1.0`) the loop would stop at 2 noise widths while reporting κ = 1. It fails safe — stopping early, returning a less-converged `S*`, never looping forever — which is exactly why it is easy to miss. Spec §6.3 says `‖ΔS‖∞ < max(tol, κ·noise_floor)`; **this plan deliberately implements `max(tol, κ·θ·noise_floor)`** so the knob means what it says. The scaling is a no-op at `θ = 1.0`.
+
+**A test for this must discriminate, not merely agree.** An assertion like
+`residual < κ·θ·floor` holds under *both* the scaled and unscaled thresholds whenever the
+residual is well below each, so it pins nothing. The two tests below were computed against
+the real arithmetic to straddle the boundary: `half_width = 0.02` at `θ = 0.5` puts
+`residual = 0.098019` between `κ·θ·floor = 0.068504` and `κ·floor = 0.137007`, so removing
+the scaling flips a `max_iter` exit into a `noise-floor` stop. Likewise the labelling test
+warm-starts onto the fixed point so `residual ≈ 1.5e-11 < tol`, while a wide CI leaves the
+floor at `≈ 0.35` — the one regime where the two labelling rules disagree.
+
 **Backward compatibility, precisely.** `Optimizer(stations, budget)` defaults to `AnalyticAnalyzer` with `damping = 1.0`, `max_iter = 1000`, `ci = None` (so `noise_floor` is never computed and the stop threshold is plain `tol`). `AnalyticAnalyzer.evaluate` produces `st.sojourn_time(Si)` and `st.zeta_from(T, Si)` is `T * (Si*mu - gamma)` — the same float operations in the same order as today's `st.zeta(Si)`. Damping at exactly `1.0` takes an explicit branch that assigns `S_target` rather than blending, so no arithmetic is introduced. The result is bit-identical, which Step 4's test asserts with `==`.
 
 **Two documented caveats (§6.6):**
@@ -3272,6 +3283,70 @@ def test_stop_reason_flips_to_noise_floor_as_ci_widens():
     assert wide.converged is True
 
 
+def test_threshold_scales_by_damping_so_kappa_means_what_it_says():
+    # A DISCRIMINATING case for the theta scaling, not merely a consistent one. At
+    # damping=0.5 with half_width=0.02 the first step is residual = 0.098019 while the
+    # noise floor is 0.137007, so the two candidate thresholds straddle it:
+    #   scaled   kappa*theta*floor = 0.068504  ->  0.098019 >= it, the loop keeps going
+    #   unscaled kappa*floor       = 0.137007  ->  0.098019 <  it, the loop would stop
+    # So reverting the scaling flips this run from a max_iter exit to a noise-floor stop.
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        result = Optimizer(_stations(), budget=BUDGET,
+                           analyzer=DeterministicFake(half_width=0.02),
+                           warm_start=False, damping=0.5, noise_kappa=1.0,
+                           max_iter=1).run()
+    assert result.noise_floor == pytest.approx(0.137007, rel=1e-3)
+    assert result.residual == pytest.approx(0.098019, rel=1e-3)
+    # The scaled threshold sits below the residual and the unscaled one above it.
+    assert 1.0 * 0.5 * result.noise_floor < result.residual < 1.0 * result.noise_floor
+    assert result.stop_reason == "max_iter"     # unscaled would report "noise-floor"
+    assert result.converged is False
+
+
+def test_stop_reason_is_tol_when_tol_was_met_despite_a_wide_noise_floor():
+    # A DISCRIMINATING case for the labelling: residual < tol < kappa*theta*floor.
+    # Warm-starting lands the loop on the analytic fixed point, so iteration 1's step is
+    # ~1.5e-11, while a wide CI puts the noise threshold at ~0.35. The run met `tol`
+    # outright and must say so; labelling it "noise-floor" would tell a caller to buy
+    # simulation replications they do not need. Labelling by which term won the max()
+    # reports "noise-floor" here, so this test fails if the fix is reverted.
+    result = Optimizer(_stations(), budget=BUDGET,
+                       analyzer=DeterministicFake(half_width=0.05),
+                       warm_start=True, damping=1.0, max_iter=20).run()
+    assert result.iterations == 1
+    assert result.residual < 1e-9               # tol was genuinely met
+    assert result.noise_floor > 1e-9            # and the floor was the larger term
+    assert result.stop_reason == "tol"
+
+
+def test_noise_floor_is_computed_at_the_capacities_the_ci_was_measured_at():
+    # Guards the loop's ordering: the floor must use the S handed to evaluate(), not the
+    # already-damped S_new. Swapping those is invisible at damping=1.0, so damp here.
+    from qopt.allocator import noise_floor as nf
+
+    seen = []
+
+    class RecordingFake(DeterministicFake):
+        def evaluate(self, stations, S, *, fresh_seed=False):
+            seen.append(list(S))
+            return super().evaluate(stations, S, fresh_seed=fresh_seed)
+
+    # max_iter=1 cannot converge, so the non-convergence warning is expected here.
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        result = Optimizer(_stations(), budget=BUDGET,
+                           analyzer=RecordingFake(half_width=0.02),
+                           warm_start=False, damping=0.5, max_iter=1).run()
+
+    stations = _stations()
+    S_eval = seen[0]                            # the S the single loop iteration evaluated
+    ev = DeterministicFake(half_width=0.02).evaluate(stations, S_eval)
+    zeta = [st.zeta_from(T, Si) for st, T, Si in zip(stations, ev.sojourn_times, S_eval)]
+    dzeta = [0.5 * (hi - lo) * (Si * st.mu - st.gamma)
+             for st, Si, (lo, hi) in zip(stations, S_eval, ev.ci)]
+    assert result.noise_floor == nf(stations, BUDGET, zeta, dzeta)
+    assert result.capacities != S_eval          # the returned S really is the damped one
+
+
 def test_kappa_zero_restores_naive_stopping():
     result = Optimizer(_stations(), budget=BUDGET,
                        analyzer=DeterministicFake(half_width=0.05),
@@ -3507,13 +3582,17 @@ class Optimizer:
 
             threshold = self.tol
             if floor is not None:
-                threshold = max(self.tol, self.noise_kappa * floor)
+                # `residual` is a DAMPED step (theta * |S_target - S|), while `floor` is
+                # an undamped target-space spread: noise in zeta moves S_target by up to
+                # `floor` but moves the iterate by only theta * floor. Scaling by theta is
+                # what makes noise_kappa mean literally "stop once the step is within
+                # kappa noise widths" at every damping value.
+                threshold = max(self.tol, self.noise_kappa * self.damping * floor)
             if residual < threshold:
-                stop_reason = (
-                    "noise-floor"
-                    if floor is not None and self.noise_kappa * floor > self.tol
-                    else "tol"
-                )
+                # Label by where the residual actually landed, not by which term won the
+                # max(): a run that met `tol` outright is a "tol" stop even when the
+                # noise floor was the larger threshold.
+                stop_reason = "noise-floor" if residual >= self.tol else "tol"
                 break
 
         converged = stop_reason != "max_iter"
@@ -3587,9 +3666,12 @@ In `qopt/__init__.py`:
 
 ```python
 from qopt.allocator import allocate, min_feasible_budget, noise_floor
+from qopt.exceptions import SimulationQualityError
 ```
 
-and add `"noise_floor"` to `__all__`.
+and add `"noise_floor"` and `"SimulationQualityError"` to `__all__`. `Optimizer.run()` raises
+`SimulationQualityError` under `strict=True`, so it must be catchable from the package root
+rather than only via `qopt.exceptions`.
 
 - [ ] **Step 7: Run both new test files, the example, and the full suite**
 
@@ -3628,7 +3710,7 @@ Ships a working simulated path: a runnable example, the README update, and the f
 
 **Why a tandem example ships first (§9):** it isolates variability propagation with the fewest moving parts. A Poisson source feeds `M/D/1 → M/M/1` in series; the M/D/1's departure process is *not* Poisson, so the downstream station's true `cov_a ≠ 1` while the analytic path assumes the `cov_a` it was given. That divergence *is* variability propagation, demonstrated with no fork-join involved.
 
-**The one open inference this task settles:** `measures.py` keys system-level measures on `station == ""`, inferred from `referenceNode=""` (spec §5.3 gotcha 2). No `qsim-service` fixture pins it and that repo's own spec example says `"system"`. The first live run here decides. If it is wrong, the symptom is `Result.system_response_time is None` plus a `RuntimeWarning` — and the fix is the one-line `SYSTEM_STATION` constant in `qopt/qsim/measures.py`. Record the outcome in the commit message either way.
+**The one open inference this task settles — now settled.** `measures.py` keys system-level measures on `station == ""`, inferred from `referenceNode=""` (spec §5.3 gotcha 2), and no `qsim-service` fixture pinned it while that repo's own spec example said `"system"`. A probe against the running service has now **confirmed `""`**: a single-station M/M/1 network returned `{"station": "", "class": "jobs", "type": "system-response-time", "mean": 0.994325}`, with no measure keyed on `"system"`. So `SYSTEM_STATION` needs no change — but **this task must update its docstring in `qopt/qsim/measures.py`** to say the key is verified against a live service rather than inferred, and `test_system_measure_key_inference_holds` below becomes a regression guard rather than a discovery. Leave the constant's value alone.
 
 - [ ] **Step 1: Write the failing tests** — `tests/test_integration_qsim.py`
 

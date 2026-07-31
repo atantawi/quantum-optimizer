@@ -7,12 +7,15 @@ from qopt.exceptions import MeasureMissingError
 SYSTEM_STATION = ""
 """Station key that system-level measures come back under.
 
-INFERRED, not verified (spec 5.3 gotcha 2): MeasureMapper emits referenceNode="" for
-system measures and SolutionsParser.domainStation passes an empty name through, so ""
-is what the response should carry — but no qsim-service fixture pins it, and that
-repo's own spec example says "system". The first live integration run settles it. If it
-is wrong the symptom is system_response_time is None plus a RuntimeWarning, and the fix
-is this one line.
+CONFIRMED against a live qsim-service at 51a99c7 (tests/test_integration_qsim.py::
+test_system_measure_key_inference_holds): a single-station M/M/1 network returned
+{"station": "", "class": "jobs", "type": "system-response-time", "mean": 0.994325},
+with nothing keyed on "system". This matches the inference from MeasureMapper
+emitting referenceNode="" for system measures and SolutionsParser.domainStation
+passing an empty name through (spec 5.3 gotcha 2) — the doubt existed only because no
+qsim-service fixture pinned it, and that repo's own spec example says "system". If a
+future service version changes this, the symptom is system_response_time is None plus
+a RuntimeWarning, and the fix is this one line.
 """
 
 

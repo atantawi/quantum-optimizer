@@ -35,7 +35,7 @@ def build_network():
 def main():
     network = build_network()
     budget = 6 * min_feasible_budget(network.stations)
-    result = Optimizer(network.stations, budget=budget).run()
+    result = Optimizer(network, budget=budget).run()
 
     print(f"budget = {budget:.4f}   converged = {result.converged} "
           f"in {result.iterations} iterations")

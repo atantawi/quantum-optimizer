@@ -108,7 +108,13 @@ class QsimClient:
 
     @staticmethod
     def _error_detail(raw):
-        """qsim errors are {"error": str, "details": [str]}; fall back to raw bytes."""
+        """qsim errors are {"error": str, "details": [str]}; fall back to raw bytes.
+
+        Joins `details` with "; ", which assumes `details` is a list of strings per the
+        service's documented contract. If the service ever sent a bare string there
+        instead, "; ".join would iterate its characters and render them comma-spliced;
+        this is not guarded against because the contract guarantees a list.
+        """
         try:
             payload = json.loads(raw)
         except (ValueError, TypeError):

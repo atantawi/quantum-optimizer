@@ -1,11 +1,13 @@
-"""Fixed-point optimization loop (paper Steps 0-5)."""
+"""Fixed-point optimization loop (paper Steps 0-5), analytic or simulation-backed."""
 
 import math
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from qopt.allocator import allocate, min_feasible_budget
-from qopt.exceptions import InfeasibleBudgetError
+from qopt.allocator import allocate, min_feasible_budget, noise_floor
+from qopt.analyzer import AnalyticAnalyzer
+from qopt.exceptions import InfeasibleBudgetError, SimulationQualityError
+from qopt.network import Network
 
 
 @dataclass
@@ -20,21 +22,69 @@ class Result:
     converged: bool
     residual: float  # final ||S_new - S||_inf; how close the last iterate came to tol
 
+    # Simulation-path diagnostics. All defaulted, so analytic construction is unchanged.
+    sojourn_ci: list | None = None      # per-station (lower, upper); None when analytic
+    noise_floor: float | None = None   # final |delta S| attributable to noise (6.4)
+    stop_reason: str = "tol"           # "tol" | "noise-floor" | "max_iter"
+    warm_start_iterations: int = 0     # analytic iterations before the simulated phase
+    degraded: list = field(default_factory=list)   # per-iteration quality audit (6.8, 7.2)
+    system_response_time: object = None           # qsim diagnostic; not optimized
+    sim_calls: int = 0                            # POSTs issued — the real cost meter
+
 
 class Optimizer:
     """Drives the fixed-point iteration for the capacity allocation problem.
 
     Loop: allocate from an initial zeta guess, then repeatedly recompute zeta from the
-    current capacities (eq 22) and re-allocate (eq 21) until ||S_new - S||_inf < tol or
-    max_iter is reached.
+    current capacities (eq 22) and re-allocate (eq 21) until the step falls below the
+    stopping threshold or max_iter is reached.
+
+    `Optimizer(stations, budget)` is bit-identical to the pre-simulation implementation:
+    it defaults to AnalyticAnalyzer with damping 1.0 and max_iter 1000, and the
+    CI-driven machinery stays inert because the analytic path reports no CI.
     """
 
-    def __init__(self, stations, budget, *, tol=1e-9, max_iter=1000, initial_zeta=None):
-        self.stations = list(stations)
+    def __init__(self, stations, budget, *, analyzer=None, tol=1e-9, max_iter=None,
+                 initial_zeta=None, damping=None, noise_kappa=1.0,
+                 final_evaluation=True, strict=False, warm_start=True):
+        if isinstance(stations, Network):
+            self.network = stations
+            self.stations = list(stations.stations)
+        else:
+            self.network = None
+            self.stations = list(stations)
         self.budget = budget
+        self.analyzer = AnalyticAnalyzer() if analyzer is None else analyzer
         self.tol = tol
-        self.max_iter = max_iter
         self.initial_zeta = initial_zeta
+        self.final_evaluation = final_evaluation
+        self.strict = strict
+        self.warm_start = warm_start
+
+        # Each simulated iteration is a full simulation run, so the caps differ by kind.
+        stochastic = self.analyzer.is_stochastic
+        self.max_iter = (20 if stochastic else 1000) if max_iter is None else max_iter
+        self.damping = (0.5 if stochastic else 1.0) if damping is None else damping
+        self.noise_kappa = noise_kappa
+
+        if not math.isfinite(self.damping) or not 0.0 < self.damping <= 1.0:
+            raise ValueError(
+                f"damping must be a finite number in (0, 1], got {self.damping}"
+            )
+        if not math.isfinite(self.noise_kappa) or self.noise_kappa < 0:
+            raise ValueError(
+                f"noise_kappa must be a finite number >= 0, got {self.noise_kappa}"
+            )
+
+        if getattr(self.analyzer, "seed_policy", None) == "fixed" and not final_evaluation:
+            warnings.warn(
+                "seed_policy='fixed' with final_evaluation=False reports metrics from "
+                "the common random numbers sample path: the loop converges crisply but "
+                "the reported numbers are biased toward that one sample path. Set "
+                "final_evaluation=True for an independently seeded final run (spec 6.5).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     def run(self):
         stations = self.stations
@@ -61,20 +111,67 @@ class Optimizer:
                 f"initial zeta values must be finite and strictly positive, got {zeta}"
             )
 
-        S = allocate(stations, self.budget, zeta)  # S^(1)
-        converged = False
+        stochastic = self.analyzer.is_stochastic
+        warm_start_iterations = 0
+        if stochastic and self.warm_start:
+            # The analytic pre-solve is deterministic and costs zero simulation calls,
+            # so it is free and starts the expensive phase near the answer (spec 6.3).
+            pre = Optimizer(
+                stations, self.budget, tol=self.tol, initial_zeta=self.initial_zeta
+            ).run()
+            S = list(pre.capacities)
+            warm_start_iterations = pre.iterations
+        else:
+            S = allocate(stations, self.budget, zeta)  # S^(1)
+
+        degraded = []
+        sim_calls = 0
         iterations = 0
         residual = math.inf
+        floor = None
+        stop_reason = "max_iter"
+        evaluation = None
+
         for _ in range(self.max_iter):
             iterations += 1
-            zeta = [st.zeta(Si) for st, Si in zip(stations, S)]  # eq 22
-            S_new = allocate(stations, self.budget, zeta)        # eq 21
+            evaluation = self.analyzer.evaluate(stations, S)
+            if stochastic:
+                sim_calls += 1
+            degraded.extend(evaluation.degraded)
+
+            zeta = [
+                st.zeta_from(T, Si)
+                for st, T, Si in zip(stations, evaluation.sojourn_times, S)
+            ]                                                    # eq 22
+            S_target = allocate(stations, self.budget, zeta)      # eq 21
+
+            floor = self._noise_floor(stations, S, zeta, evaluation.ci)
+            if self.damping == 1.0:
+                S_new = S_target       # explicit, so the analytic path adds no arithmetic
+            else:
+                theta = self.damping
+                S_new = [
+                    (1.0 - theta) * s + theta * t for s, t in zip(S, S_target)
+                ]
             residual = max(abs(a - b) for a, b in zip(S_new, S))
             S = S_new
-            if residual < self.tol:
-                converged = True
+
+            threshold = self.tol
+            if floor is not None:
+                # `residual` is a DAMPED step (theta * |S_target - S|), while `floor` is
+                # an undamped target-space spread: noise in zeta moves S_target by up to
+                # `floor` but moves the iterate by only theta * floor. Scaling by theta is
+                # what makes noise_kappa mean literally "stop once the step is within
+                # kappa noise widths" at every damping value.
+                threshold = max(self.tol, self.noise_kappa * self.damping * floor)
+            if residual < threshold:
+                # Label by where the residual actually landed, not by which term won the
+                # max(): a run that met `tol` outright is a "tol" stop even when the
+                # noise floor was the larger threshold.
+                stop_reason = "noise-floor" if residual >= self.tol else "tol"
                 break
 
+        converged = stop_reason != "max_iter"
         if not converged:
             warnings.warn(
                 f"Optimizer did not converge in {iterations} iterations "
@@ -84,11 +181,27 @@ class Optimizer:
                 stacklevel=2,
             )
 
-        zeta = [st.zeta(Si) for st, Si in zip(stations, S)]
-        sojourn_times = [st.sojourn_time(Si) for st, Si in zip(stations, S)]
-        objective = sum(
-            st.weight * t for st, t in zip(stations, sojourn_times)
-        )
+        if stochastic:
+            if self.final_evaluation or evaluation is None:
+                # One more run at the converged S* with a fresh seed: those numbers are
+                # the reported metrics, independent of the CRN sample path (spec 6.5).
+                evaluation = self.analyzer.evaluate(stations, S, fresh_seed=True)
+                sim_calls += 1
+                degraded.extend(evaluation.degraded)
+            # Otherwise the last loop iterate's numbers are reported as-is, which is what
+            # final_evaluation=False asks for. They were measured at the pre-damping S.
+        else:
+            evaluation = self.analyzer.evaluate(stations, S)
+
+        sojourn_times = list(evaluation.sojourn_times)
+        zeta = [
+            st.zeta_from(T, Si) for st, T, Si in zip(stations, sojourn_times, S)
+        ]
+        objective = sum(st.weight * T for st, T in zip(stations, sojourn_times))
+
+        if self.strict and degraded:
+            raise SimulationQualityError("; ".join(degraded))
+
         return Result(
             capacities=S,
             sojourn_times=sojourn_times,
@@ -97,4 +210,21 @@ class Optimizer:
             iterations=iterations,
             converged=converged,
             residual=residual,
+            sojourn_ci=evaluation.ci,
+            noise_floor=floor,
+            stop_reason=stop_reason,
+            warm_start_iterations=warm_start_iterations,
+            degraded=degraded,
+            system_response_time=evaluation.extras.get("system_response_time"),
+            sim_calls=sim_calls,
         )
+
+    def _noise_floor(self, stations, S, zeta, ci):
+        """Propagate CI half-widths into zeta and measure the spread in S (spec 6.4)."""
+        if ci is None or self.noise_kappa <= 0.0:
+            return None
+        dzeta = [
+            0.5 * (upper - lower) * (Si * st.mu - st.gamma)
+            for st, Si, (lower, upper) in zip(stations, S, ci)
+        ]
+        return noise_floor(stations, self.budget, zeta, dzeta)

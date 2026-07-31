@@ -74,6 +74,11 @@ class Network:
             [(r.src, r.dst, r.probability) for r in self.routes],
             arrival_rate, self.SOURCE, self.SINK,
         )
+        # Not all-or-nothing: if bind_gamma raises partway through (e.g. a conflicting
+        # rebind), the stations already processed in this loop stay bound even though
+        # this Network is discarded. Harmless today since nothing in this repo shares
+        # station objects across construction attempts, but a future caller that does
+        # would see partially-bound stations from a failed Network().
         for st in self.stations:
             st.bind_gamma(self.gammas[st.name])
 
@@ -126,8 +131,8 @@ class Network:
         out_edges = {}
         for r in self.routes:
             out_edges.setdefault(r.src, []).append(r)
-        for src, routes in out_edges.items():
-            total = math.fsum(r.probability for r in routes)
+        for src, node_routes in out_edges.items():
+            total = math.fsum(r.probability for r in node_routes)
             if not math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9):
                 raise TopologyError(
                     f"out-edge probabilities from {src!r} sum to {total!r}, not 1.0"
@@ -198,7 +203,12 @@ class Network:
         }
 
     def to_dot(self):
-        """Graphviz DOT for diagrams — a plain string emitter, no dependency."""
+        """Graphviz DOT for diagrams — a plain string emitter, no dependency.
+
+        Identifiers are wrapped in double quotes but an embedded double quote in a
+        station or network name is not escaped, and _validate does not reject quote
+        characters. Names are assumed code-supplied, not untrusted input.
+        """
         lines = [
             f'digraph "{self.name}" {{',
             "  rankdir=LR;",

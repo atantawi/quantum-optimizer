@@ -16,7 +16,7 @@ class Evaluation:
     """
 
     sojourn_times: list
-    ci: list = None
+    ci: list | None = None
     degraded: list = field(default_factory=list)
     extras: dict = field(default_factory=dict)
 

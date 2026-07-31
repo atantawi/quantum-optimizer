@@ -8,6 +8,13 @@ def solve_traffic(nodes, edges, arrival_rate, source, sink, *, tol=1e-12, max_it
 
     Converges geometrically for any open chain, including branching and feedback cycles.
 
+    Does not itself validate that edge endpoints resolve to `nodes`, `source`, or
+    `sink`; a typo raises a plain KeyError from the dict lookups below rather than a
+    TopologyError. Endpoints are assumed pre-validated by the caller. The only
+    production caller is Network.__init__, which runs Network._validate() immediately
+    before calling this function and performs exactly that check — so it owns the
+    obligation. A future direct caller of solve_traffic must do the same.
+
     Args:
         nodes: station names — the unknowns. `source` and `sink` are not among them.
         edges: (src, dst, probability) triples; endpoints may be `source` or `sink`.
@@ -15,7 +22,11 @@ def solve_traffic(nodes, edges, arrival_rate, source, sink, *, tol=1e-12, max_it
         source, sink: endpoint sentinel names.
         tol: stop once max|delta lambda| < tol.
         max_iter: iteration cap. Hitting it means flow is trapped in a closed
-            subnetwork, which is a structural error rather than slow convergence.
+            subnetwork, which is a structural error rather than slow convergence. Must
+            be >= 1: at 0 the loop body never runs and this function raises
+            TopologyError reporting a residual (max|delta lambda|) of 0, which would
+            misleadingly read as "converged to zero" rather than "never ran". This is a
+            documented precondition, not a guarded one — callers must pass max_iter >= 1.
 
     Returns:
         (lambdas, iterations) — lambdas maps station name to arrival rate.

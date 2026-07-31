@@ -65,9 +65,38 @@ def test_missing_system_response_time_warns_and_records(sim_response):
     assert T == [0.42, 0.29]        # the run is still usable
 
 
+def test_null_system_response_time_mean_counts_as_missing(sim_response):
+    stations = _stations()
+    response = sim_response(
+        sojourn={"mm1": 0.42, "fj": 0.29}, throughput={"mm1": 0.6}, system=1.15
+    )
+    for m in response["measures"]:
+        if m["station"] == "" and m["type"] == "system-response-time":
+            m["mean"] = None
+    with pytest.warns(RuntimeWarning, match="system-response-time"):
+        T, ci, degraded, extras = extract(response, stations, "jobs")
+    assert extras["system_response_time"] is None
+    assert any("system-response-time" in d for d in degraded)
+    assert T == [0.42, 0.29]        # the run is still usable
+
+
 def test_missing_throughput_for_a_checked_station_warns(sim_response):
     stations = _stations()
     response = sim_response(sojourn={"mm1": 0.42, "fj": 0.29}, system=1.15)
+    with pytest.warns(RuntimeWarning, match="no 'throughput' for station 'mm1'"):
+        _, _, degraded, extras = extract(response, stations, "jobs")
+    assert "mm1" not in extras["throughput"]
+    assert any("cannot run" in d for d in degraded)
+
+
+def test_null_throughput_mean_counts_as_missing(sim_response):
+    stations = _stations()
+    response = sim_response(
+        sojourn={"mm1": 0.42, "fj": 0.29}, throughput={"mm1": 0.6}, system=1.15
+    )
+    for m in response["measures"]:
+        if m["station"] == "mm1" and m["type"] == "throughput":
+            m["mean"] = None
     with pytest.warns(RuntimeWarning, match="no 'throughput' for station 'mm1'"):
         _, _, degraded, extras = extract(response, stations, "jobs")
     assert "mm1" not in extras["throughput"]

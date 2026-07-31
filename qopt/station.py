@@ -79,13 +79,13 @@ class Station(ABC):
         gamma is derived-only for stations in a Network: there is no silent override of an
         explicitly constructed value, and no rebinding to a second network (spec 4.1).
         """
-        if not math.isfinite(value) or value <= 0:
-            raise ValueError(f"derived gamma must be a finite number > 0, got {value}")
         if self._gamma_explicit:
             raise ValueError(
                 f"station {self.name!r} was constructed with an explicit gamma="
                 f"{self._gamma}; gamma is derived-only for stations in a Network"
             )
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"derived gamma must be a finite number > 0, got {value}")
         if self._gamma is not None and self._gamma != value:
             raise ValueError(
                 f"station {self.name!r} is already bound to gamma={self._gamma}, "
@@ -95,7 +95,12 @@ class Station(ABC):
 
     @abstractmethod
     def sojourn_time(self, S):
-        """Expected sojourn time E[T] under capacity S. Raises InstabilityError if S*mu <= gamma."""
+        """Expected sojourn time E[T] under capacity S.
+
+        Raises InstabilityError if S*mu <= gamma. Raises ValueError first if gamma is
+        unbound (no explicit gamma at construction and not yet bound by a Network) —
+        the gamma property itself raises before the stability check can run.
+        """
 
     @abstractmethod
     def sim_node(self, S, job_class):
