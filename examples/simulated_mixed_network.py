@@ -87,8 +87,12 @@ def _print_table(title, network, result):
     print(f"  objective (sum w*E[T]) = {result.objective:.6f}")
     if result.system_response_time is not None:
         mean, (lower, upper) = result.system_response_time
+        interval = (                             # bounds absent: measures.extract warned
+            "CI unavailable" if lower is None or upper is None
+            else f"CI ({lower:.6f}, {upper:.6f})"
+        )
         print(f"  system response time = {mean:.6f} "
-              f"CI ({lower:.6f}, {upper:.6f})   [diagnostic, not optimized]")
+              f"{interval}   [diagnostic, not optimized]")
 
 
 def main():

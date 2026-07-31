@@ -22,11 +22,16 @@ class SimulationError(QOptError):
 
 
 class SimulationTransportError(SimulationError):
-    """The simulation service was unreachable: refused, timed out, or DNS failure."""
+    """We never got a usable answer out of the service.
+
+    Either it was unreachable — refused, timed out, DNS failure — or it answered in a way
+    that carries no simulation outcome to interpret: a /health that was not 200, or a
+    /simulate status outside the request and 5xx families qsim-service documents.
+    """
 
 
 class SimulationRequestError(SimulationError):
-    """The service rejected our request (HTTP 400/422): a spec.py bug or an invalid network."""
+    """The service rejected our request (HTTP 400/405/413/422): a spec.py bug or an invalid network."""
 
 
 class SimulationEngineError(SimulationError):

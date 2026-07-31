@@ -164,6 +164,13 @@ Runnable versions: `examples/simulated_tandem.py` and
 `examples/simulated_mixed_network.py`. Both fall back to analytic-only output when
 `QOPT_QSIM_URL` is unset.
 
+A simulated measure can come back as a mean with no confidence interval. That never fails the
+run — the mean is all the mathematics needs — so `result.sojourn_ci` carries `None` in that
+station's slot, `result.system_response_time` keeps its `(mean, (lower, upper))` shape with
+`None` bounds, and each case adds a `RuntimeWarning` plus a `result.degraded` entry. Code that
+formats those bounds has to expect the `None`s; `_print_table` in
+`examples/simulated_mixed_network.py` shows the guard.
+
 See also:
 
 - `docs/superpowers/specs/2026-07-10-optimizer-design.md` — authoritative design spec.

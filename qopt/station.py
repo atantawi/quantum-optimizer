@@ -77,7 +77,11 @@ class Station(ABC):
         """Attach a Network-derived gamma. Idempotent for an identical value.
 
         gamma is derived-only for stations in a Network: there is no silent override of an
-        explicitly constructed value, and no rebinding to a second network (spec 4.1).
+        explicitly constructed value, and no rebinding to a conflicting one (spec 4.1).
+        What is rejected is a *disagreement* about the arrival rate, not reuse — putting
+        these stations in a second Network that derives the same gamma succeeds, which is
+        what makes the two-run examples' fresh-Network choice a matter of isolating mutable
+        state rather than a necessity.
         """
         if self._gamma_explicit:
             raise ValueError(

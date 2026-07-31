@@ -30,12 +30,16 @@ class Result:
     sojourn_ci: list | None = None      # per-station (lower, upper), or None for a
                                          # station whose CI was missing; None (the whole
                                          # field) when analytic. Sourced from the fresh-
-                                         # seed FINAL evaluation, not the loop.
+                                         # seed FINAL evaluation at default settings, and
+                                         # from the last loop iterate when
+                                         # final_evaluation=False suppresses that run.
     noise_floor: float | None = None   # UNDAMPED target-space spread attributable to
                                         # noise (6.4), directly comparable to `tol` and to
                                         # residual/damping. Taken from the last LOOP
-                                        # iteration's common-random-numbers intervals - a
-                                        # different run than sojourn_ci above.
+                                        # iteration's common-random-numbers intervals -
+                                        # a different run than sojourn_ci above whenever a
+                                        # final evaluation ran, the same one when it did
+                                        # not.
     stop_reason: str = "tol"           # "tol" | "noise-floor" | "max_iter"
     warm_start_iterations: int = 0     # analytic iterations before the simulated phase
     degraded: list = field(default_factory=list)   # per-iteration quality audit (6.8, 7.2)

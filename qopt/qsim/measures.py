@@ -31,6 +31,11 @@ def extract(response, stations, job_class):
     present but the confidence interval is not: the mean is still usable for eq 22, but
     the noise floor cannot be estimated for that station (mirrors the throughput handling
     in qsim/analyzer.py's gamma-conservation check).
+
+    The two diagnostics in `extras` keep their (mean, (lower, upper)) shape in that case
+    and carry (None, None) bounds instead, so a caller that formats those bounds must
+    handle the Nones. Either way the miss is warned and recorded in `degraded`: a mean
+    without a CI is never passed through silently.
     """
     degraded = []
     if not response.get("completed", True):
@@ -81,9 +86,15 @@ def extract(response, stations, job_class):
         extras["system_response_time"] = None
     else:
         degraded.extend(_flag_weak(system))
-        extras["system_response_time"] = (
-            system["mean"], (system.get("lower"), system.get("upper"))
-        )
+        lower, upper = system.get("lower"), system.get("upper")
+        if lower is None or upper is None:
+            message = (
+                f"'system-response-time' {system['mean']:.6f} has no confidence "
+                f"interval; reporting the mean without one"
+            )
+            warnings.warn(message, RuntimeWarning, stacklevel=2)
+            degraded.append(message)
+        extras["system_response_time"] = (system["mean"], (lower, upper))
 
     throughput = {}
     for st in stations:

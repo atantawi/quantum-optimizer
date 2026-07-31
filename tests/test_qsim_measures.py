@@ -101,6 +101,30 @@ def test_null_system_response_time_mean_counts_as_missing(sim_response):
     assert T == [0.42, 0.29]        # the run is still usable
 
 
+def test_missing_system_response_time_bounds_are_treated_as_a_miss(sim_response):
+    # The third site of the finding-1 pattern: a mean present, its CI absent. Guarded for
+    # a station response-time above and for throughput in qsim/analyzer.py, so the
+    # system-level diagnostic must warn and record too rather than pass Nones through
+    # silently — a bare TypeError in a caller that formats the bounds is not the error
+    # contract spec 7.1 defines for a missing diagnostic.
+    stations = _stations()
+    response = sim_response(
+        sojourn={"mm1": 0.42, "fj": 0.29}, throughput={"mm1": 0.6, "fj": 0.5}, system=1.15
+    )
+    for m in response["measures"]:
+        if m["station"] == "" and m["type"] == "system-response-time":
+            m["lower"] = None
+            m["upper"] = None
+    with pytest.warns(RuntimeWarning, match="system-response-time"):
+        T, ci, degraded, extras = extract(response, stations, "jobs")
+    mean, bounds = extras["system_response_time"]
+    assert mean == 1.15                           # the mean is still reportable
+    assert bounds == (None, None)
+    assert any("system-response-time" in d for d in degraded)
+    assert T == [0.42, 0.29]                      # the run is still usable
+    assert ci[0] == pytest.approx((0.41, 0.43))   # station CIs untouched
+
+
 def test_missing_throughput_for_a_checked_station_warns(sim_response):
     stations = _stations()
     response = sim_response(sojourn={"mm1": 0.42, "fj": 0.29}, system=1.15)

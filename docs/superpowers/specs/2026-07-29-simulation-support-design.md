@@ -600,9 +600,11 @@ Extends the existing `QOptError` root:
 QOptError
 ├── TopologyError                   structural Network failures (§4.2)
 └── SimulationError
-    ├── SimulationTransportError    refused / timeout / DNS
-    ├── SimulationRequestError      400 / 422 — our JSON was wrong: a spec.py bug
-    │                               or an invalid network
+    ├── SimulationTransportError    refused / timeout / DNS, a /health that was not
+    │                               200, or a /simulate status in neither family below
+    ├── SimulationRequestError      400 / 405 / 413 / 422 — our request was wrong, in
+    │                               its body (a spec.py bug or an invalid network), its
+    │                               method, or its size. Never the engine's fault
     ├── SimulationEngineError       500
     ├── SimulationQualityError      degraded result; raised only under strict=True
     └── MeasureMissingError         response lacked a measure a station needs
@@ -620,6 +622,17 @@ not abort a run that has everything the mathematics requires:
 | `response-time` for any station | `MeasureMissingError`. Eq 22 has no input |
 | `system-response-time` | `Result.system_response_time = None` + `RuntimeWarning`. Also the signal that §5.3's `station: ""` inference was wrong |
 | `throughput` for a conservation-checked station | `RuntimeWarning` + a `degraded` entry saying the check could not run — distinct from the check running and failing (§6.8) |
+
+A **present mean whose confidence interval is absent** is a separate axis, and a separate table:
+qsim can return `mean` without `lower`/`upper`, and a mean is enough for everything the mathematics
+requires. So no measure escalates to an error here — but none of them may pass the `None`s through
+silently either, because the caller that formats a bound is the one that discovers it.
+
+| Mean present, CI absent | Consequence |
+|---|---|
+| `response-time` for a station | `RuntimeWarning` + `degraded`. The mean still feeds eq 22; `Result.sojourn_ci[i]` is `None` and that station drops out of the noise-floor estimate (§6.4) |
+| `system-response-time` | `RuntimeWarning` + `degraded`. Reported as `(mean, (None, None))` — the tuple shape is kept, matching `throughput`, so consumers that format bounds must handle the `None`s |
+| `throughput` for a conservation-checked station | `RuntimeWarning` + `degraded`. The γ-conservation check cannot run — the same consequence as the measure being absent |
 
 ### 7.2 Degraded results
 
