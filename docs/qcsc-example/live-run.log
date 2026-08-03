@@ -1,0 +1,188 @@
+The paper's QCSC network (docs/analysis.pdf section 2, Figure 5 p. 30).
+
+lambda = 0.9   p11 = 0.5   p0 = 0.5   r = 4.0   costs: QPU 4 / GPU 1 / CPU 1
+shared budget C = 6 x the balanced floor = 41.0400
+
+ANALYTIC  (balanced)
+  stop_reason = tol   iterations = 5   sim_calls = 0   warm_start_iterations = 0   converged = True
+  station        gamma        S*      E[T]      zeta
+  cpu_init_ps   0.4500    0.5393    0.0967    1.0000
+  fj_pp         0.4500    1.7020    1.1717    1.4670
+  qpu_psq       0.2250    0.9297    0.6118    1.0000
+  gpu_psq       0.2250    1.7469    0.3059    1.0000
+  gpu_psg       0.2250    1.7469    0.3059    1.0000
+  qpu_psg       0.2250    0.9297    0.6118    1.0000
+  cpu_term_ps   0.4500    0.5393    0.0967    1.0000
+  cpu_init_sp   0.4500    0.5393    0.0967    1.0000
+  qpu_ssq       0.2250    0.9297    0.6118    1.0000
+  gpu_ssq       0.2250    1.7469    0.3059    1.0000
+  gpu_ssg       0.2250    1.7469    0.3059    1.0000
+  qpu_ssg       0.2250    0.9297    0.6118    1.0000
+  fj_sp         0.4500    1.7020    1.1717    1.4670
+  cpu_term_sp   0.4500    0.5393    0.0967    1.0000
+  objective (sum w*E[T], w = 1)      = 6.401440
+  mean job sojourn (visit-weighted)  = 2.282954   [diagnostic]
+
+ANALYTIC  (quantum_dominant)
+  stop_reason = tol   iterations = 5   sim_calls = 0   warm_start_iterations = 0   converged = True
+  station        gamma        S*      E[T]      zeta
+  cpu_init_ps   0.4500    0.6400    0.0810    1.0000
+  fj_pp         0.4500    1.7040    0.8222    1.0311
+  qpu_psq       0.2250    1.0889    0.5121    1.0000
+  gpu_psq       0.2250    1.0045    0.1280    1.0000
+  gpu_psg       0.2250    1.0045    0.1280    1.0000
+  qpu_psg       0.2250    1.0889    0.5121    1.0000
+  cpu_term_ps   0.4500    0.6400    0.0810    1.0000
+  cpu_init_sp   0.4500    0.6400    0.0810    1.0000
+  qpu_ssq       0.2250    1.0889    0.5121    1.0000
+  gpu_ssq       0.2250    1.0045    0.1280    1.0000
+  gpu_ssg       0.2250    1.0045    0.1280    1.0000
+  qpu_ssg       0.2250    1.0889    0.5121    1.0000
+  fj_sp         0.4500    1.7040    0.8222    1.0311
+  cpu_term_sp   0.4500    0.6400    0.0810    1.0000
+  objective (sum w*E[T], w = 1)      = 4.528844
+  mean job sojourn (visit-weighted)  = 1.624284   [diagnostic]
+
+ANALYTIC  (classical_dominant)
+  stop_reason = tol   iterations = 5   sim_calls = 0   warm_start_iterations = 0   converged = True
+  station        gamma        S*      E[T]      zeta
+  cpu_init_ps   0.4500    0.7389    0.0698    1.0000
+  fj_pp         0.4500    1.9062    0.7094    1.0330
+  qpu_psq       0.2250    0.5945    0.2207    1.0000
+  gpu_psq       0.2250    2.3779    0.2207    1.0000
+  gpu_psg       0.2250    2.3779    0.2207    1.0000
+  qpu_psg       0.2250    0.5945    0.2207    1.0000
+  cpu_term_ps   0.4500    0.7389    0.0698    1.0000
+  cpu_init_sp   0.4500    0.7389    0.0698    1.0000
+  qpu_ssq       0.2250    0.5945    0.2207    1.0000
+  gpu_ssq       0.2250    2.3779    0.2207    1.0000
+  gpu_ssg       0.2250    2.3779    0.2207    1.0000
+  qpu_ssg       0.2250    0.5945    0.2207    1.0000
+  fj_sp         0.4500    1.9062    0.7094    1.0330
+  cpu_term_sp   0.4500    0.7389    0.0698    1.0000
+  objective (sum w*E[T], w = 1)      = 3.463677
+  mean job sojourn (visit-weighted)  = 1.290407   [diagnostic]
+
+ANALYTIC SUMMARY at the shared budget C = 41.0400
+  workload              C/floor   objective   mean job   cum QPU   cum GPU   cum CPU
+  balanced                 6.00    6.401440   2.282954    7.1228   10.3916    2.1574
+  quantum_dominant         6.31    4.528844   1.624284    7.7635    7.4260    2.5600
+  classical_dominant       7.48    3.463677   1.290407    6.1902   13.3238    2.9555
+
+  (cumulative capacity: a fork-join's S counts on both sides, since both of its servers receive it)
+
+SIMULATED  (balanced)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 5   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.5391    0.0966    0.9983   (0.095953, 0.097285)
+  fj_pp         0.4500    1.7020    1.1595    1.4517   (1.145575, 1.173412)
+  qpu_psq       0.2250    0.9302    0.6051    0.9896   (0.598918, 0.611381)
+  gpu_psq       0.2250    1.7461    0.3057    0.9988   (0.302594, 0.308820)
+  gpu_psg       0.2250    1.7487    0.3046    0.9967   (0.302798, 0.306384)
+  qpu_psg       0.2250    0.9292    0.6082    0.9934   (0.603899, 0.612469)
+  cpu_term_ps   0.4500    0.5388    0.0966    0.9972   (0.095891, 0.097243)
+  cpu_init_sp   0.4500    0.5394    0.0969    1.0013   (0.095904, 0.097823)
+  qpu_ssq       0.2250    0.9302    0.6091    0.9961   (0.602678, 0.615448)
+  gpu_ssq       0.2250    1.7463    0.3057    0.9989   (0.302093, 0.309325)
+  gpu_ssg       0.2250    1.7460    0.3076    1.0049   (0.304599, 0.310571)
+  qpu_ssg       0.2250    0.9294    0.6091    0.9952   (0.600896, 0.617247)
+  fj_sp         0.4500    1.7022    1.1723    1.4679   (1.162101, 1.182414)
+  cpu_term_sp   0.4500    0.5387    0.0963    0.9938   (0.095649, 0.096891)
+  objective (sum w*E[T], w = 1)      = 6.373131
+  mean job sojourn (visit-weighted)  = 2.272800   [diagnostic]
+  system response time = 2.270837 CI (2.259530, 2.282144)   [diagnostic]
+
+DIFFERENCE (balanced): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.096741     0.096619  -0.000122   -0.13%                 no
+  fj_pp            1.171706     1.159494  -0.012212   -1.04%                 no
+  qpu_psq          0.611844     0.605150  -0.006694   -1.09%                yes
+  gpu_psq          0.305922     0.305707  -0.000215   -0.07%                 no
+  gpu_psg          0.305922     0.304591  -0.001331   -0.44%                 no
+  qpu_psg          0.611844     0.608184  -0.003660   -0.60%                 no
+  cpu_term_ps      0.096741     0.096567  -0.000174   -0.18%                 no
+  cpu_init_sp      0.096741     0.096864   0.000122    0.13%                 no
+  qpu_ssq          0.611844     0.609063  -0.002781   -0.45%                 no
+  gpu_ssq          0.305922     0.305709  -0.000213   -0.07%                 no
+  gpu_ssg          0.305922     0.307585   0.001663    0.54%                 no
+  qpu_ssg          0.611844     0.609072  -0.002773   -0.45%                 no
+  fj_sp            1.171706     1.172258   0.000552    0.05%                 no
+  cpu_term_sp      0.096741     0.096270  -0.000471   -0.49%                 no
+
+SIMULATED  (quantum_dominant)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 5   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.6403    0.0812    1.0029   (0.080618, 0.081725)
+  fj_pp         0.4500    1.7057    0.8210    1.0309   (0.812353, 0.829620)
+  qpu_psq       0.2250    1.0879    0.5089    0.9928   (0.504150, 0.513691)
+  gpu_psq       0.2250    1.0046    0.1283    1.0023   (0.127523, 0.129086)
+  gpu_psg       0.2250    1.0050    0.1286    1.0047   (0.127082, 0.130054)
+  qpu_psg       0.2250    1.0884    0.5144    1.0040   (0.508835, 0.519954)
+  cpu_term_ps   0.4500    0.6395    0.0808    0.9967   (0.080207, 0.081330)
+  cpu_init_sp   0.4500    0.6401    0.0809    0.9994   (0.080353, 0.081481)
+  qpu_ssq       0.2250    1.0897    0.5099    0.9965   (0.503691, 0.516058)
+  gpu_ssq       0.2250    1.0047    0.1273    0.9947   (0.126343, 0.128306)
+  gpu_ssg       0.2250    1.0054    0.1280    1.0006   (0.127081, 0.128876)
+  qpu_ssg       0.2250    1.0886    0.5114    0.9984   (0.506780, 0.516070)
+  fj_sp         0.4500    1.7027    0.8175    1.0241   (0.806761, 0.828288)
+  cpu_term_sp   0.4500    0.6402    0.0803    0.9918   (0.079737, 0.080839)
+  objective (sum w*E[T], w = 1)      = 4.518446
+  mean job sojourn (visit-weighted)  = 1.620026   [diagnostic]
+  system response time = 1.616218 CI (1.605904, 1.626532)   [diagnostic]
+
+DIFFERENCE (quantum_dominant): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.080972     0.081172   0.000200    0.25%                 no
+  fj_pp            0.822204     0.820986  -0.001217   -0.15%                 no
+  qpu_psq          0.512110     0.508920  -0.003190   -0.62%                 no
+  gpu_psq          0.128027     0.128305   0.000277    0.22%                 no
+  gpu_psg          0.128027     0.128568   0.000541    0.42%                 no
+  qpu_psg          0.512110     0.514395   0.002285    0.45%                 no
+  cpu_term_ps      0.080972     0.080769  -0.000203   -0.25%                 no
+  cpu_init_sp      0.080972     0.080917  -0.000055   -0.07%                 no
+  qpu_ssq          0.512110     0.509874  -0.002236   -0.44%                 no
+  gpu_ssq          0.128027     0.127324  -0.000703   -0.55%                 no
+  gpu_ssg          0.128027     0.127978  -0.000049   -0.04%                 no
+  qpu_ssg          0.512110     0.511425  -0.000685   -0.13%                 no
+  fj_sp            0.822204     0.817525  -0.004679   -0.57%                 no
+  cpu_term_sp      0.080972     0.080288  -0.000684   -0.84%                yes
+
+SIMULATED  (classical_dominant)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 5   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.7382    0.0701    1.0034   (0.069576, 0.070613)
+  fj_pp         0.4500    1.9069    0.7047    1.0267   (0.697656, 0.711723)
+  qpu_psq       0.2250    0.5943    0.2189    0.9914   (0.216165, 0.221581)
+  gpu_psq       0.2250    2.3776    0.2207    0.9998   (0.218911, 0.222465)
+  gpu_psg       0.2250    2.3800    0.2200    0.9979   (0.218525, 0.221567)
+  qpu_psg       0.2250    0.5937    0.2217    1.0030   (0.219263, 0.224052)
+  cpu_term_ps   0.4500    0.7382    0.0696    0.9963   (0.069135, 0.070060)
+  cpu_init_sp   0.4500    0.7387    0.0699    1.0018   (0.069094, 0.070772)
+  qpu_ssq       0.2250    0.5946    0.2192    0.9936   (0.217531, 0.220925)
+  gpu_ssq       0.2250    2.3766    0.2200    0.9964   (0.217567, 0.222530)
+  gpu_ssg       0.2250    2.3798    0.2190    0.9932   (0.217286, 0.220761)
+  qpu_ssg       0.2250    0.5945    0.2207    1.0000   (0.219084, 0.222330)
+  fj_sp         0.4500    1.9060    0.7037    1.0246   (0.694436, 0.713003)
+  cpu_term_sp   0.4500    0.7379    0.0699    0.9994   (0.069432, 0.070272)
+  objective (sum w*E[T], w = 1)      = 3.448158
+  mean job sojourn (visit-weighted)  = 1.284011   [diagnostic]
+  system response time = 1.280886 CI (1.273053, 1.288720)   [diagnostic]
+
+DIFFERENCE (classical_dominant): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.069797     0.070095   0.000298    0.43%                 no
+  fj_pp            0.709381     0.704690  -0.004692   -0.66%                 no
+  qpu_psq          0.220716     0.218873  -0.001843   -0.84%                 no
+  gpu_psq          0.220716     0.220688  -0.000028   -0.01%                 no
+  gpu_psg          0.220716     0.220046  -0.000670   -0.30%                 no
+  qpu_psg          0.220716     0.221658   0.000942    0.43%                 no
+  cpu_term_ps      0.069797     0.069598  -0.000199   -0.28%                 no
+  cpu_init_sp      0.069797     0.069933   0.000137    0.20%                 no
+  qpu_ssq          0.220716     0.219228  -0.001488   -0.67%                 no
+  gpu_ssq          0.220716     0.220048  -0.000668   -0.30%                 no
+  gpu_ssg          0.220716     0.219024  -0.001693   -0.77%                 no
+  qpu_ssg          0.220716     0.220707  -0.000009   -0.00%                 no
+  fj_sp            0.709381     0.703719  -0.005662   -0.80%                 no
+  cpu_term_sp      0.069797     0.069852   0.000055    0.08%                 no
+
+  fj_pp and fj_sp are excluded from the gamma-conservation check (qsim-service#8), so 2 of 14 stations have no throughput witness here.
