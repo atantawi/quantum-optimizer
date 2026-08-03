@@ -1,0 +1,37 @@
+digraph "qcsc-balanced" {
+  rankdir=LR;
+  "src" [shape=circle, label="src\nlambda=0.9"];
+  "snk" [shape=doublecircle];
+  "cpu_init_ps" [shape=box, label="cpu_init_ps\ngamma=0.45"];
+  "fj_pp" [shape=box3d, label="fj_pp\ngamma=0.45"];
+  "qpu_psq" [shape=box, label="qpu_psq\ngamma=0.225"];
+  "gpu_psq" [shape=box, label="gpu_psq\ngamma=0.225"];
+  "gpu_psg" [shape=box, label="gpu_psg\ngamma=0.225"];
+  "qpu_psg" [shape=box, label="qpu_psg\ngamma=0.225"];
+  "cpu_term_ps" [shape=box, label="cpu_term_ps\ngamma=0.45"];
+  "cpu_init_sp" [shape=box, label="cpu_init_sp\ngamma=0.45"];
+  "qpu_ssq" [shape=box, label="qpu_ssq\ngamma=0.225"];
+  "gpu_ssq" [shape=box, label="gpu_ssq\ngamma=0.225"];
+  "gpu_ssg" [shape=box, label="gpu_ssg\ngamma=0.225"];
+  "qpu_ssg" [shape=box, label="qpu_ssg\ngamma=0.225"];
+  "fj_sp" [shape=box3d, label="fj_sp\ngamma=0.45"];
+  "cpu_term_sp" [shape=box, label="cpu_term_sp\ngamma=0.45"];
+  "src" -> "cpu_init_ps" [label="0.5"];
+  "src" -> "cpu_init_sp" [label="0.5"];
+  "cpu_init_ps" -> "fj_pp";
+  "fj_pp" -> "qpu_psq" [label="0.5"];
+  "fj_pp" -> "gpu_psg" [label="0.5"];
+  "qpu_psq" -> "gpu_psq";
+  "gpu_psq" -> "cpu_term_ps";
+  "gpu_psg" -> "qpu_psg";
+  "qpu_psg" -> "cpu_term_ps";
+  "cpu_term_ps" -> "snk";
+  "cpu_init_sp" -> "qpu_ssq" [label="0.5"];
+  "cpu_init_sp" -> "gpu_ssg" [label="0.5"];
+  "qpu_ssq" -> "gpu_ssq";
+  "gpu_ssq" -> "fj_sp";
+  "gpu_ssg" -> "qpu_ssg";
+  "qpu_ssg" -> "fj_sp";
+  "fj_sp" -> "cpu_term_sp";
+  "cpu_term_sp" -> "snk";
+}

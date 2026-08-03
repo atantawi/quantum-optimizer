@@ -242,3 +242,55 @@ def test_unsupported_measure_literal_is_rejected_by_the_live_service(client):
     )
     with pytest.raises(SimulationRequestError):
         client.post_simulate(request)
+
+
+def test_qcsc_network_evaluates_all_fourteen_stations():
+    """Fourteen nodes with two fork-joins is new ground for the serializer: one POST."""
+    from examples.qcsc_network import build_qcsc_network, shared_budget
+    from qopt.optimizer import Optimizer
+
+    network = build_qcsc_network("quantum_dominant")
+    analytic = Optimizer(network, budget=shared_budget()).run()
+
+    client = QsimClient(QSIM_URL, stopping=STOPPING, preflight=True)
+    evaluation = SimulationAnalyzer(network, client).evaluate(
+        network.stations, analytic.capacities
+    )
+    assert len(evaluation.sojourn_times) == 14
+    assert all(t > 0 for t in evaluation.sojourn_times)
+
+
+def test_qcsc_visit_weighted_sojourn_matches_the_services_system_response_time():
+    """An independent oracle for visit_ratio_weighted, which otherwise has only a pin.
+
+    sum_i (gamma_i/lambda) E[T_i] is the mean end-to-end job sojourn time, and the service
+    reports the same quantity directly as `system-response-time` from its own event counts.
+    The two are computed from disjoint parts of the response -- per-station means and visit
+    ratios derived from the traffic equations on one side, a network-level measure on the
+    other -- so agreement is a real check on both. A visit-ratio slip (dropping the
+    weighting altogether gives the unweighted objective, ~2.8x larger here) would show up
+    far outside the tolerance below.
+    """
+    from examples.qcsc_network import (build_qcsc_network, shared_budget,
+                                       visit_ratio_weighted)
+    from qopt.optimizer import Optimizer
+
+    network = build_qcsc_network("quantum_dominant")
+    analytic = Optimizer(network, budget=shared_budget()).run()
+
+    client = QsimClient(QSIM_URL, stopping=STOPPING, preflight=True)
+    evaluation = SimulationAnalyzer(network, client).evaluate(
+        network.stations, analytic.capacities
+    )
+    system = evaluation.extras["system_response_time"]
+    assert system is not None, "the service reported no system-response-time measure"
+    mean, _ci = system
+    # 2% rather than CI containment: the interval is a ~0.7% half-width at this stopping
+    # rule, so containment would flake at the alpha it was built with. Measured agreement
+    # for this evaluation is 0.005%, and 0.24% for the simulated-optimum comparison in
+    # docs/qcsc-example/live-run.log -- so 2% is ~8x the worst observed, deliberately loose.
+    # It is still a real oracle: dropping the visit-ratio weighting gives the unweighted
+    # objective, 2.79x the system mean here, which fails this by two orders of magnitude.
+    assert visit_ratio_weighted(network, evaluation.sojourn_times) == pytest.approx(
+        mean, rel=0.02
+    )
