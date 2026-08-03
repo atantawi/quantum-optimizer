@@ -160,9 +160,10 @@ result = Optimizer(
 print(result.capacities, result.sojourn_ci, result.sim_calls, result.stop_reason)
 ```
 
-Runnable versions: `examples/simulated_tandem.py` and
-`examples/simulated_mixed_network.py`. Both fall back to analytic-only output when
-`QOPT_QSIM_URL` is unset.
+Runnable versions: `examples/simulated_tandem.py`,
+`examples/simulated_mixed_network.py`, and `examples/qcsc_network.py` — the paper's
+14-station QCSC network under three workloads (balanced, quantum-dominant,
+classical-dominant). All fall back to analytic-only output when `QOPT_QSIM_URL` is unset.
 
 A simulated measure can come back as a mean with no confidence interval. That never fails the
 run — the mean is all the mathematics needs — so `result.sojourn_ci` carries `None` in that
@@ -176,6 +177,8 @@ See also:
 - `docs/superpowers/specs/2026-07-10-optimizer-design.md` — authoritative design spec.
 - `docs/superpowers/specs/2026-07-29-simulation-support-design.md` — simulation support
   (topology, `Analyzer` seam, `qsim-service` client). Implemented; see `SimulationAnalyzer`.
+- `docs/superpowers/specs/2026-07-31-qcsc-example-network-design.md` — the QCSC example
+  network (topology, workloads, budget). Implemented; see `examples/qcsc_network.py`.
 - `docs/optimizer-brainstorm-summary.md` — problem statement and design rationale.
 
 ## License
