@@ -62,3 +62,31 @@ Regenerate, and render:
 python -m examples.qcsc_network --dot > docs/qcsc-example/topology.dot
 dot -Tpng docs/qcsc-example/topology.dot -o /tmp/qcsc.png
 ```
+
+## An open modelling choice: the fork-join weight `ω_FJ`
+
+The objective is `Σ ωᵢ E[Tᵢ]`, and this example uses the paper's default `ωᵢ = 1` at every
+station — including the two fork-joins. That is worth stating out loud, because a fork-join
+station stands in for **two** servers, so inheriting `ω = 1` gives it the same weight in the
+objective as a single-server queue.
+
+The paper does not settle it. `ω_FJ` appears exactly once in `docs/analysis.pdf` — p. 18, "in
+terms of `c_FJ`, `ω_FJ`" — and is never defined. `c_FJ` on that same page gets both a derivation
+and an explicit definition, so the cost of a collapsed fork-join is specified and its weight is
+not.
+
+Two independent arguments both give `ω_FJ = 2`: the station stands in for two servers each
+carrying `ω = 1`, so it inherits `ω₁ + ω₂`; and minimizing `Σ ωᵢ E[Tᵢ]` equals minimizing mean job
+sojourn `Σ (γᵢ/λ) E[Tᵢ]` exactly when `ωᵢ ∝ γᵢ`, which here — visit ratios 0.5 at the CPU stations
+and both fork-joins, 0.25 at the eight sequential stations — makes 2 the mean-job-optimal
+fork-join weight when `ω_seq = 1`. Measured across the three workloads, `ω_FJ = 2` lowers mean job
+sojourn by 1.93–2.37%, and for `balanced` the two measured intervals do not overlap.
+
+**This is not a defect in the example.** `ωᵢ = 1` is the paper's default, `visit_ratio_weighted`
+already documents that the optimized objective is a different quantity from mean job sojourn, and
+the plain sum of station sojourn times is a legitimate objective. The narrow point is that `ω = 1`
+on a collapsed fork-join silently discards one server's worth of weight — a choice worth making
+deliberately rather than by inheritance.
+
+Tracked, with the method and the open questions, in
+[#8](https://github.com/atantawi/quantum-optimizer/issues/8).
