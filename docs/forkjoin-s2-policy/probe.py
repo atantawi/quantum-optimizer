@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from qopt import ForkJoinStation, Optimizer, min_feasible_budget
 from qopt.forkjoin_approx import t_ul
+from qopt.station import distribution_dict
 import examples.qcsc_network as qn
 
 
@@ -135,6 +136,25 @@ class OptimalFJ(ForkJoinStation):
         # needs S*mu > gamma to stay positive, which eq 21's base term gamma/mu ensures.
         self._check_stable(S * self.mu)
         return self.split(S)[0]
+
+    def sim_node(self, S, job_class):
+        """Branches at the SPLIT rates, not at S*mu and S*r*mu.
+
+        The inherited implementation would emit the ray this policy does not run (1.0 and
+        4.0 where the split is 1.1102 and 2.2373 in quantum_dominant at S=1) and return a
+        plausible number for a network that does not exist. `mu` and `r` are meaningless
+        for this station -- only `split` knows its rates.
+        """
+        _, m1, m2 = self.split(S)[:3]
+        return {
+            "name": self.name,
+            "type": "fork-join",
+            "branches": [
+                {"service": {job_class: {"distribution": distribution_dict(m1, 1.0)}}},
+                {"service": {job_class: {"distribution": distribution_dict(m2, 1.0)}}},
+            ],
+            "join": "all",
+        }
 
 
 def build(workload, cls, **cost_kw):
