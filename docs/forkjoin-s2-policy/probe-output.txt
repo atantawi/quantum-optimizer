@@ -1,0 +1,201 @@
+fork-join gamma derived from the traffic equations: 0.45
+
+======================================================================================
+Q5 (GATE) sign of dT/dm2 on the spend line, and analytic-vs-finite-difference
+======================================================================================
+  configurations probed : 30  (3 workloads x 2 stations x 5 budgets)
+  with any dT/dm2 > 0   : 0
+  max dT/dm2 seen       : -8.705039e-09  (want < 0)
+  max rel err vs 5pt FD : 4.621e-04  (the analytic derivative is verified)
+
+  VERDICT: PASS - more m2 always helps
+
+======================================================================================
+Q1 unimodality of t_ul on the spend line
+======================================================================================
+  interior local minima on a 4001-point grid: max 1 over 30 cases
+  VERDICT: PASS - unimodal, a 1-D solve is safe
+
+======================================================================================
+Q4 predicted special cases, and Q2 how r* drifts with the station's spend
+======================================================================================
+  beta1/beta2 = (c1/c2)*r is the price ratio; r* = m2*/m1* is the optimal
+  effective-rate ratio. qopt today runs r, the paper runs 1.
+
+  workload            stn       r   b1/b2  B/floor      r*     T(r*)   T(qopt)  T(paper)   gain%
+  ----------------------------------------------------------------------------------------------
+  balanced            fj_pp   1.0   4.000     1.20   1.079  14.81628  15.50926  15.50926    4.47
+  balanced            fj_pp   1.0   4.000     2.00   1.276   3.01679   3.19444   3.19444    5.56
+  balanced            fj_pp   1.0   4.000     4.00   1.461   1.01745   1.08796   1.08796    6.48
+  balanced            fj_pp   1.0   4.000     8.00   1.566   0.43843   0.47123   0.47123    6.96
+  balanced            fj_pp   1.0   4.000    20.00   1.633   0.16204   0.17471   0.17471    7.25
+
+  balanced            fj_sp   1.0   4.000     1.20   1.079  14.81628  15.50926  15.50926    4.47
+  balanced            fj_sp   1.0   4.000     2.00   1.276   3.01679   3.19444   3.19444    5.56
+  balanced            fj_sp   1.0   4.000     4.00   1.461   1.01745   1.08796   1.08796    6.48
+  balanced            fj_sp   1.0   4.000     8.00   1.566   0.43843   0.47123   0.47123    6.96
+  balanced            fj_sp   1.0   4.000    20.00   1.633   0.16204   0.17471   0.17471    7.25
+
+  quantum_dominant    fj_pp   4.0  16.000     1.20   1.242  13.20789 111.11505  15.50926   88.11
+  quantum_dominant    fj_pp   4.0  16.000     2.00   1.797   2.66421   3.21207   3.19444   17.06
+  quantum_dominant    fj_pp   4.0  16.000     4.00   2.274   0.89239   0.95285   1.08796    6.35
+  quantum_dominant    fj_pp   4.0  16.000     8.00   2.532   0.38328   0.39816   0.47123    3.74
+  quantum_dominant    fj_pp   4.0  16.000    20.00   2.693   0.14138   0.14522   0.17471    2.64
+
+  quantum_dominant    fj_sp   4.0  16.000     1.20   1.242  13.20789 111.11505  15.50926   88.11
+  quantum_dominant    fj_sp   4.0  16.000     2.00   1.797   2.66421   3.21207   3.19444   17.06
+  quantum_dominant    fj_sp   4.0  16.000     4.00   2.274   0.89239   0.95285   1.08796    6.35
+  quantum_dominant    fj_sp   4.0  16.000     8.00   2.532   0.38328   0.39816   0.47123    3.74
+  quantum_dominant    fj_sp   4.0  16.000    20.00   2.693   0.14138   0.14522   0.17471    2.64
+
+  classical_dominant  fj_pp   4.0   1.000     1.20   1.000  15.50926   UNSTABLE  15.50926       --
+  classical_dominant  fj_pp   4.0   1.000     2.00   1.000   3.19444   UNSTABLE   3.19444       --
+  classical_dominant  fj_pp   4.0   1.000     4.00   1.000   1.08796   3.74084   1.08796   70.92
+  classical_dominant  fj_pp   4.0   1.000     8.00   1.000   0.47123   1.03825   0.47123   54.61
+  classical_dominant  fj_pp   4.0   1.000    20.00   1.000   0.17471   0.33041   0.17471   47.12
+
+  classical_dominant  fj_sp   4.0   1.000     1.20   1.000  15.50926   UNSTABLE  15.50926       --
+  classical_dominant  fj_sp   4.0   1.000     2.00   1.000   3.19444   UNSTABLE   3.19444       --
+  classical_dominant  fj_sp   4.0   1.000     4.00   1.000   1.08796   3.74084   1.08796   70.92
+  classical_dominant  fj_sp   4.0   1.000     8.00   1.000   0.47123   1.03825   0.47123   54.61
+  classical_dominant  fj_sp   4.0   1.000    20.00   1.000   0.17471   0.33041   0.17471   47.12
+
+
+======================================================================================
+Q4b stability floors: the spend each policy needs to keep the station stable
+======================================================================================
+  optimal : gamma*(beta1+beta2) = gamma*(c1/mu1 + c2/mu2)
+  qopt    : gamma*(c1+c2)/mu1        paper: gamma*(c1 + c2/r)/mu1
+
+  workload               r   optimal      qopt     paper  qopt/opt  paper/opt
+  ---------------------------------------------------------------------------
+  balanced             1.0    2.2500    2.2500    2.2500     1.000      1.000
+  quantum_dominant     4.0    1.9125    2.2500    1.9125     1.176      1.000
+  classical_dominant   4.0    0.9000    2.2500    0.9000     2.500      1.000
+
+  Both ratios >= 1: the optimal-split policy's stability region CONTAINS both
+  incumbents', since each incumbent is one ray of the line it minimizes over.
+
+======================================================================================
+Q6 fork-join vs series: how hard does each shift budget to the cheap server?
+======================================================================================
+  Matched control: same gamma, same spend line, same (beta1,beta2) -- two M/M/1
+  queues in TANDEM instead of forked. Slack ratio Q = (m2-g)/(m1-g).
+  Series is exactly Q = sqrt(beta1/beta2), i.e. log-log slope 1/2.
+
+      b1/b2  Q_series  Q_forkjoin  exp_series   exp_fj  local d/dlog
+  ------------------------------------------------------------------
+        1.0    1.0000      1.0000         nan      nan        0.0000
+        2.0    1.4142      1.2707      0.5000   0.3456        0.3767
+        4.0    2.0000      1.6495      0.5000   0.3610        0.3757
+        8.0    2.8284      2.1378      0.5000   0.3654        0.3724
+       16.0    4.0000      2.7636      0.5000   0.3666        0.3683
+       64.0    8.0000      4.5757      0.5000   0.3657        0.3592
+      256.0   16.0000      7.4869      0.5000   0.3630        0.3513
+
+  A slope BELOW 1/2 means the fork-join resists shifting budget to the cheap
+  server -- it compresses toward homogeneity relative to series.
+
+======================================================================================
+Q7 does the PRICE ratio drive r*, and where does r* cross 1?
+======================================================================================
+  Sweeping c_qpu/c_gpu with the topology fixed. r* < 1 means the nominally
+  FASTER server is bought DOWN below the slower one.
+
+  quantum_dominant  (slow server = qpu, r = 4.0)
+     c_qpu/c_gpu    b1/b2       r*
+            0.25    1.000   1.0000
+            0.50    2.000   1.2223
+            1.00    4.000   1.5298
+            2.00    8.000   1.9286
+            3.00   12.000   2.2145
+            4.00   16.000   2.4447
+            6.00   24.000   2.8124
+            8.00   32.000   3.1074
+           16.00   64.000   3.9527
+           32.00  128.000   5.0255
+    r* crosses 1 between c_qpu/c_gpu = (0.25, 0.5)
+
+  classical_dominant  (slow server = gpu, r = 4.0)
+     c_qpu/c_gpu    b1/b2       r*
+            0.25   16.000   2.4447
+            0.50    8.000   1.9286
+            1.00    4.000   1.5298
+            2.00    2.000   1.2223
+            3.00    1.333   1.0751
+            4.00    1.000   1.0000
+            6.00    0.667   0.8963
+            8.00    0.500   0.8182
+           16.00    0.250   0.6537
+           32.00    0.125   0.5185
+    r* crosses 1 between c_qpu/c_gpu = (3.0, 4.0)
+
+
+======================================================================================
+Q3 whole-network objective under the three policies, one shared budget
+======================================================================================
+  C = 41.040000 (= 6.0 x the balanced floor under qopt's policy),
+  the SAME absolute budget for all three policies.
+
+  workload            policy       floor        obj      d%  it  cnv  fj_pp r*  fj_sp r*
+  --------------------------------------------------------------------------------------
+  balanced            qopt         6.840   6.401440    0.00   5 True    1.0000    1.0000
+  balanced            paper        6.840   6.401440    0.00   5 True    1.0000    1.0000
+  balanced            optimal      6.840   6.248828    2.38   4 True    1.4457    1.4457
+
+  quantum_dominant    qopt         6.503   4.528844    0.00   5 True    4.0000    4.0000
+  quantum_dominant    paper        5.828   4.776428   -5.47   4 True    1.0000    1.0000
+  quantum_dominant    optimal      6.503   4.432330    2.13   6 True    2.3195    2.3195
+
+  classical_dominant  qopt         5.490   3.463677    0.00   5 True    4.0000    4.0000
+  classical_dominant  paper        2.790   2.613335   24.55   4 True    1.0000    1.0000
+  classical_dominant  optimal      5.490   2.620524   24.34   9 True    1.0000    1.0000
+
+
+======================================================================================
+Q10 diagnosis: the inner split optimizes the SPLIT, not the station's SHARE
+======================================================================================
+  classical_dominant at C = 41.0400. Q3 showed r* = 1.0000 at the converged point, so the
+  optimal-split policy and the paper choose the IDENTICAL split there. The only
+  remaining difference is alloc_cost, hence the SHARE of C the station gets.
+
+  policy    alloc_cost  S(fj_pp)    spend       m1       m2    T(fj)        obj
+  -----------------------------------------------------------------------------
+  qopt           5.000    1.9062   9.5308   1.9062   7.6247  0.70938   3.463677
+  paper          2.000    3.7466   7.4932   3.7466   3.7466  0.45046   2.613335
+  split          5.000    1.5920   7.9601   3.9801   3.9801  0.42092   2.620524
+
+  The split policy reports S = spend/(c1+c2) while its true m1 comes from the
+  inner solve, so 'S' no longer means 'server 1 runs at S*mu' and eq 22's
+  surrogate zeta = T*(S*mu - gamma) is anchored to a rate the station does not
+  have. eq 21 then mis-prices the station: here it OVER-funds it (spend 7.96 vs
+  the paper's 7.49) and buys a better T(fj) that is not worth what the other
+  13 stations gave up for it. Direction is incidental; consistency is the point.
+  That mispricing is the whole gap -- the split itself is identical.
+
+======================================================================================
+Q9 the r_star family: choosing the RAY, at network level
+======================================================================================
+  family identity check: r_star=r reproduces qopt and r_star=1 reproduces the
+  paper, bit-for-bit, on all three workloads. PASS
+
+  workload               r  r*_best  obj(best)  obj(qopt)  obj(paper)  obj(split)  best vs qopt
+  ---------------------------------------------------------------------------------------------
+  balanced             1.0    1.440   6.249439   6.401440    6.401440    6.248828         2.37%
+  quantum_dominant     4.0    2.320   4.431693   4.528844    4.776428    4.432330         2.15%
+  classical_dominant   4.0    1.000   2.613335   3.463677    2.613335    2.620524        24.55%
+
+  objective vs r_star (the curve eq 21 actually sees):
+     r_star    balanced   quantum_d   classical
+       0.25   13.943266   11.078091    3.521610
+       0.50    8.012579    6.200137    2.810696
+       0.75    6.802220    5.159003    2.645368
+       1.00    6.401440    4.776428    2.613335
+       1.25    6.269191    4.594645    2.633480
+       1.50    6.250833    4.508924    2.681515
+       2.00    6.351347    4.439618    2.810696
+       2.50    6.533796    4.433778    2.962300
+       3.00    6.752304    4.454413    3.124264
+       4.00    7.241734    4.528844    3.463677
+       5.00    7.772093    4.621704    3.816060
+       6.00    8.333694    4.722269    4.179773
