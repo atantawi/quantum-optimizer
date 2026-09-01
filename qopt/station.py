@@ -27,7 +27,8 @@ class Station(ABC):
     Fields (used directly by the allocator and eqs 21/22):
         gamma: arrival rate. Optional at construction: a Network derives it from the
             traffic equations and binds it via bind_gamma().
-        mu: base service rate (for a fork-join station, the slower server's rate).
+        mu: base service rate (for a fork-join station, the rate of whichever
+            server its ray leaves effectively slower -- see ForkJoinStation).
         weight: sojourn-time weight (omega).
         name: optional label for reporting.
     """
@@ -214,31 +215,75 @@ class GG1Station(SingleServerStation):
 
 
 class ForkJoinStation(Station):
-    """Fork-join station: two parallel servers sharing one capacity S.
+    """Fork-join station: two parallel servers, one capacity variable S.
 
-    Both servers receive capacity S, so effective rates are m1 = S*mu (slower) and
-    m2 = S*(r*mu) (faster), preserving the ratio r for all S. mu is the slower server's
-    rate; the faster server's rate is r*mu (r >= 1). Cost coefficient is c1 + c2.
+    Construction describes the HARDWARE: server 1 has base rate `mu` and costs `c1`,
+    server 2 has base rate `mu*r` (r >= 1) and costs `c2`. `r_star` then chooses the
+    POLICY -- which ray of the effective-rate plane the station runs on:
+
+        m2 = r_star * m1,   with m1 = S*mu the rate bought for server 1
+
+    so server 2 buys capacity S*r_star/r and the station spends S*(c1 + c2*r_star/r).
+    A ray is what keeps spend linear in S, which is what eq 21's budget column requires.
+    Both established policies are members: `r_star = r` (the default) gives both servers
+    the same capacity S and costs c1 + c2, and `r_star = 1` equalizes the effective rates
+    and costs c1 + c2/r, which is the paper's rule. See docs/forkjoin-s2-policy/.
+
+    Fields the allocator and eqs 21/22 read, which are EFFECTIVE and not the constructor
+    arguments:
+        mu: the binding (effectively slower) server's base rate, mu*min(1, r_star).
+        r:  the effective faster/slower ratio, max(r_star, 1/r_star) >= 1.
+
+    So `r_star < 1` swaps which server binds, and `c1` then pairs with `r`'s slot rather
+    than with `mu`'s. Only `alloc_cost` and `server_capacities` need that pairing, and
+    both take it from `r_base` -- the constructed r -- rather than from `r`.
     """
 
     sim_conservation_checked = False   # qsim-service#8; delete this line when it lands
     DOT_SHAPE = "box3d"
 
-    def __init__(self, gamma=None, mu=None, weight=1.0, *, r, c1, c2, name=None):
-        super().__init__(gamma, mu, weight, name=name)
+    def __init__(self, gamma=None, mu=None, weight=1.0, *, r, c1, c2, r_star=None,
+                 name=None):
         if not math.isfinite(r) or r < 1:
             raise ValueError(f"r must be a finite number >= 1, got {r}")
+        if r_star is None:
+            r_star = r
+        elif not math.isfinite(r_star) or r_star <= 0:
+            raise ValueError(f"r_star must be a finite number > 0, got {r_star}")
+        # Anchor on whichever server the ray leaves effectively slower, so eq 21's base
+        # term gamma/mu provisions the BINDING server and eq 22's zeta is taken against a
+        # rate the station actually has. Without this, r_star < 1 silently starves server
+        # 2: `_check_stable(S*mu)` guards one server, and it would be the wrong one.
+        # `mu` may be None here -- pass it through so Station raises the canonical error.
+        k = min(1.0, r_star)
+        super().__init__(gamma, mu if mu is None else mu * k, weight, name=name)
         if not math.isfinite(c1) or c1 <= 0:
             raise ValueError(f"c1 must be a finite number > 0, got {c1}")
         if not math.isfinite(c2) or c2 <= 0:
             raise ValueError(f"c2 must be a finite number > 0, got {c2}")
-        self.r = r
+        self.r = max(1.0, r_star) / k
+        self.r_base = r
+        self.r_star = r_star
         self.c1 = c1
         self.c2 = c2
 
     @property
     def alloc_cost(self):
-        return self.c1 + self.c2
+        """c1 + c2*r_star/r -- the true cost of the two capacities the ray buys.
+
+        Parenthesized so that the default r_star == r_base divides to exactly 1.0 (IEEE
+        754 gives x/x == 1.0 for any finite x != 0) and this is bit-for-bit c1 + c2.
+        """
+        return self.c1 + self.c2 * (self.r_star / self.r_base)
+
+    def server_capacities(self, S):
+        """(S_1, S_2) -- the capacity each CONSTRUCTED server receives at variable S.
+
+        Server 1 takes S by definition of the variable; server 2 takes S*r_star/r, which
+        equals S only at the default r_star = r. Reporting that sums a fork-join's
+        capacity per unit of hardware needs the two separately.
+        """
+        return S, S * (self.r_star / self.r_base)
 
     @property
     def default_zeta(self):
@@ -251,7 +296,11 @@ class ForkJoinStation(Station):
         return t_ul(self.gamma, m1, m2)
 
     def sim_node(self, S, job_class):
-        """Two branches at S*mu and S*r*mu joined on "all" — the shared-capacity semantics."""
+        """The ray's two effective rates as branches joined on "all".
+
+        `mu` and `r` are the EFFECTIVE anchor and ratio, so the branches come out ordered
+        slower-first and this emits the ray the station actually runs on at any r_star.
+        """
         return {
             "name": self.name,
             "type": "fork-join",
