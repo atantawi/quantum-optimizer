@@ -12,6 +12,15 @@ dominates. `ForkJoinStation` now takes `r_star`, which can also be *solved*.
 built, the measured results, the simulated cross-check, and every correction to the plan and
 to the spike. Read it first, and prefer it wherever it disagrees with anything else here.
 
+[`optimality-condition-derivation.md`](optimality-condition-derivation.md) fills in the
+derivation behind findings §8's one-line condition — the equal-marginal-value rule, why the
+prices are `β_k = c_k/µ̂_k`, how `r*` and `S₂ = (r*/r)S₁` fall out of it, the explicit
+`∂T/∂m_k` for `t_ul`, and the three qualifications on "locally optimal" (fixed spend, a
+first-order condition only, and the kink at `m₁ = m₂` that lets `r* = 1` be selected exactly).
+Theory, not measurement: it would read the same had neither probe been run. Its §5 formula is
+pinned against the implementation by
+`tests/test_forkjoin_policy.py::test_the_written_derivation_matches_the_implemented_derivative`.
+
 [`findings.md`](findings.md) is the **original spike record, superseded in part** and
 deliberately not rewritten — so that what was known when the design decisions were taken stays
 readable. Its header lists what has since changed. Two things in it are stale as *status*

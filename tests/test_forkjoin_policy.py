@@ -329,3 +329,76 @@ def test_the_boundary_fallback_is_a_stability_rescue_not_an_optimum():
     # The best ray on that same spend line, and what collapsing costs.
     assert t_ul(gamma, 1000.0000999750063, 249937766.57889298) == pytest.approx(
         10002.5, rel=1e-6)
+
+
+# --------------------------------------------------------------------------------------
+# The written derivation vs the code.
+#
+# docs/forkjoin-s2-policy/optimality-condition-derivation.md section 5 writes out
+# dT/dm_k for `t_ul` term by term. Nothing checked that the prose matched the
+# implementation, which is the axis a maths note rots along: `_dt_dm1` can be corrected
+# and the LaTeX left behind, with no test noticing. These two pin it in both directions --
+# against the implementation, and against `t_ul` itself.
+# --------------------------------------------------------------------------------------
+
+def _derivation_dt_dmk(lam, m1, m2, k):
+    """Section 5's formula, transcribed from its LaTeX and deliberately NOT reusing `_dt_dm1`.
+
+    Independence is the whole point: sharing code with the thing under test would make this
+    pass however wrong either one is. Written in the note's own notation --
+    `T = (1-alpha)*T_UB + alpha*T_bot`, so
+    `dT/dm_k = dalpha/dm_k*(T_bot - T_UB) + (1-alpha)*dT_UB/dm_k + alpha*dT_bot/dm_k`.
+    Valid away from m1 == m2, where the note says `T_bot` kinks.
+    """
+    mk, mj = (m1, m2) if k == 1 else (m2, m1)
+    alpha = (lam / m1 + lam / m2) / 8.0
+    denom = m1 + m2 - 2.0 * lam
+    t_ub = 1.0 / (m1 - lam) + 1.0 / (m2 - lam) - 1.0 / denom
+    t_bot = 1.0 / (min(m1, m2) - lam)
+    d_alpha = -lam / (8.0 * mk * mk)
+    d_ub = -1.0 / (mk - lam) ** 2 + 1.0 / denom ** 2
+    d_bot = -1.0 / (mk - lam) ** 2 if mk < mj else 0.0
+    return d_alpha * (t_bot - t_ub) + (1.0 - alpha) * d_ub + alpha * d_bot
+
+
+_DERIVATION_POINTS = [
+    (lam, m1, m2)
+    for lam in (0.45, 0.9, 2.0)
+    for m1 in (0.6, 1.3, 4.0, 11.0)
+    for m2 in (0.55, 1.7, 5.0, 13.0)
+    if min(m1, m2) > lam and abs(m1 - m2) > 1e-9      # the note excludes the kink
+]
+
+
+@pytest.mark.parametrize("lam,m1,m2", _DERIVATION_POINTS)
+def test_the_written_derivation_matches_the_implemented_derivative(lam, m1, m2):
+    """Section 5's formula and `_dt_dm1` must agree exactly, not just closely.
+
+    Both evaluate the same expression in the same order, so anything other than bit
+    equality means the note and the code have actually diverged rather than merely rounding
+    differently. `t_ul` is symmetric in its two rates, which is why the second partial is
+    `_dt_dm1` with the arguments swapped.
+    """
+    assert _derivation_dt_dmk(lam, m1, m2, 1) == _dt_dm1(lam, m1, m2)
+    assert _derivation_dt_dmk(lam, m1, m2, 2) == _dt_dm1(lam, m2, m1)
+
+
+@pytest.mark.parametrize("lam,m1,m2", _DERIVATION_POINTS)
+def test_the_written_derivation_differentiates_t_ul(lam, m1, m2):
+    """...and it is the derivative of `t_ul`, not merely a formula the code agrees with.
+
+    A central difference, so an error in BOTH the note and `_dt_dm1` -- which the test above
+    cannot see, since they would agree with each other -- still fails here.
+
+    The tolerance is 2e-5 against a worst observed error of 4.9e-6 over these points, i.e. 4x
+    headroom rather than the 20x a round 1e-4 would give. Everything here is deterministic --
+    fixed points, no sampling -- so there is no flakiness to buy headroom against, and a loose
+    bound would let a real error of a few times the truncation error pass unnoticed. If a
+    platform's float behaviour ever pushes this over, tighten the step rather than the bound.
+    """
+    for k, args in ((1, (1, 0)), (2, (0, 1))):
+        step = 1e-7 * max(1.0, m1 if k == 1 else m2)
+        up = t_ul(lam, m1 + step * args[0], m2 + step * args[1])
+        down = t_ul(lam, m1 - step * args[0], m2 - step * args[1])
+        assert _derivation_dt_dmk(lam, m1, m2, k) == pytest.approx(
+            (up - down) / (2.0 * step), rel=2e-5)
