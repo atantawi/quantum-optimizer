@@ -618,8 +618,8 @@ def test_the_exported_floor_agrees_with_run_on_a_reused_tuned_station():
     not report a floor the Optimizer would accept a smaller budget than.
 
     Previously it read the mutable ray: after a generous run it reported that ray's floor
-    (2.10291 here) while `run()` still served 1.91442, because `run()` restores the ray
-    first. Budgets derived from the helper were silently inflated by run history.
+    (2.10291 here) while `run()` still served every budget above 1.9125, because `run()`
+    restores the ray first. Budgets derived from the helper were inflated by run history.
     """
     st = ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")
     fresh = min_feasible_budget([st])
@@ -667,6 +667,54 @@ def test_a_run_rejected_at_preflight_leaves_the_tuned_ray_alone():
     fresh = Optimizer(control, 4.0 * floor).run()
     assert reused.capacities == fresh.capacities
     assert st.r_star == control[0].r_star
+
+
+def test_a_tuned_station_runs_the_noise_floor_path():
+    """The only other stochastic tuned test declares `half_width=None`, so `ci is None`,
+    `_noise_floor` short-circuits, and `allocator.noise_floor` is never called with a tuned
+    station at all -- even though it runs `allocate` 2n times, which now has a precondition
+    that can raise. This exercises that path and the `noise-floor` stopping rule.
+    """
+    stations = _tuned_pair()
+    fj = stations[0]
+    C = 4.0 * min_feasible_budget(stations)
+    # `warm_start=False` on purpose: the analytic pre-solve lands exactly on the answer
+    # here, so with it the loop takes ONE step, stops on `tol`, and never gets far enough
+    # for the noise floor to bind -- which is how this whole path stayed uncovered.
+    res = Optimizer(stations, C, analyzer=DeterministicFake(half_width=0.001),
+                    noise_kappa=1.0, warm_start=False).run()
+    assert res.converged
+    assert res.noise_floor == pytest.approx(0.0032843, rel=1e-3)
+    assert res.stop_reason == "noise-floor"
+    assert res.iterations > 1              # it actually iterated, unlike the other one
+    # The ray is still the local optimum for the spend it ended on, and the budget is still
+    # exactly spent -- the two invariants the analytic tests assert, on the noisy path.
+    spend = res.capacities[0] * fj.alloc_cost
+    assert fj.r_star == pytest.approx(
+        optimal_ray(0.45, 1.0, 4.0, 4.0, 1.0, spend), rel=1e-9)
+    assert sum(st.alloc_cost * S for st, S in zip(stations, res.capacities)) == \
+        pytest.approx(C, rel=1e-12)
+
+
+def test_every_station_is_reset_not_just_the_first():
+    """The reset is a loop over all stations, and nothing pinned that.
+
+    Every other reuse fixture happens to put the tuned fork-join at index 0, so
+    `stations[0].reset_policy()` passed the whole suite. This puts it LAST behind two
+    ordinary stations, where only a real loop reaches it.
+    """
+    def trio():
+        return [GG1Station.mm1(gamma=0.9, mu=1.0, c=1.0, name="q1"),
+                GG1Station.mm1(gamma=0.6, mu=1.0, c=2.0, name="q2"),
+                ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")]
+    stations = trio()
+    floor = min_feasible_budget(stations)
+    Optimizer(stations, 20.0 * floor).run()
+    assert stations[-1].r_star != 1.0                  # it is off the starting ray
+    reused = Optimizer(stations, 4.0 * floor).run()
+    fresh = Optimizer(trio(), 4.0 * floor).run()
+    assert reused.capacities == fresh.capacities       # bit-for-bit
+    assert reused.iterations == fresh.iterations
 
 
 def test_reusing_tuned_stations_reproduces_a_fresh_run_exactly():

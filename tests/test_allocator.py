@@ -1,6 +1,7 @@
 import pytest
 
-from qopt.allocator import allocate, min_feasible_budget
+from qopt.allocator import allocate, min_feasible_budget, noise_floor
+from qopt.exceptions import InfeasibleBudgetError
 from qopt.station import ForkJoinStation, GG1Station
 
 
@@ -82,6 +83,49 @@ def test_a_budget_above_the_reported_floor_allocates_stably():
             st.check_stable(Si)          # raises InstabilityError if S*mu <= gamma
 
 
+@pytest.mark.parametrize("zeta,match", [
+    ([1.0, 1.0], "length"),                 # short: zip() silently dropped a station
+    ([1.0, 1.0, 1.0, 1.0], "length"),       # long
+    ([1.0, 1.0, 0.0], "strictly positive"),
+    ([1.0, 1.0, -1.0], "strictly positive"),
+    ([1.0, 1.0, float("nan")], "strictly positive"),
+    ([1.0, 1.0, float("inf")], "strictly positive"),
+])
+def test_allocate_rejects_a_zeta_vector_it_cannot_use(zeta, match):
+    """The other half of the guarantee `min_feasible_budget` states, and the half that was
+    left open: a bad zeta produced silently wrong capacities rather than an error.
+
+    A SHORT vector was the worst of them -- `zip` truncates, so `allocate` returned fewer
+    capacities than there were stations and renormalized the budget across the survivors.
+    A zero left its station at exactly `S*mu == gamma` with the budget far above the floor,
+    which is precisely the unstable-in-silence outcome the ray guards were added to prevent.
+    """
+    stations = [GG1Station.mm1(gamma=0.5, mu=1.0, c=c, name=n)
+                for c, n in ((1.0, "a"), (2.0, "b"), (3.0, "c"))]
+    assert min_feasible_budget(stations) == pytest.approx(3.0, rel=1e-12)
+    with pytest.raises(ValueError, match=match):
+        allocate(stations, 10.0, zeta)
+
+
+def test_allocate_rejects_a_non_finite_budget():
+    """`allocate` is root-exported, so it cannot rely on the Optimizer's budget guard. The
+    slack test is written `not slack > 0.0` rather than `slack <= 0.0` for exactly this: a
+    NaN budget passes every ordering comparison, and used to yield NaN capacities.
+    """
+    stations = [GG1Station.mm1(gamma=0.5, mu=1.0, c=1.0, name="a")]
+    for bad in (float("nan"), float("-inf")):
+        with pytest.raises(InfeasibleBudgetError):
+            allocate(stations, bad, [1.0])
+
+
+def test_noise_floor_rejects_a_dzeta_of_the_wrong_length():
+    """It indexes `dzeta` positionally 2n times; a short one raised a raw IndexError."""
+    stations = [GG1Station.mm1(gamma=0.5, mu=1.0, c=c, name=n)
+                for c, n in ((1.0, "a"), (2.0, "b"), (3.0, "c"))]
+    with pytest.raises(ValueError, match="length"):
+        noise_floor(stations, 10.0, [1.0, 1.0, 1.0], [0.1, 0.1])
+
+
 def test_the_reported_floor_is_bit_for_bit_the_one_allocate_prices():
     """`min_feasible_budget` and eq 21's slack term must agree to the LAST BIT, or the two
     disagree over a budget one ulp wide.
@@ -117,9 +161,15 @@ def test_the_reported_floor_is_bit_for_bit_the_one_allocate_prices():
         floor = min_feasible_budget(stations)
         base = [st.gamma / st.mu for st in stations]
         assert floor == sum(st.alloc_cost * b for st, b in zip(stations, base))
+        # Both sides, and this matters: comparing the helper only against a hand-copy of
+        # eq 21's expression pins one side of a two-sided agreement, and regrouping
+        # `allocate`'s OWN floor then goes unnoticed. These two bracket it -- the smallest
+        # budget above the floor must allocate, and the floor itself must not.
         S = allocate(stations, math.nextafter(floor, math.inf),
                      [st.default_zeta for st in stations])
         assert all(Si > 0.0 for Si in S)
+        with pytest.raises(InfeasibleBudgetError):
+            allocate(stations, floor, [st.default_zeta for st in stations])
 
 
 def test_weight_scales_allocation_above_base():

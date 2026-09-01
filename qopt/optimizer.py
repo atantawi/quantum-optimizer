@@ -219,13 +219,25 @@ class Optimizer:
             # into E[T] moves the converged r_star by ~6e-4 relative). The reason is that
             # the retune adds no noise of its OWN: it is an exact function of the S handed
             # to it, and that S has already been damped, so damping here would attenuate
-            # one perturbation twice. And a retune cannot make the budget infeasible: it
-            # lands the station strictly inside its own stability region, so
-            # floor_i < spend_i for every station and sum(floor) < sum(spend) == C. That
-            # holds only because forkjoin_policy guards the ray it returns against the
-            # float cancellation that can otherwise place it just outside -- without that
-            # guard this paragraph was false, and the violation escaped as an
-            # InstabilityError raised from inside this loop.
+            # one perturbation twice. Pinned by
+            # test_a_tuned_station_runs_the_noise_floor_path, whose r_star assertion fails
+            # if this retune is wrapped in the damping average: the converged ray is then
+            # no longer the local optimum for the spend the station was given.
+            #
+            # A retune very nearly cannot make the budget infeasible: it lands the station
+            # inside its own stability region, so floor_i < spend_i for every station and
+            # sum(floor) < sum(spend) == C. That much holds only because forkjoin_policy
+            # guards the ray it returns against the float cancellation that can otherwise
+            # place it just outside -- without that guard the statement was badly false,
+            # and the violation escaped as an InstabilityError raised from in here.
+            #
+            # It is still not exact at ulp scale, and the review that found this preferred
+            # a true note to a tidy one. `retune` returns spend/alloc_cost_new, which
+            # re-rounds: at a budget within a few ulps of the floor the rescale can land a
+            # capacity exactly ON the stability boundary, and the run then dies here rather
+            # than converging -- measured on ~2% of budgets in the first 24 ulps above a
+            # tuned station's floor. Loud, never silent, and `min_feasible_budget` is
+            # documented as a floor to scale away from rather than to sit on.
             S_new = [st.retune(s) for st, s in zip(stations, S_new)]
 
             residual = max(abs(a - b) for a, b in zip(S_new, S))
@@ -242,10 +254,12 @@ class Optimizer:
             #
             # One caveat since the retune moved above: a retune's rescale is NOT damped,
             # so dividing by theta scales that part of the step up rather than restoring
-            # it (measured at theta = 0.5: a fork-join's damped move 3.6e-2 against its
-            # undamped retune move 1.6e-1). The bias is conservative -- it can only make
-            # the loop harder to stop, never easier -- and in practice an ordinary station
-            # is the argmax of the max() below, so it does not reach `step` at all.
+            # it. Measured at theta = 0.5 on a tuned pair at 4x the floor, the rescale
+            # dominates only on the FIRST iteration -- 1.3e-1 against a damped move of
+            # 2.0e-3 -- and falls to a few percent of the damped move from the second
+            # iteration on. The bias is conservative either way: it can only make the loop
+            # harder to stop, never easier, and in practice an ordinary station is the
+            # argmax of the max() below, so it does not reach `step` at all.
             #
             # Normalizing the step once, rather than scaling each term, keeps both knobs
             # meaning exactly what they say at every damping value, and keeps `tol`

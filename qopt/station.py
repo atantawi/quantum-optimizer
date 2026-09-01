@@ -171,8 +171,13 @@ class Station(ABC):
         """Restore any free internal policy parameter to its constructed value.
 
         `retune` mutates, so the Optimizer calls this once per run -- after every preflight
-        guard, so that a rejected run leaves a previous answer intact, and before eq 21's
-        first allocation, which prices each station at the parameter's current value. That
+        guard, so that a run REJECTED AT PREFLIGHT leaves a previous answer intact, and
+        before eq 21's first allocation, which prices each station at the parameter's
+        current value. Preflight is the limit of that protection: once the loop is entered
+        the parameter moves, so a failure after that point -- an analyzer or transport
+        error, a mid-loop instability, a strict quality failure -- leaves it wherever the
+        loop got to, as any partially-completed run would. `min_spend` stays correct
+        throughout regardless, since it reads the constructed value. That
         is what keeps a run a pure function of (stations-as-constructed, budget) even when
         the same objects are reused, and it is why `min_spend` is a separate hook: the
         feasibility check runs before this does, so it cannot read the current value.
@@ -312,10 +317,15 @@ class ForkJoinStation(Station):
         if not math.isfinite(r) or r < 1:
             raise ValueError(f"r must be a finite number >= 1, got {r}")
         self._policy, r_star = resolve_r_star(r_star, r)
-        # Anchor on whichever server the ray leaves effectively slower, so eq 21's base
-        # term gamma/mu provisions the BINDING server and eq 22's zeta is taken against a
-        # rate the station actually has. Without this, r_star < 1 silently starves server
-        # 2: `_check_stable(S*mu)` guards one server, and it would be the wrong one.
+        # Hand Station the BINDING server's rate, so its validation is applied to the rate
+        # this station will actually run on: `mu * k` can underflow to zero for an extreme
+        # ray where `mu` alone is fine, and that has to be rejected here.
+        #
+        # Validation is ALL this line decides. `_anchor` below recomputes `self.mu` from
+        # `mu_base` by the identical expression, so the value Station stores is overwritten
+        # either way. The anchoring itself -- what keeps eq 21's base term and eq 22's zeta
+        # on the binding server, and what stops `r_star < 1` from silently starving server
+        # 2, since `_check_stable(S*mu)` guards only one of them -- lives in `_anchor`.
         # `mu` may be None here -- pass it through so Station raises the canonical error.
         k = min(1.0, r_star)
         super().__init__(gamma, mu if mu is None else mu * k, weight, name=name)

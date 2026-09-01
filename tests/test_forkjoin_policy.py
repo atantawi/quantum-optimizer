@@ -4,9 +4,12 @@ Reference figures come from docs/forkjoin-s2-policy/findings.md, which swept the
 quantity with an independent throwaway probe.
 """
 
+import math
+
 import pytest
 
 from qopt.exceptions import InstabilityError
+from qopt.forkjoin_approx import t_ul
 from qopt.forkjoin_policy import (
     R_STAR_TUNED,
     _dt_dm1,
@@ -157,9 +160,15 @@ def test_extreme_price_ratio_at_the_floor_still_returns_a_stable_ray():
     gamma, mu_base, r, c1, c2 = 0.45, 1.0, 1.0, 1e5, 1.0
     b1, b2 = c1 / mu_base, c2 / (r * mu_base)
     floor = gamma * (b1 + b2)
-    for factor in (1e-16, 1e-15, 3e-14, 1e-13, 1e-12):
-        m1, m2 = _min_on_spend_line(gamma, b1, b2, floor * (1.0 + factor))
-        assert m1 > gamma and m2 > gamma, (factor, m1 - gamma, m2 - gamma)
+    # `nextafter` rather than a relative factor for the tightest case. This list began
+    # `1e-16`, which is below machine epsilon: `floor * (1 + 1e-16) == floor`, so that case
+    # was really testing the floor ITSELF, which admits no stable ray and is now refused.
+    # It passed only because the rescue ray rounded up off the boundary by one ulp.
+    spends = [math.nextafter(floor, math.inf)]
+    spends += [floor * (1.0 + f) for f in (1e-15, 3e-14, 1e-13, 1e-12)]
+    for spend in spends:
+        m1, m2 = _min_on_spend_line(gamma, b1, b2, spend)
+        assert m1 > gamma and m2 > gamma, (spend, m1 - gamma, m2 - gamma)
 
 
 def test_extreme_price_ratio_at_the_floor_does_not_escape_the_optimizer():
@@ -241,3 +250,82 @@ def test_optimal_ray_still_raises_instability_below_the_floor():
     b1, b2 = GOOD["c1"] / GOOD["mu_base"], GOOD["c2"] / (GOOD["r"] * GOOD["mu_base"])
     with pytest.raises(InstabilityError):
         optimal_ray(**dict(GOOD, spend=GOOD["gamma"] * (b1 + b2)))
+
+
+def test_a_scale_the_derivative_cannot_evaluate_raises_instead_of_guessing():
+    """`_dt_dm1` squares rate differences, which `t_ul` itself never does, so it runs out
+    of exponent range long before the rest of the library does.
+
+    Three failure modes, and they reach the guard by two different routes -- so all three
+    are listed here rather than one standing in for the others:
+
+    - above ~1.3e154 the square OVERFLOWS, raising OverflowError,
+    - below ~1.5e-162 it underflows to zero and the reciprocal raises ZeroDivisionError,
+    - between those the expression evaluates to NaN with no exception at all, and that is
+      the dangerous one: bisection tests `g(mid) < 0.0`, which is False for NaN, so the
+      bracket narrowed the wrong way and returned a confidently wrong ray. Verified to
+      produce NaN and not an exception: `_dt_dm1(1e-155, 3e-155, 6e-155)`.
+    """
+    cases = [
+        dict(gamma=1e155 / 3.0, mu_base=1.0, r=2.0, c1=1.0, c2=1.0, spend=1e155),
+        dict(gamma=1e-160, mu_base=1.0, r=2.0, c1=1.0, c2=1.0, spend=3e-160),
+        dict(gamma=1e-155, mu_base=1.0, r=1.0, c1=1.0, c2=1.0, spend=9e-155),
+        # This one is the reason the NaN branch is a raise and not a shrug. With the
+        # `isfinite` check removed it RETURNS, quietly, 32.9% off: 1.9117666863801601
+        # against the 1.438914358249078 the identical case gives when every rate and
+        # gamma is scaled up by 1e120 -- and `t_ul` is invariant under that scaling, so
+        # the scaled answer is the right one. The other cases here raise either way,
+        # because a NaN bracket walks down into the underflow.
+        dict(gamma=1e-154, mu_base=1.0, r=4.0, c1=4.0, c2=1.0, spend=6e-154),
+    ]
+    assert _dt_dm1(1e-155, 3e-155, 6e-155) != _dt_dm1(1e-155, 3e-155, 6e-155)   # NaN
+    for kwargs in cases:
+        with pytest.raises(ValueError, match="scale"):
+            optimal_ray(**kwargs)
+
+
+def test_a_tuned_run_at_a_scale_the_solver_cannot_reach_fails_as_a_value_error():
+    """Through the public path: the incumbent policy serves this budget, so the tuned
+    policy must refuse it coherently rather than with a raw OverflowError."""
+    from qopt.optimizer import Optimizer
+    from qopt.station import ForkJoinStation
+
+    kw = dict(gamma=1.0, mu=1.0, r=2.0, c1=1.0, c2=1.0)
+    assert Optimizer([ForkJoinStation(**kw, name="fj")], 1e155).run().converged
+    with pytest.raises(ValueError, match="scale"):
+        Optimizer([ForkJoinStation(**kw, r_star=R_STAR_TUNED, name="fj")], 1e155).run()
+
+
+def test_the_unaffordable_spend_message_agrees_with_the_test_that_refused():
+    """The error quotes `gamma*(beta_1+beta_2)` as the threshold, so it must be that exact
+    quantity that decides. It was not: the test was `hi = (spend - b2*gamma)/b1 > gamma`,
+    which rounds differently, so the message could refuse a spend strictly GREATER than the
+    number it told the caller to exceed -- `0.39400156892415794` against a quoted
+    `0.3940015689241579`. A caller obeying the message still got the error.
+    """
+    kw = dict(gamma=0.149, mu_base=2.254, r=4.236, c1=4.969, c2=4.199)
+    b1 = kw["c1"] / kw["mu_base"]
+    b2 = kw["c2"] / (kw["r"] * kw["mu_base"])
+    floor = kw["gamma"] * (b1 + b2)
+    assert optimal_ray(**kw, spend=math.nextafter(floor, math.inf)) > 0.0
+    with pytest.raises(InstabilityError):
+        optimal_ray(**kw, spend=floor)
+
+
+def test_the_boundary_fallback_is_a_stability_rescue_not_an_optimum():
+    """The `m1 = m2 = spend/(b1+b2)` fallback returns a STABLE ray, not the best one, and
+    the difference is large enough that it must not be described as the optimum.
+
+    At `b1/b2 = 1e16` the spend line is almost vertical: server 1's rate is pinned near
+    gamma and the whole remaining budget buys server 2's rate, so the optimum is a ray in
+    the hundreds of thousands. Collapsing to `r_star = 1` costs 37% of E[T] here. Measured
+    against the best point on the same line, found in exact arithmetic.
+    """
+    gamma, b1, b2 = 1e3, 1e16, 1.0
+    m1, m2 = _min_on_spend_line(gamma, b1, b2, gamma * (b1 + b2) * 1.0000001)
+    assert m1 > gamma and m2 > gamma          # the property it does guarantee
+    assert m2 / m1 == 1.0                     # and the ray it returns
+    assert t_ul(gamma, m1, m2) == pytest.approx(13750.0, rel=1e-6)
+    # The best ray on that same spend line, and what collapsing costs.
+    assert t_ul(gamma, 1000.0000999750063, 249937766.57889298) == pytest.approx(
+        10002.5, rel=1e-6)

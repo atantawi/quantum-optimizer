@@ -587,4 +587,12 @@ def test_capacity_by_unit_follows_a_tuned_station(workload):
         build_qcsc_network(workload, r_star=fj.r_base), result.capacities)
     slow, fast = fj.units
     assert tuned_total[fast] != pytest.approx(frozen[fast], rel=1e-9)
-    assert tuned_total[slow] == pytest.approx(frozen[slow], rel=1e-12)
+    # The slow side is server 1, which receives S on EVERY ray, so its invariance is a
+    # property of the split rather than of this ray -- asserted against the capacities
+    # themselves so it says something the `fast` line above does not already imply.
+    fj_S = [result.capacities[i] for i, st in enumerate(stations)
+            if st.name.startswith("fj")]
+    assert tuned_total[slow] == pytest.approx(
+        frozen[slow], rel=1e-12) and sum(fj_S) == pytest.approx(
+        sum(st.server_capacities(result.capacities[i])[0]
+            for i, st in enumerate(stations) if st.name.startswith("fj")), rel=1e-15)

@@ -205,7 +205,7 @@ def test_tuned_floor_is_the_minimum_over_every_ray():
     """The floor a tuned station advertises must be no larger than any fixed ray's."""
     tuned = min_feasible_budget([ForkJoinStation(**FJ, r_star=R_STAR_TUNED)])
     for r_star in (0.25, 0.5, 1.0, 1.7, 2.32, 4.0, 9.0):
-        assert tuned <= min_feasible_budget([ForkJoinStation(**FJ, r_star=r_star)]) + 0.0
+        assert tuned <= min_feasible_budget([ForkJoinStation(**FJ, r_star=r_star)])
     assert tuned == pytest.approx(
         min_feasible_budget([ForkJoinStation(**FJ, r_star=1.0)]), rel=1e-15)
 
@@ -278,6 +278,22 @@ def test_reset_policy_returns_a_tuned_station_to_its_starting_ray():
     # Bit-for-bit, not approximately: re-anchoring recomputes `mu` by the same expression
     # __init__ used, so a restored station must be indistinguishable from a fresh one.
     assert (st.r_star, st.mu, st.r, st.alloc_cost) == start
+
+
+def test_alloc_cost_is_exactly_c1_plus_c2_on_the_default_ray():
+    """`alloc_cost` is written `c1 + c2 * (r_star / r_base)` so that the default ray divides
+    to exactly 1.0 and the cost is bit-for-bit `c1 + c2`, which is what makes the default
+    path byte-identical to the pre-policy code. The grouping is the whole mechanism:
+    `c1 + (c2 * r_star) / r_base` is a different number for some hardware.
+
+    These constants are not decoration -- they are a triple where the two forms disagree
+    (found by search; ~1 in 1e5 random triples does). Every fixture elsewhere uses
+    r in {1, 2, 4}, all powers of two, where the two forms agree and this cannot fail.
+    """
+    c1, c2, r = 6.125905660483073, 6.75323477245016, 11.340282869461499
+    st = ForkJoinStation(gamma=0.45, mu=1.0, r=r, c1=c1, c2=c2)
+    assert st.alloc_cost == c1 + c2                  # exact, not approx
+    assert c1 + (c2 * r) / r != c1 + c2              # the grouping really does matter here
 
 
 def test_min_spend_ignores_a_tuned_stations_current_ray():

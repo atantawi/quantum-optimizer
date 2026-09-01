@@ -2,12 +2,18 @@
 
 Companion to [`findings.md`](findings.md), whose §10 ("If this were to be implemented") was
 explicitly undecided. This records the decisions taken, the numbers the implementation
-produces, and the six places measurement contradicted the plan. Issue #10; PRs #12 and #13.
+produces, and the seven places measurement contradicted the plan. Issue #10; PRs #12 and #13.
 
-Every figure here is reproducible from the committed test suite — the reference constants
-live in `tests/test_example_qcsc.py` (`FINDINGS_SECTION_7`, `FINDINGS_BEST_RAY`, `TUNED`) and
-`tests/test_forkjoin_policy.py` (`FINDINGS_SECTION_4`, `FINDINGS_Q7`), so they are executable
-rather than transcribed.
+The figures in the results table and the corrections are **pinned in the committed suite**,
+so they are executable rather than transcribed: `tests/test_example_qcsc.py`
+(`FINDINGS_SECTION_7`, `FINDINGS_BEST_RAY`, `TUNED`), `tests/test_forkjoin_policy.py`
+(`FINDINGS_SECTION_4`, `FINDINGS_Q7`), `tests/test_optimizer_loop.py` (`FJ_SWEEP` and the
+descending-sweep tests) and `tests/test_allocator.py` (the floor's bit-exactness).
+
+The **Validation section is different** and should be read as a record, not as a test: its
+sweep counts, the `float.hex()` comparison against pre-change code, and the iteration figures
+come from ad-hoc runs that are not committed here. Where a Validation bullet *is* pinned, it
+says so.
 
 ## The API
 
@@ -26,8 +32,9 @@ tuned fork-join, which the `Optimizer` calls once per iteration; it reprices the
 returns the capacity that buys the *same spend*, so the budget stays exhausted and `S` keeps
 meaning "server 1's capacity". Its counterpart `Station.reset_policy()` restores the
 constructed ray, and `Station.min_spend` reports the floor at that ray rather than at the
-current one — see the fifth and sixth corrections below for why both are correctness
-requirements rather than hygiene, and why neither works without the other.
+current one — see the fifth correction below for why both are correctness requirements
+rather than hygiene, and why neither works without the other, and the sixth for what still
+had to be checked inside `allocate` itself.
 
 **The nesting is one-sided.** At a fixed spend the inner optimum is determined — one scalar
 solve, no inner loop. The fixed point closes through the outer loop, because the spend comes
@@ -60,7 +67,7 @@ optimality condition evaluated at the converged spend": those were computed at t
 at a different spend (7.96 against 7.49). They agree with the tuned rays to 1.2e-3 and 1.5e-3.
 That is corroboration, not a specification, so the tests compare against the sweep grid.
 
-## Six corrections to the plan
+## Seven corrections to the plan
 
 **§10 item 3 named the right rule, but the probe's method cannot deliver it.** Minimizing
 `t_ul` along the spend line pins `r*` only to `√ε` (~1e-8 relative), because a quadratic
@@ -84,11 +91,13 @@ reconstructed directly there, which needs no cancelling subtraction.
 
 **A tuned station must start at `r* = 1`, not on the incumbent ray.** The station's floor over
 the family, `γ(c₁ + c₂r*/r)/(μ̂₁·min(1,r*))`, is minimized at exactly `r* = 1`, where it equals
-the spend line's own floor `γ(β₁+β₂)` — which is §4b's observation that the paper's ray has the
-optimal stability floor. `min_feasible_budget` is evaluated **once**, before any retune, so a
+the spend line's own floor `γ(β₁+β₂)` — which is findings §4's observation, under
+"The paper's ray has the optimal stability floor", that qopt's is up to 2.5× worse.
+`min_feasible_budget` is evaluated **once**, before any retune, so a
 tuned station starting at `r` advertises the incumbent's floor and refuses budgets it can in
-fact serve: every `C` in `(1.80, 3.15]` on a test station, all of which `equal-rate` completes.
-Converged answers are bit-identical either way.
+fact serve: on the `γ=.45, μ=1, r=4, c₁=4, c₂=1` station that is every `C` in
+`(1.9125, 2.2500]` — from the equal-rate floor up to the incumbent's — all of which
+`equal-rate` completes. Converged answers are bit-identical either way.
 
 **`r_star` is not free of simulation noise.** It is a function of the station's spend, and on
 the simulated path that spend descends from a measured `E[T]`: injecting ±2% noise into `E[T]`
@@ -110,8 +119,9 @@ which is why this correction is stated as a pair:
   rejected against the **previous** run's floor: `C = 2.008125` raised `InfeasibleBudgetError`
   while a freshly constructed equivalent converged, so a descending budget sweep broke partway
   down and feasibility depended on run history. The exported helper also *disagreed with the
-  optimizer* once the reset existed — it reported `2.10291` while `run()` served `1.91442` —
-  and the README derives budgets from that helper. Fixed by `Station.min_spend`, a hook the
+  optimizer* once the reset existed — it reported `2.10291` while `run()` served every budget
+  above `1.9125` — and the README derives budgets from that helper. Fixed by
+  `Station.min_spend`, a hook the
   allocator sums: it prices the floor at the ray a run **starts from**, which under `tuned` is
   also the family's minimizer, and is the plain `alloc_cost·γ/μ` for every other station.
 - Repricing the floor is not a substitute for restoring the ray, and this was checked rather
@@ -156,9 +166,41 @@ no input validation, so `spend = inf` returned `nan`, a zero rate or cost raised
 quoting a `nan` floor — an arithmetic accident reported as a modelling result. Its arguments now
 get the same treatment `ForkJoinStation` gives the constructor arguments they mirror.
 
+**A pre-merge review found the composition still had two holes, one of them silent.** Four
+independent reviewers went over the whole change; 32 distinct findings, of which these are the
+ones that were not merely prose:
+
+- **`allocate` validated its budget but not its `zeta_vec`.** A short vector was the bad one:
+  `zip` truncates, so it returned *fewer capacities than there were stations* and renormalized
+  the budget across the survivors, silently. A zero left its station at exactly `S·μ = γ` with
+  the budget far above the floor — the same silently-unstable outcome the ray guards were added
+  to prevent, reached through the other argument. Now validated, as is `noise_floor`'s `dzeta`.
+- **The bisection had no NaN guard.** `_dt_dm1` squares rate differences, which `t_ul` never
+  does, so the tuned policy runs out of exponent range long before the rest of the library: it
+  overflows above ~1.3e154, underflows below ~1.5e-162, and *between those it evaluates to NaN
+  with no exception*. Bisection tests `g(mid) < 0.0`, which is False for NaN, so the bracket
+  narrowed the wrong way and returned a confidently wrong ray — measured 32.9% off at
+  `γ = 1e-154`, against the same case scaled up by 1e120, under which `t_ul` is invariant. All
+  three modes are now one `ValueError` that names the scale and says a fixed ray still runs.
+- **Two claims had to be withdrawn rather than fixed.** `allocate`'s promise that any budget
+  above the floor yields stable capacities is false in float arithmetic and cannot be made
+  true by a check: the slack term is an *aggregate*, and within a few ulps of the floor a
+  station's share rounds away entirely, leaving `S·μ = γ` exactly — measured on plain M/M/1
+  stations, 206 of 12052 probes. And the cancellation rescue at the end of `_min_on_spend_line`
+  is a *stability* rescue, not the optimum it was described as: at `β₁/β₂ = 1e16` it returns
+  `r* = 1` at `t_ul = 13750` where the best point on the same spend line is 10002, 37% better.
+  Both are now documented as what they are.
+
+Three of the guards were also **green under mutations that reverted real behaviour**, which is
+its own lesson: the floor's bit-exactness test compared the helper against a *hand-copy* of eq
+21's expression rather than against `allocate`, so regrouping `allocate`'s own floor went
+unnoticed; the reset loop passed as `stations[0].reset_policy()` because every reuse fixture put
+the tuned station first; and the slack guard's stated NaN rationale had no test. All three now
+fail when reverted.
+
 ## Validation
 
-- Suite 391 passed / 10 skipped.
+- Suite 406 passed / 10 skipped.
 - 348 runs over budget multiples from `1.000001×` the floor, eight hardware configurations and
   three damping values, warnings promoted to errors: all converged, budget exact at every
   answer, every station stable, and **45 runs in the `r* < 1` regime**.
@@ -172,20 +214,30 @@ get the same treatment `ForkJoinStation` gives the constructor arguments they mi
   point, so the new precondition never fires on a legitimate path. The sweep fails on the
   pre-reset code at the second budget it tries, and on the round-1 code at the first
   rejected run.
-- Each of the five guards this took is mutation-checked independently: policy-aware floor,
-  reset placement (above `allocate`, below the preflight guards), `allocate`'s precondition,
-  and eq 21's grouping in `min_spend`. The grouping needed a *single-server* fixture to be
-  pinned at all — the fork-join cases go through the override, so reverting the base-class
-  expression alone left the suite green.
-- Iteration counts track the incumbent's at every damping — 120 against 119 at `θ = 0.1`, 20
-  against 19 at `θ = 0.5`.
+- Every guard this took is mutation-checked independently: the float-cancellation rescue in
+  `_min_on_spend_line`, the policy-aware floor, the reset's placement (above `allocate`,
+  below the preflight guards), `allocate`'s slack precondition, and eq 21's grouping in
+  `min_spend`. Two of those needed a *specific* fixture to be pinned at all: the grouping
+  needed a single-server station, because the fork-join cases route through the override and
+  reverting the base-class expression alone left the suite green; and the reset loop needed a
+  fixture with the tuned station *last*, because every other one puts it at index 0 where
+  `stations[0].reset_policy()` passes.
+- Iteration counts stay the same order as the incumbent's at every damping. On the
+  `_tuned_pair` fixture at 4× the floor: **183 against 187** at `θ = 0.1`, **30 against 30**
+  at `θ = 0.5`, **6 against 5** at `θ = 1.0`. Only the last of those is asserted
+  (`test_tuning_does_not_degrade_convergence`, `tuned <= incumbent + 2` at the default
+  damping), and the bound is not universal — a search over hardware and budget found tuning
+  costing up to +32 iterations at `θ = 0.1` (203 against 171). What the suite does pin is
+  that the *inner solve's precision* is what drives the count: injecting `√ε` noise into
+  `optimal_ray` takes the same fixture from 6 iterations to 9, and `1e-6` noise to
+  non-convergence.
 - `r*` over a budget sweep (125 multiples of each workload's own floor, `1.000001×` to 40×)
   independently reproduces §4's two limits: it is **1.0000 at the stability boundary** in every
   workload, and rises to 1.6369 in `balanced` against §4's asymptote of 1.633 and to 2.7027 in
   `quantum_dominant` against 2.693. `classical_dominant` is 1.0000 throughout, as β₁/β₂ = 1
   requires.
 - The floor a tuned station advertises comes out 6.8400 / 5.8275 / 2.7900, which are exactly
-  findings §7's *paper* floors (6.840 / 5.828 / 2.790) — the ones §4b identified as optimal.
+  findings §7's *paper* floors (6.840 / 5.828 / 2.790) — the ones §4 identified as optimal.
   That is the starting-ray correction above, visible from the outside. It now holds for a
   reused station too, and that needed `min_spend`: with the helper reading the current ray,
   a station that had already run advertised its converged ray's floor instead, so this
@@ -197,11 +249,17 @@ get the same treatment `ForkJoinStation` gives the constructor arguments they mi
 `classical_dominant` gain is far outside known model error (~0.15% mean, ~1.1% worst row) and
 is structural; a simulated pass sharpens only the marginal ~2% gains. Two things now bear on it:
 
-- The tuned rays (1.447 / 2.316 / 1.000) are all **closer to homogeneity** than the incumbent
-  `r = 4`, and `t_ul` is exact at `m₁ = m₂` and least validated at `r = 4`. So the tuned
-  operating point sits where the approximation is *more* trustworthy than the baseline it is
-  measured against — meaning a simulated pass that corrects `T` at `r = 4` downward would
-  **shrink** the measured gain, not grow it.
+- For `quantum_dominant` and `classical_dominant`, whose fork-joins are built at `r = 4`, the
+  tuned rays (2.316 / 1.000) are **closer to homogeneity** than the incumbent, and `t_ul` is
+  exact at `m₁ = m₂` and least validated at `r = 4`. So there the tuned operating point sits
+  where the approximation is *more* trustworthy than the baseline it is measured against, and
+  a simulated pass that corrects `T` at `r = 4` downward would **shrink** the measured gain.
+  **`balanced` is the exception and runs the other way:** its fork-join hardware is `r = 1`
+  (findings §4, "'balanced' should not run homogeneous"), so the incumbent is *already* at
+  `m₁ = m₂` where `t_ul` is exact, and tuning moves *away* from it to 1.447. Its ~2.4% gain is
+  therefore measured against an exact baseline at a less-validated operating point, and a
+  simulated pass could grow or shrink it. That is one of the two "marginal" gains, which is
+  exactly why it needs saying.
 - A simulated run's reported ray carries that run's sample path (see the noise correction
   above), so the cross-check should report `r_star` with its own interval rather than as a
   point.
