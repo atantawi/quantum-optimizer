@@ -25,8 +25,9 @@ spend line. `Station.retune(S) -> S` is a new base-class hook, a no-op on every 
 tuned fork-join, which the `Optimizer` calls once per iteration; it reprices the station and
 returns the capacity that buys the *same spend*, so the budget stays exhausted and `S` keeps
 meaning "server 1's capacity". Its counterpart `Station.reset_policy()` restores the
-constructed ray, and the `Optimizer` calls it at the start of every run — see the fifth
-correction below, which is why that is a correctness requirement and not just hygiene.
+constructed ray, and `Station.min_spend` reports the floor at that ray rather than at the
+current one — see the fifth correction below for why both are correctness requirements
+rather than hygiene, and why neither works without the other.
 
 **The nesting is one-sided.** At a fixed spend the inner optimum is determined — one scalar
 solve, no inner loop. The fixed point closes through the outer loop, because the spend comes
@@ -95,34 +96,53 @@ moves the converged `r_star` by ~6e-4 relative. It still needs no damping of its
 a different reason than "it is deterministic" — the `S` it reads has already been damped, so
 damping the retune too would attenuate one perturbation twice.
 
-**A mutating policy parameter needs an explicit reset, or feasibility depends on run history.**
-The starting-ray correction above only holds for a station *as constructed*. `retune` mutates,
-so a tuned station that has already run sits on that run's ray — which, being anything other
-than `r* = 1`, advertises a strictly higher floor than the policy's own. With
-`min_feasible_budget` evaluated once, before the first retune, a station reused at a lower
-budget rejected it against the **previous** run's floor: measured on `γ=.45, μ=1, r=4, c₁=4,
-c₂=1`, a run at `20×` the floor leaves `r* = 2.69255` and lifts the advertised floor from
-`1.91250` to `2.10291`, so budget `2.008125` raised `InfeasibleBudgetError` while a freshly
-constructed equivalent converged. A descending budget sweep therefore broke partway down.
+**A mutating policy parameter needs an explicit reset — and the floor it moves has to be
+reported for the policy, not for the ray.** The starting-ray correction above only holds for a
+station *as constructed*. `retune` mutates, so a tuned station that has already run sits on that
+run's ray, which — being anything other than `r* = 1` — needs strictly more budget to stay stable
+than the policy does. Measured on `γ=.45, μ=1, r=4, c₁=4, c₂=1`, a run at `20×` the floor leaves
+`r* = 2.69255` and lifts that ray's floor from `1.91250` to `2.10291`.
 
-Repricing the floor to the policy's minimum instead of restoring the ray does **not** fix it,
-and this was checked rather than assumed: eq 21 is allocated before the first retune too, so at
-budget `2.00771`, midway between the two floors, the stale ray gives slack `−0.09521` and the run
-dies on an `InstabilityError` (`S·μ = 0.42963 ≤ γ = 0.45`) instead of a clean rejection. So
-the fix is `reset_policy()`, called before the feasibility check. It also removes the caveat the `retune`
-docstring used to carry: a run is now a pure function of (stations-as-constructed, budget), and
-reusing tuned station objects reproduces a fresh run **bit-for-bit**, iteration count included.
+Two failures came out of that one fact, and they need **two** guards. Neither alone is enough,
+which is why this correction is stated as a pair:
+
+- With `min_feasible_budget` reading the current ray, a station reused at a lower budget was
+  rejected against the **previous** run's floor: `C = 2.008125` raised `InfeasibleBudgetError`
+  while a freshly constructed equivalent converged, so a descending budget sweep broke partway
+  down and feasibility depended on run history. The exported helper also *disagreed with the
+  optimizer* once the reset existed — it reported `2.10291` while `run()` served `1.91442` —
+  and the README derives budgets from that helper. Fixed by `Station.min_spend`, a hook the
+  allocator sums: it prices the floor at the ray a run **starts from**, which under `tuned` is
+  also the family's minimizer, and is the plain `alloc_cost·γ/μ` for every other station.
+- Repricing the floor is not a substitute for restoring the ray, and this was checked rather
+  than assumed: eq 21 prices each station at its *current* ray, so at budget `2.00771` — which
+  the policy-aware floor now clears — a stale ray gives slack `−0.09521` and the run dies on an
+  `InstabilityError` (`S·μ = 0.42963 ≤ γ = 0.45`) from inside the loop instead of running.
+
+So `reset_policy()` sits **after every preflight guard** and **before the first `allocate`**.
+After, because validation must not mutate: a budget that never passes preflight used to reset
+the stations anyway, discarding a converged ray that is a *reported output* (`r_star`, and
+per-unit capacity attribution). Before, for the slack reason above. Each of the four positions —
+floor policy-aware or not, reset before the guards, after `allocate`, or absent — is failed by a
+different subset of the suite.
+
+It also removes the caveat the `retune` docstring used to carry: a run is now a pure function of
+(stations-as-constructed, budget), and reusing tuned station objects reproduces a fresh run
+**bit-for-bit**, iteration count included.
 
 ## Validation
 
-- Suite 356 passed / 10 skipped.
+- Suite 361 passed / 10 skipped.
 - 348 runs over budget multiples from `1.000001×` the floor, eight hardware configurations and
   three damping values, warnings promoted to errors: all converged, budget exact at every
   answer, every station stable, and **45 runs in the `r* < 1` regime**.
 - A further 432 runs re-walk that grid over **reused** station objects, ascending and
-  descending, each against a freshly constructed control: every one converged, and reuse
-  reproduced the control **bit-for-bit** (162 of them in the `r* < 1` regime). The same sweep
-  fails on the pre-reset code at the second budget it tries.
+  descending, each against a freshly constructed control: every one converged, reuse
+  reproduced the control **bit-for-bit**, and the exported floor never moved (162 of them in
+  the `r* < 1` regime). Interleaved with them, 1296 deliberately rejected runs — below the
+  floor, at it, and non-finite — none of which disturbed the answer the preceding run had
+  reached. The sweep fails on the pre-reset code at the second budget it tries, and on the
+  round-1 code at the first rejected run.
 - Iteration counts track the incumbent's at every damping — 120 against 119 at `θ = 0.1`, 20
   against 19 at `θ = 0.5`.
 - `r*` over a budget sweep (125 multiples of each workload's own floor, `1.000001×` to 40×)
@@ -132,8 +152,10 @@ reusing tuned station objects reproduces a fresh run **bit-for-bit**, iteration 
   requires.
 - The floor a tuned station advertises comes out 6.8400 / 5.8275 / 2.7900, which are exactly
   findings §7's *paper* floors (6.840 / 5.828 / 2.790) — the ones §4b identified as optimal.
-  That is the starting-ray correction above, visible from the outside — and it now holds
-  for a reused station too, not only a freshly constructed one.
+  That is the starting-ray correction above, visible from the outside. It now holds for a
+  reused station too, and that needed `min_spend`: with the helper reading the current ray,
+  a station that had already run advertised its converged ray's floor instead, so this
+  sentence was true only of freshly constructed stations.
 
 ## Still open
 

@@ -3,6 +3,7 @@ import math
 import pytest
 
 from qopt.allocator import min_feasible_budget
+from qopt.exceptions import InfeasibleBudgetError
 from qopt.analyzer import AnalyticAnalyzer, Analyzer, Evaluation
 from qopt.network import Network, Route
 from qopt.optimizer import Optimizer, Result
@@ -536,18 +537,17 @@ def test_tuning_survives_the_stochastic_path_with_damping_and_a_warm_start():
 def test_a_descending_budget_sweep_may_reuse_tuned_stations():
     """A tuned station that has already run must not refuse a budget it can serve.
 
-    `retune` mutates the ray, and the ray it lands on at a generous budget advertises a
-    HIGHER stability floor than the policy's minimum at r_star = 1. Since the Optimizer
-    checks `min_feasible_budget` once, before any retune, a station reused at a lower
-    budget would fail that check on a floor belonging to the previous run -- so feasibility
-    depended on run history, and a descending sweep broke partway down. Restoring the
-    starting ray first is what makes the check see the policy's own floor.
+    `retune` mutates the ray, and the ray it lands on at a generous budget needs MORE
+    budget to stay stable than the policy's own minimum at r_star = 1. A station reused at
+    a lower budget must be served against the policy's floor, not that ray's -- which takes
+    both halves of the fix: `min_spend` reports the policy floor to the feasibility check,
+    and `reset_policy` puts the station back on the ray eq 21 is then priced at.
     """
     stations = _tuned_pair()
     floor = min_feasible_budget(stations)
     Optimizer(stations, 20.0 * floor).run()
-    stale = min_feasible_budget(stations)
-    assert stale > floor          # the high-budget ray really does advertise more
+    stale = sum(s.alloc_cost * s.gamma / s.mu for s in stations)   # the ended-on rays
+    assert stale > floor          # the high-budget ray really does need more
     C = 0.5 * (floor + stale)     # feasible for the policy, not for the ray it ended on
     reused = Optimizer(stations, C).run()
     fresh = Optimizer(_tuned_pair(), C).run()
@@ -569,7 +569,9 @@ def test_the_descending_sweep_figures_on_record():
     assert floor == pytest.approx(1.9125, rel=1e-12)
     Optimizer([st], 20.0 * floor).run()
     assert st.r_star == pytest.approx(2.6925527241298357, rel=1e-9)
-    assert min_feasible_budget([st]) == pytest.approx(2.102912181464607, rel=1e-9)
+    # The floor of the ray it ended on. `min_feasible_budget` deliberately no longer
+    # reports this -- see test_the_exported_floor_agrees_with_run... below.
+    assert st.alloc_cost * st.gamma / st.mu == pytest.approx(2.102912181464607, rel=1e-9)
 
     C = 2.008125          # above the policy's floor, below the ray it ended on
     reused = Optimizer([st], C).run()
@@ -580,15 +582,17 @@ def test_the_descending_sweep_figures_on_record():
     assert reused.objective == fresh.objective
 
 
-def test_a_repriced_floor_would_not_have_been_enough_on_its_own():
-    """Why the reset restores the RAY, rather than the feasibility check reading a
-    policy-aware floor off a station left on a stale one.
+def test_the_reset_must_precede_the_first_allocation():
+    """A policy-aware floor is not a substitute for restoring the ray -- the two guard
+    different steps, and this pins why both are needed.
 
-    eq 21 is allocated before the first retune too, so at a budget between the two floors
-    the stale ray gives NEGATIVE slack: accepting that budget without restoring the ray
-    trades a clean rejection for an InstabilityError raised from inside the loop, which is
-    strictly worse. This pins that arithmetic, so the reset cannot be "simplified" into a
-    floor override.
+    `min_spend` lets the feasibility check clear a budget the policy can serve. But eq 21
+    prices each station at its CURRENT ray, so allocating before the reset on a ray left
+    over from a generous run gives NEGATIVE slack: the run would die on an InstabilityError
+    from inside the loop instead of running at all, which is worse than the rejection the
+    policy-aware floor just removed. Pinning the arithmetic keeps the reset from drifting
+    below the first `allocate`, and keeps it from being "simplified" away as redundant now
+    that the floor is policy-aware.
     """
     from qopt.allocator import allocate
     from qopt.exceptions import InstabilityError
@@ -596,9 +600,9 @@ def test_a_repriced_floor_would_not_have_been_enough_on_its_own():
     st = ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")
     policy_floor = min_feasible_budget([st])
     Optimizer([st], 20.0 * policy_floor).run()          # leaves the ray at ~2.69
-    stale_floor = min_feasible_budget([st])
-    C = 0.5 * (policy_floor + stale_floor)
-    assert policy_floor < C < stale_floor
+    ray_floor = st.alloc_cost * st.gamma / st.mu
+    C = 0.5 * (policy_floor + ray_floor)
+    assert policy_floor < C < ray_floor                 # the check passes, the ray cannot
 
     slack = C - st.alloc_cost * st.gamma / st.mu
     assert slack == pytest.approx(-0.09520609073230357, rel=1e-9)
@@ -607,8 +611,64 @@ def test_a_repriced_floor_would_not_have_been_enough_on_its_own():
     with pytest.raises(InstabilityError):
         st.check_stable(S[0])
 
-    # And the real path, which restores the ray, serves that same budget.
+    # And the real path, which resets between the two, serves that same budget.
     assert Optimizer([st], C).run().converged
+
+
+def test_the_exported_floor_agrees_with_run_on_a_reused_tuned_station():
+    """`min_feasible_budget` is public, and the README derives budgets from it, so it must
+    not report a floor the Optimizer would accept a smaller budget than.
+
+    Previously it read the mutable ray: after a generous run it reported that ray's floor
+    (2.10291 here) while `run()` still served 1.91442, because `run()` restores the ray
+    first. Budgets derived from the helper were silently inflated by run history.
+    """
+    st = ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")
+    fresh = min_feasible_budget([st])
+    Optimizer([st], 20.0 * fresh).run()
+    assert st.r_star == pytest.approx(2.6925527241298357, rel=1e-9)
+    assert min_feasible_budget([st]) == fresh            # bit-for-bit, not merely close
+
+    # And the reported floor is tight in both directions, which is what makes it usable:
+    # just above it converges, at it is rejected.
+    assert Optimizer([st], 1.0000001 * fresh).run().converged
+    with pytest.raises(InfeasibleBudgetError):
+        Optimizer([st], fresh).run()
+
+
+def test_a_run_rejected_at_preflight_leaves_the_tuned_ray_alone():
+    """Validation must not mutate. A budget that never passes preflight used to reset the
+    station anyway, discarding a previous run's converged ray -- which is a reported
+    output, read by `r_star` and by per-unit capacity attribution.
+
+    Now possible because the feasibility check reads the policy's floor rather than the
+    ray's, so the reset no longer has to run before it.
+    """
+    st = ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")
+    floor = min_feasible_budget([st])
+    Optimizer([st], 20.0 * floor).run()
+    answer = (st.r_star, st.mu, st.r, st.alloc_cost)
+    assert st.r_star != 1.0
+
+    with pytest.raises(InfeasibleBudgetError):
+        Optimizer([st], 0.5 * floor).run()
+    assert (st.r_star, st.mu, st.r, st.alloc_cost) == answer
+
+    with pytest.raises(ValueError):
+        Optimizer([st], float("nan")).run()
+    assert (st.r_star, st.mu, st.r, st.alloc_cost) == answer
+
+    with pytest.raises(ValueError):
+        Optimizer([st], 4.0 * floor, initial_zeta=[-1.0]).run()
+    assert (st.r_star, st.mu, st.r, st.alloc_cost) == answer
+
+    # A run that DOES pass preflight still resets, so its answer is not warm-started off
+    # the ray preserved above.
+    reused = Optimizer([st], 4.0 * floor).run()
+    control = [ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")]
+    fresh = Optimizer(control, 4.0 * floor).run()
+    assert reused.capacities == fresh.capacities
+    assert st.r_star == control[0].r_star
 
 
 def test_reusing_tuned_stations_reproduces_a_fresh_run_exactly():

@@ -112,18 +112,6 @@ class Optimizer:
     def run(self):
         stations = self.stations
 
-        # Undo any policy parameter a previous run of these same objects left mutated,
-        # BEFORE reading the feasibility floor off them. A no-op for every station without
-        # a free parameter, and for a fork-join on a fixed ray. For a tuned fork-join it is
-        # a correctness requirement in both directions: the floor checked just below and
-        # eq 21's first allocation are both evaluated at the station's current prices, and
-        # a ray left over from a more generous budget carries a higher floor than the
-        # policy's own -- so the run would reject a budget it can serve, or allocate
-        # negative slack against it. This also makes a run a pure function of
-        # (stations-as-constructed, budget), so `r_star` after a run is that run's answer.
-        for st in stations:
-            st.reset_policy()
-
         # Guard: budget must exceed the minimum needed for stability (eq 21 slack > 0).
         # `isfinite` first because NaN slips through every ordering comparison below.
         if not math.isfinite(self.budget):
@@ -145,6 +133,26 @@ class Optimizer:
             raise ValueError(
                 f"initial zeta values must be finite and strictly positive, got {zeta}"
             )
+
+        # Undo any policy parameter a previous run of these same objects left mutated. A
+        # no-op for every station without a free parameter, and for a fork-join on a fixed
+        # ray; for a tuned fork-join it restores the ray eq 21 is about to be priced at.
+        # Two things fix its position here, both learned from review:
+        #
+        # - AFTER every guard above, because validation must not mutate. A budget that
+        #   never passes preflight used to reset the stations anyway, discarding a previous
+        #   run's converged ray -- which is a reported output, not just loop state.
+        # - BEFORE the first `allocate`, because eq 21 prices each station at its CURRENT
+        #   ray. A ray left over from a more generous budget prices the station above the
+        #   floor `min_budget` just cleared, giving negative slack and an immediate
+        #   InstabilityError instead of a run. The guard above is safe to evaluate on a
+        #   station not yet reset only because `min_spend` reports the floor at the ray a
+        #   run starts from rather than at the current one.
+        #
+        # This also makes a run a pure function of (stations-as-constructed, budget), so
+        # `r_star` after a run is that run's answer rather than a warm start's.
+        for st in stations:
+            st.reset_policy()
 
         stochastic = self.analyzer.is_stochastic
         warm_start_iterations = 0

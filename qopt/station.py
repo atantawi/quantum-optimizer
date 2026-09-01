@@ -122,6 +122,19 @@ class Station(ABC):
     def default_zeta(self):
         """Strictly-positive starting guess for zeta."""
 
+    @property
+    def min_spend(self):
+        """This station's own term in `min_feasible_budget`: the spend that just stabilizes
+        it, `alloc_cost * gamma / mu`.
+
+        A hook rather than an expression in the allocator because a station with a free
+        policy parameter can be sitting on a different value than the one a run will start
+        from -- and it is the STARTING value that decides which budgets the Optimizer can
+        serve. Overridden by `ForkJoinStation` for exactly that reason; for every other
+        station this is the plain expression, unchanged.
+        """
+        return self.alloc_cost * self.gamma / self.mu
+
     def zeta_from(self, T, S):
         """Invert the functional form (eq 22) for an externally supplied E[T].
 
@@ -150,12 +163,12 @@ class Station(ABC):
     def reset_policy(self):
         """Restore any free internal policy parameter to its constructed value.
 
-        `retune` mutates, so the Optimizer calls this once at the start of every run to
-        undo whatever a previous run left behind. That is what keeps a run a pure function
-        of (stations-as-constructed, budget) even when the same objects are reused, and it
-        matters beyond reproducibility: the retuned parameter can move the station's own
-        stability floor, and the Optimizer's feasibility check reads that floor BEFORE the
-        first retune gets a chance to correct it.
+        `retune` mutates, so the Optimizer calls this once per run -- after every preflight
+        guard, so that a rejected run leaves a previous answer intact, and before eq 21's
+        first allocation, which prices each station at the parameter's current value. That
+        is what keeps a run a pure function of (stations-as-constructed, budget) even when
+        the same objects are reused, and it is why `min_spend` is a separate hook: the
+        feasibility check runs before this does, so it cannot read the current value.
 
         A station with no free parameter has nothing to restore, so the default does
         nothing -- this hook costs every other station type exactly nothing.
@@ -369,17 +382,48 @@ class ForkJoinStation(Station):
 
         For `tuned` it is load-bearing, not just hygiene. The station's floor over the
         family is minimized at exactly the constructed ray r_star = 1, and strictly so, so
-        a run that ends anywhere else advertises a higher floor than the policy's own; and
-        the Optimizer evaluates
-        `min_feasible_budget` ONCE, before the first retune. Without this a station reused
-        at a lower budget rejects it against the PREVIOUS run's floor -- so a descending
-        budget sweep broke partway down while a freshly constructed equivalent converged.
-
-        Restoring the ray is the whole fix, and repricing the floor instead would not be:
-        eq 21 is allocated before the first retune too, so at a budget between the two
-        floors a stale ray produces negative slack and an immediate InstabilityError.
+        a run that ends anywhere else leaves the station needing more budget than the
+        policy does. Reusing it at a lower budget must be served against the policy's floor
+        -- which takes both halves: `min_spend` reports that floor to the Optimizer's
+        feasibility check, and this puts the station back on the ray eq 21 is priced at.
+        Neither alone is enough. Without the reset, a budget the check has just cleared
+        gives eq 21 negative slack on the stale ray, and the run dies inside the loop
+        rather than starting. Without `min_spend`, the check rejects a budget the station
+        can serve, and a descending budget sweep breaks partway down.
         """
         self._anchor(self._initial_r_star)
+
+    def _spend_floor_on(self, r_star):
+        """`alloc_cost * gamma / mu` for the ray `r_star`, without moving onto it.
+
+        Repeats `alloc_cost`'s and `_anchor`'s expressions rather than calling them, which
+        is deliberate: written this way it is bit-for-bit the base-class expression when
+        `r_star` is the ray the station is already on, so `min_spend` below cannot perturb
+        any budget derived from the floor.
+        """
+        alloc = self.c1 + self.c2 * (r_star / self.r_base)
+        return alloc * self.gamma / (self.mu_base * min(1.0, r_star))
+
+    @property
+    def min_spend(self):
+        """The floor at the ray a RUN starts from, not at the ray this station is on.
+
+        The two differ only under `tuned`, whose ray `retune` moves and `reset_policy`
+        restores. Reading the current ray made the exported `min_feasible_budget` both
+        history-dependent and wrong: after a generous run it reported that run's ray floor
+        while `Optimizer.run()` still served a smaller budget, since the run restores the
+        ray before it checks. Budgets derived from the helper were inflated by run history.
+
+        Under `tuned` the starting ray is also the family's floor-minimizing one (see
+        `_INITIAL_R_STAR`), so this is simultaneously the minimum over every reachable ray
+        -- which is what makes it the honest answer to "what budget does a run need".
+
+        It answers that question and no other. Scaling a budget off it and handing it to
+        `allocate` DIRECTLY, on a station still carrying a previous run's ray, is outside
+        the contract -- `allocate` prices the current ray and documents that feasibility is
+        the Optimizer's to enforce, and the Optimizer enforces it by resetting first.
+        """
+        return self._spend_floor_on(self._initial_r_star)
 
     @property
     def alloc_cost(self):

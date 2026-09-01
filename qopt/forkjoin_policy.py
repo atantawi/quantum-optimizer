@@ -171,12 +171,15 @@ _INITIAL_R_STAR = {R_STAR_INVARIANT_R: None, R_STAR_TUNED: 1.0, R_STAR_EQUAL_RAT
 `tuned` starts at r_star = 1 rather than at the incumbent r, and that is a feasibility
 requirement rather than a preference. A station's stability floor over the family is
 `gamma*(c1 + c2*r_star/r) / (mu*min(1, r_star))`, which is minimized at exactly
-r_star = 1, where it equals the spend line's own floor `gamma*(beta_1+beta_2)`. The
-Optimizer checks `min_feasible_budget` ONCE, before any retune, so a tuned station
-starting at r would advertise the incumbent's floor and refuse budgets it can in fact
-serve -- measured: it rejected every C in (1.80, 3.15] that `equal-rate` completes, and
-its own answer at that boundary is r_star = 1 anyway. Starting on the floor-minimizing
-ray is also the better initial guess, since r_star tends to 1 as the budget tightens.
+r_star = 1, where it equals the spend line's own floor `gamma*(beta_1+beta_2)`.
+
+That makes the entry here the ray the whole feasibility story is told at:
+`ForkJoinStation.min_spend` prices the station's floor on this ray precisely because it is
+the ray a run starts from, so a `tuned` entry of r would advertise the incumbent's floor
+and refuse budgets the station can in fact serve -- measured: every C in (1.80, 3.15] that
+`equal-rate` completes, and the station's own answer at that boundary is r_star = 1 anyway.
+Starting on the floor-minimizing ray is also the better initial guess, since r_star tends
+to 1 as the budget tightens.
 """
 
 

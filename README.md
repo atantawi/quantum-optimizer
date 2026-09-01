@@ -133,9 +133,12 @@ Neither incumbent dominates the other: the paper's rule wins `classical_dominant
 24.55% and loses `quantum_dominant` by 5.47%. `R_STAR_TUNED` re-solves `r_star` on every
 optimizer iteration — a fixed point nested inside eq 21/22 — and reaches what a grid sweep
 of `r_star` finds, in all three workloads. It does that by *mutating* the station, so
-`r_star` after a run is that run's chosen ray; the `Optimizer` restores the starting ray at
-the beginning of every run, which keeps a run a pure function of the stations as
-constructed and the budget, however many times the same objects are reused. See
+`r_star` after a run is that run's chosen ray; the `Optimizer` restores the starting ray
+once every run has cleared its guards, which keeps a run a pure function of the stations as
+constructed and the budget, however many times the same objects are reused, and leaves a
+previous answer intact when a run is rejected. `min_feasible_budget` is likewise answered
+for the *policy* rather than for the ray a station currently sits on, so budgets scaled off
+it mean the same thing before and after a run. See
 [`docs/forkjoin-s2-policy/findings.md`](docs/forkjoin-s2-policy/findings.md) and
 [`implementation.md`](docs/forkjoin-s2-policy/implementation.md).
 

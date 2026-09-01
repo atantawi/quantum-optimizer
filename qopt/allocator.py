@@ -8,8 +8,15 @@ def min_feasible_budget(stations):
 
     A budget strictly greater than this makes eq 21's slack term positive, so every
     allocated capacity satisfies S_i * mu_i > gamma_i.
+
+    Summed through `Station.min_spend` rather than inline, so that a station carrying a
+    free policy parameter reports the floor at the ray a RUN starts from rather than at
+    whatever ray it currently sits on. Without that this helper -- which is public, and
+    which the README's normal usage scales budgets from -- disagreed with `Optimizer.run()`
+    on a reused tuned station, and its answer depended on run history. The default
+    `min_spend` is the plain expression, so nothing else moves.
     """
-    return sum(st.alloc_cost * st.gamma / st.mu for st in stations)
+    return sum(st.min_spend for st in stations)
 
 
 def allocate(stations, C, zeta_vec):
