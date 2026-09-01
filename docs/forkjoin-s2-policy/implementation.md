@@ -243,29 +243,183 @@ fail when reverted.
   a station that had already run advertised its converged ray's floor instead, so this
   sentence was true only of freshly constructed stations.
 
+## Simulated cross-check — the gains hold, and the closed form gets their size right too
+
+Run 2026-09-01. `docs/forkjoin-s2-policy/simcheck.py`, output committed as
+`simcheck-output.txt`. **No `qopt/` change** — `sim_node` emits whatever ray the station is
+on, so the whole cross-check is a grid of existing runs.
+
+Conditions: `qsim-service` built from source at `b022c53` (docs-only on top of `df45cd1`, so
+it clears the version floor), verified by measurement rather than by tag — `samplesAnalyzed`
+scales with `minSamples` (87,040 / 174,080 / 696,320 on an M/M/1 probe) and `alpha` returns
+`0.05` rather than its complement. The probe measures this itself, as section 0 of its output. Stopping rule `precision 0.02`, `alpha 0.05`, `minSamples 1e5`,
+`maxSamples 4e6`, `maxWallClockSeconds 300` — the same rule as
+`docs/qcsc-example/live-run.log`, deliberately, so the two are comparable. One shared budget
+`C = 41.040000` for every cell. 3 workloads × 3 policies × 5 base seeds = 45 passes in ~12 minutes;
+all 45 converged, all on `stop_reason = noise-floor` at `sim_calls = 2`.
+
+**Two witnesses before any of it.** `python -m examples.qcsc_network` reproduces the committed
+`live-run.log` bit-for-bit (the single diff is the caption that directory's README already
+records as stale by wording), and the probe's own `invariant-r` cells at seed 20260729 come
+back at **6.373131 / 4.518446 / 3.448158** — digit-for-digit the objectives spec §7 records.
+The analytic column is gated against PR #13's recorded numbers before a single comparison is
+printed, and it reproduced all nine cells exactly.
+
+### The result
+
+Gains are paired by seed: within a seed the three policies share the base seed, so
+`seed_policy="fixed"` gives common random numbers and the *policy difference* is the
+low-variance quantity. The interval is two-sided 95% Student-t on those paired differences —
+it measures the variability instead of assuming a correlation structure.
+
+| workload | policy | analytic gain | measured gain | 95% CI (paired) | |
+|---|---|---|---|---|---|
+| balanced | equal-rate | 0.00% | 0.00% | exactly 0 | identical ray |
+| balanced | **tuned** | **2.37%** | **2.54%** | (+2.163, +2.909) | **confirmed** |
+| quantum_dominant | equal-rate | −5.47% | −5.55% | (−5.699, −5.393) | confirmed loss |
+| quantum_dominant | **tuned** | **2.15%** | **2.15%** | (+1.944, +2.357) | **confirmed** |
+| classical_dominant | equal-rate | 24.55% | 24.47% | (+24.329, +24.607) | confirmed |
+| classical_dominant | **tuned** | **24.55%** | **24.47%** | (+24.329, +24.607) | **confirmed** |
+
+**Every confirmed row is confirmed, and every analytic gain lands inside its own measured
+interval.** Counted honestly there are **four distinct comparisons**, not five: in
+`classical_dominant` the tuned ray solves to exactly `r* = 1`, so its `equal-rate` and `tuned`
+rows are one measurement printed twice — the same collapse the `balanced` row is annotated for.
+The output now lists both bit-identical pairs explicitly. So this is stronger than findings §9
+asked for: it
+establishes not just that the policy *ranking* survives measurement, but that the closed form
+gets the *magnitude* of each gain right to within the interval. The two ~2% gains that findings
+§9 called "suggestive, not established" are now established. Nothing came out inconclusive, so
+the planned tightening pass to `precision 0.01` was never needed.
+
+**Pairing is what did that, and the propagated interval shows why it was necessary.** The
+conservative half-width on a single measured objective — `Σᵢ hᵢ`, correlated-errors — runs
+0.743% to 1.151% across the 45 cells. Against that, a 2.15% gain is barely two half-widths and
+would have stayed marginal. The paired CRN interval on the same 2.15% is ±0.21 pp. Reporting
+only the propagated width would have left the exact two gains this run existed to settle
+unresolved.
+
+### The pre-registered risk directions are not resolved, and that is the honest reading
+
+Both directions were stated in advance, and the measured means do line up with them —
+`classical_dominant` shrank (24.55% → 24.47%) as predicted for a workload whose baseline sits
+at `r = 4` where `t_ul` is least validated, and `balanced` grew (2.37% → 2.54%), which was the
+cell that could go either way. **But neither shift is resolved at this stopping rule, and
+saying otherwise would be reading noise.** The per-seed gains, which the output now prints
+under each row, are why:
+
+| workload | analytic | per-seed measured gains | mean | paired 95% CI |
+|---|---|---|---|---|
+| balanced | 2.37% | 2.158, 2.452, 2.463, 2.624, 2.982 | 2.54% | (+2.163, +2.909) |
+| quantum_dominant | 2.15% | 1.880, 2.114, 2.200, 2.263, 2.295 | 2.15% | (+1.944, +2.357) |
+| classical_dominant | 24.55% | 24.361, 24.388, 24.425, 24.538, 24.628 | 24.47% | (+24.329, +24.607) |
+
+The analytic gain lies **inside both the per-seed range and the paired interval in all three
+workloads**. The offsets — +0.16, +0.005 and −0.08 pp — are each well under their own interval
+half-width (0.37, 0.21, 0.14 pp). So what this run resolves is that the gains are real and
+roughly the predicted size; the second-order question of whether measurement shifts them up or
+down is below its own resolution.
+
+**One error worth recording, because it is the trap this network invites.** The first reading of
+this run attributed `balanced`'s risen mean to its fork-join rows: at the committed seed the
+tuned station's `fj` gaps are −1.180% / −0.020% against the incumbent's −1.042% / +0.047%, so
+correcting `T` takes more off the tuned side and the gain should widen. The sign logic is right
+and the conclusion was wrong, because **the committed seed is the one seed where `balanced`'s
+gain narrows** — 2.158%, the minimum of the five — while the other four widen it. Two of
+fourteen stations do not determine the network objective, and a mechanism read off one seed's
+two rows was contradicted by that same seed's own objective. The per-seed rows are printed
+precisely so this cannot be done again.
+
+### `r_star` carries the sample path, as predicted, and it is small
+
+| workload | analytic `r*` | measured mean | min | max | relative spread |
+|---|---|---|---|---|---|
+| balanced | 1.447382 | 1.447268 | 1.447016 | 1.447419 | 2.8e-4 |
+| quantum_dominant | 2.316118 | 2.315949 | 2.315493 | 2.316506 | 4.4e-4 |
+| classical_dominant | 1.000000 | 1.000000 | 1.000000 | 1.000000 | 2.2e-16 |
+
+n = 5 seeds × 2 fork-joins, pooled: the two stations are analytically identical to the last
+bit, so their divergence on the simulated path is the same sample-path noise this measures.
+The 2.8e-4 / 4.4e-4 sits right where the ±2% injected-noise experiment above put it (~6e-4),
+which is corroboration from a different route. `classical_dominant` stays pinned at exactly
+1.0 because it is at the family's boundary, where the solver reconstructs the ray directly.
+
+### Model bias at the tuned operating point is the same size as at the incumbent
+
+This is the reassurance findings §9 wanted, since the whole doubt was that `t_ul` might be
+worse where the tuned policy operates. Pooled over 210 station rows per policy (14 × 3
+workloads × 5 seeds):
+
+| policy | rows | negative | mean gap | worst row | over own CI |
+|---|---|---|---|---|---|
+| invariant-r | 210 | 136 | −0.126% | 1.165% | 9 |
+| equal-rate | 210 | 132 | −0.110% | 1.165% | 6 |
+| tuned | 210 | 134 | −0.132% | −1.522% | 7 |
+
+The tuned column is **−0.132% against the incumbent's −0.126%** — indistinguishable — and its
+worst row is −1.522% against 1.165%, modestly worse and in `balanced`, exactly where moving
+off `m₁ = m₂` predicts it. That contrast is the load-bearing result of this table, and it is
+sound: the three policies ran at the *same five seeds*, so it is a paired comparison, which is
+the only thing the shared sample paths permit.
+
+### A claim withdrawn: this does NOT replicate spec §7's bias measurement
+
+The first write-up of this run said spec §7's negative lean "replicates a fifth, sixth and
+seventh time" on the strength of 136 / 132 / 134 of 210 rows being negative. **That is wrong,
+and the arithmetic says so.** `SEEDS` contains spec §7's own four replication seeds, the
+`invariant-r` cells run its ray at its budget under its stopping rule, and the service is
+deterministic given a seed — so those cells reproduce its rows *bit-for-bit*. The probe now
+prints the split:
+
+| bucket | rows | negative | mean gap | sign-test p |
+|---|---|---|---|---|
+| `invariant-r` at spec §7's seeds — **reproduces it** | 168 | 115 | −0.149% | 0.0000 |
+| `invariant-r` at a seed spec §7 never ran — **new** | 42 | 21 | −0.032% | 1.0000 |
+| the two new rays, all seeds — **new** | 420 | 266 | −0.121% | 0.0000 |
+
+115 / 168 at −0.149% is **exactly** spec §7's published pooled figure. That makes those rows a
+*pipeline witness* — the same role the objectives 6.373131 / 4.518446 / 3.448158 already play
+above — and not a second sample. This script's own docstring says "a repeat confirms the
+pipeline and is NOT a second sample"; the first write-up broke its own rule.
+
+What is genuinely new, and what it says:
+
+- **One new seed, and it shows no lean at all**: 21 of 42 rows negative, mean −0.032%,
+  sign-test p = 1.0000. That *weakens* the cross-seed generality of the lean rather than
+  strengthening it — consistent with spec §7's own note that one of its four seeds was not
+  significant alone and that the effect sits at the edge of what `precision 0.02` resolves.
+- **420 rows on the two rays spec §7 could not measure**, which do lean: 266 negative, mean
+  −0.121%. Real, and at operating points that had never been measured — but at the *same five
+  seeds*, so these are new rays rather than independent draws, and their errors are correlated
+  with the reproduced rows through the shared sample paths.
+
+So the defensible statement is narrow and is the one that matters: **the bias at the tuned ray
+is the same size as at the default ray**, measured pairwise at identical seeds. Whether the
+lean itself generalizes across seeds is not advanced by this run.
+
+γ conservation: 9 misses over 1080 checks (12 checked stations × 90 evaluations — two per
+cell, since `sim_calls = 2`), i.e. 0.83% against the 5% a 95% interval implies. Every one of
+the 9 is a conservation miss rather than some other quality flag, and no station in the whole
+grid came back without a CI. `fj_pp` and `fj_sp` carry no throughput witness at all
+(qsim-service#8), so 2 of 14 stations are never checked.
+
+### What this still does not license
+
+- **Three data points, not six.** Both fork-joins share γ and rates, so they land on the same
+  ray in every workload (findings §9, unchanged).
+- **One operating point.** λ = 0.9, p₁₁ = p₀ = 0.5, one budget multiple, one cost vector. The
+  `r*` mechanism was swept over price ratio and budget analytically (findings §4, §5); the
+  measured confirmation is at this point only.
+- **A re-run at these seeds is not a replication.** The service is deterministic given a seed,
+  so repeating the command reproduces every digit. Vary `--seeds` for an independent sample.
+
 ## Still open
 
-**The simulated cross-check**, and only that. Unchanged in urgency from findings §9: the 24.6%
-`classical_dominant` gain is far outside known model error (~0.15% mean, ~1.1% worst row) and
-is structural; a simulated pass sharpens only the marginal ~2% gains. Two things now bear on it:
+**Nothing on issue #10.** Items 1, 2 and 3 are implemented, item 4 was a prohibition and was
+honoured, and the simulated cross-check above is done and confirms all of it.
 
-- For `quantum_dominant` and `classical_dominant`, whose fork-joins are built at `r = 4`, the
-  tuned rays (2.316 / 1.000) are **closer to homogeneity** than the incumbent, and `t_ul` is
-  exact at `m₁ = m₂` and least validated at `r = 4`. So there the tuned operating point sits
-  where the approximation is *more* trustworthy than the baseline it is measured against, and
-  a simulated pass that corrects `T` at `r = 4` downward would **shrink** the measured gain.
-  **`balanced` is the exception and runs the other way:** its fork-join hardware is `r = 1`
-  (findings §4, "'balanced' should not run homogeneous"), so the incumbent is *already* at
-  `m₁ = m₂` where `t_ul` is exact, and tuning moves *away* from it to 1.447. Its ~2.4% gain is
-  therefore measured against an exact baseline at a less-validated operating point, and a
-  simulated pass could grow or shrink it. That is one of the two "marginal" gains, which is
-  exactly why it needs saying.
-- A simulated run's reported ray carries that run's sample path (see the noise correction
-  above), so the cross-check should report `r_star` with its own interval rather than as a
-  point.
-
-It needs no library change: `sim_node` emits the effective ray at whatever `r_star` the station
-is on.
-
-**The default is unchanged and remains `invariant-r`.** Flipping it is a separate decision,
-and findings §9's caveats on the two ~2% gains are the reason not to take it on this evidence.
+**The default is unchanged and remains `invariant-r`.** Flipping it is now a decision with
+measured evidence behind it rather than a `t_ul` extrapolation — the tuned policy is confirmed
+better in all three workloads and never worse — but it is still a separate decision about
+advertised behaviour, and #14 (a tuned station stays mutated after a run, so a stored `Result`
+misreports) is the thing to settle first if the default is to move.
