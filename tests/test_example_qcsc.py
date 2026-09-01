@@ -217,6 +217,7 @@ def test_capacity_by_unit_rejects_a_station_with_no_known_prefix():
 
 
 def test_capacity_by_unit_counts_a_fork_join_on_both_sides():
+    """The default ray r_star = r, where the two servers do receive the same capacity."""
     from examples.qcsc_network import build_qcsc_network, capacity_by_unit
 
     network = build_qcsc_network("balanced")
@@ -371,3 +372,69 @@ def test_print_gaps_flags_a_gap_that_exceeds_its_ci_half_width(capsys):
     }
     assert verdicts[flagged] == "yes"
     assert verdicts[clear] == "no"
+
+
+# --------------------------------------------------------------------------------------
+# Reporting under a non-default ray (issue #10). A fork-join's two servers receive the
+# same capacity only at r_star = r, so the per-unit totals must split them.
+# --------------------------------------------------------------------------------------
+
+def test_capacity_by_unit_splits_a_fork_joins_two_servers():
+    """At r_star = 1 server 2 buys S/r, not S. Counting S on both sides would overstate
+    the faster unit's purchased capacity by a factor of r."""
+    from examples.qcsc_network import build_qcsc_network, capacity_by_unit
+
+    # quantum_dominant: the QPU is the slower unit, so it is server 1 and keeps S.
+    network = build_qcsc_network("quantum_dominant", r_star=1.0)
+    by_unit = capacity_by_unit(network, [1.0] * len(network.stations))
+    assert by_unit["cpu"] == pytest.approx(4.0)
+    assert by_unit["qpu"] == pytest.approx(4.0 + 2 * 1.0)
+    assert by_unit["gpu"] == pytest.approx(4.0 + 2 * 0.25)   # S*r_star/r = 1/4
+
+    # classical_dominant is the mirror image: the GPU is slower, so it is server 1.
+    network = build_qcsc_network("classical_dominant", r_star=1.0)
+    by_unit = capacity_by_unit(network, [1.0] * len(network.stations))
+    assert by_unit["gpu"] == pytest.approx(4.0 + 2 * 1.0)
+    assert by_unit["qpu"] == pytest.approx(4.0 + 2 * 0.25)
+
+
+def test_fork_join_unit_labels_agree_with_its_cost_and_rate_assignment():
+    """The server -> unit map drives every fork-join row of the reporting table, and it
+    is not recoverable from the station's own fields (balanced has mu_q == mu_g, and the
+    unit-cost runs have c_qpu == c_gpu). Pin it against both hardware facts."""
+    from examples.qcsc_network import B_PP, C_GPU, C_QPU, build_qcsc_network, rates
+
+    cost = {"qpu": C_QPU, "gpu": C_GPU}
+    for workload in ("balanced", "quantum_dominant", "classical_dominant"):
+        mu_q, mu_g = rates(workload, B_PP)
+        rate = {"qpu": mu_q, "gpu": mu_g}
+        fj = {st.name: st for st in build_qcsc_network(workload)}["fj_pp"]
+        u1, u2 = fj.units
+        assert (fj.c1, fj.c2) == (cost[u1], cost[u2]), workload
+        assert fj.mu == rate[u1] and rate[u1] <= rate[u2], workload
+
+
+def test_r_star_reaches_the_fork_joins_and_leaves_everything_else_alone():
+    from examples.qcsc_network import build_qcsc_network
+
+    stations = {st.name: st for st in build_qcsc_network("quantum_dominant", r_star=1.0)}
+    for name in ("fj_pp", "fj_sp"):
+        assert stations[name].r_star == 1.0, name
+        assert stations[name].alloc_cost == pytest.approx(4.0 + 1.0 / 4.0), name
+    # The default is unchanged, which is what keeps every recorded objective valid.
+    default = {st.name: st for st in build_qcsc_network("quantum_dominant")}
+    assert default["fj_pp"].r_star == 4.0
+    assert default["fj_pp"].alloc_cost == pytest.approx(5.0)
+
+
+def test_capacity_by_unit_refuses_a_multi_unit_station_that_cannot_split():
+    """Falling back to "add S to every column" would silently overstate the faster unit
+    on any ray but r_star = r, so a station spanning two units has to be able to split."""
+    from qopt import ForkJoinStation
+    from examples.qcsc_network import build_qcsc_network, capacity_by_unit
+
+    network = build_qcsc_network("balanced")
+    network.stations[1] = ForkJoinStation(
+        gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0, name="fj_pp")
+    with pytest.raises(ValueError, match="cannot attribute its capacity"):
+        capacity_by_unit(network, [1.0] * len(network.stations))

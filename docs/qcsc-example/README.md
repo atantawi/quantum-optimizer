@@ -27,6 +27,12 @@ further base seeds — 4 of 4 runs with a negative mean — though this seed is 
 of the four and the cross-seed central estimate is ~0.15% rather than the ~0.25% here. See
 §7 for the per-seed table and what each of those does and does not license.
 
+One line of this log is now stale by *wording only*: the caption under the analytic
+summary said a fork-join's `S` "counts on both sides", which stopped being unconditionally
+true when `ForkJoinStation` gained `r_star` (issue #10). The example prints the reworded
+caption; every number above and below it is unchanged, and the analytic summary table was
+re-checked digit-for-digit against a fresh run at that commit.
+
 Regenerate:
 
 ```

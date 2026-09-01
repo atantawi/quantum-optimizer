@@ -86,7 +86,7 @@ out constant, so the loop would converge in one iteration. Under **UL**, ζ genu
 with load (e.g. `ζ = 3/2 − ρ/8` at balanced rates), so the fixed-point iteration does real
 work.
 
-### 3.2 The S₂ interpretation was wrong (paper vs. intent)
+### 3.2 The S₂ interpretation (paper vs. intent) — one ray of a family
 The paper ties the non-bottleneck server's capacity as `S₂ = S₁/r`, which forces
 `S₂·µ̂₂ = S₁·µ̂₁` — it **equalizes the two effective service rates** and destroys the ratio
 `r`. That was flagged as a mistake.
@@ -102,6 +102,17 @@ independent of the allocation. Knock-on effects:
   **`c_FJ = c₁ + c₂`** (not the paper's `c₁ + c₂/r`).
 - Stability condition: `S·mu > γ` (slower server binds). Since `m₁ < m₂`, this implies
   `m₂ > γ` too.
+
+**Update (2026-08-31, issue #10).** "Wrong" was too strong, and the correction is not free.
+Both rules are members of one family — the ray `m₂ = r*·m₁`, priced `c₁ + c₂·r*/r` — with the
+paper at `r* = 1` and the correction above at `r* = r`. So the paper's `c₁ + c₂/r` is the
+*exact* cost of its own S₂ rule rather than a fudge, and neither ray dominates: on the QCSC
+network at a shared budget the paper's ray is optimal in `classical_dominant` (worth 24.55%)
+and 5.47% worse in `quantum_dominant`. `ForkJoinStation` now takes `r_star`, defaulting to
+`r`, so the correction adopted here remains the behaviour and both policies are reachable.
+Stability still reads `S·mu > γ`, but `mu` is the *effectively* slower rate `µ̂₁·min(1, r*)`,
+which is what carries the implication above through `r* < 1`. Evidence and the local
+optimality condition: [`docs/forkjoin-s2-policy/findings.md`](forkjoin-s2-policy/findings.md).
 
 ### 3.3 FJ cost representation
 Decision: a FJ station stores **`c₁` and `c₂` separately**; the allocator forms

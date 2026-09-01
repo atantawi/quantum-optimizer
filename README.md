@@ -117,6 +117,12 @@ result = Optimizer(stations, budget=6 * min_feasible_budget(stations)).run()
 print(result.capacities, result.objective, result.converged)
 ```
 
+`ForkJoinStation` also takes an optional `r_star`, which picks the ray its two effective
+rates lie on (`m₂ = r_star·m₁`) and prices it `c₁ + c₂·r_star/r`. It defaults to `r`, giving
+both servers the same capacity `S` at cost `c₁ + c₂`; `r_star = 1` equalizes the two
+effective rates at cost `c₁ + c₂/r`, which is the paper's rule. Neither dominates — see
+[`docs/forkjoin-s2-policy/findings.md`](docs/forkjoin-s2-policy/findings.md).
+
 That form — a plain list of stations with hand-supplied `gamma` — remains fully supported.
 `examples/mixed_network.py` is the same three stations wired into a `Network` instead, so
 `gamma` is *derived* from the topology rather than supplied; it reaches the identical

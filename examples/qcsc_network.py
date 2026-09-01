@@ -101,29 +101,58 @@ def rates(workload, b):
     raise ValueError(f"unknown workload {workload!r}, expected one of {WORKLOADS}")
 
 
-def _fork_join(workload, b, name, c_qpu, c_gpu):
+class _QcscForkJoin(ForkJoinStation):
+    """ForkJoinStation that remembers which processing unit each of its servers is.
+
+    capacity_by_unit needs that map, and it is not recoverable from the station's own
+    fields: `balanced` has mu_q == mu_g and the unit-cost runs have c_qpu == c_gpu, so
+    neither the rates nor the costs discriminate. Unit names are QCSC vocabulary, so they
+    live here rather than in the library.
+    """
+
+    def __init__(self, *args, units, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.units = units
+
+    def capacity_toward(self, S, units):
+        """This station's contribution to each of `units`, in that order."""
+        own = dict(zip(self.units, self.server_capacities(S)))
+        return tuple(own[unit] for unit in units)
+
+
+def _fork_join(workload, b, name, c_qpu, c_gpu, r_star):
     """ForkJoinStation for a parallel phase: mu is the slower server, r = fast/slow.
 
     Costs attach to the SERVER, not to the speed, so the QPU branch costs c_qpu whether
     or not it is the bottleneck. That asymmetry is what distinguishes the two dominant
     workloads (spec section 5.1).
+
+    One comparison picks server 1, and `units` records the outcome, so the reporting map
+    and the (mu, r, c1, c2) assignment cannot drift apart.
     """
     mu_q, mu_g = rates(workload, b)
-    if mu_q <= mu_g:
-        return ForkJoinStation(mu=mu_q, r=mu_g / mu_q, c1=c_qpu, c2=c_gpu, name=name)
-    return ForkJoinStation(mu=mu_g, r=mu_q / mu_g, c1=c_gpu, c2=c_qpu, name=name)
+    units = ("qpu", "gpu") if mu_q <= mu_g else ("gpu", "qpu")
+    rate = {"qpu": mu_q, "gpu": mu_g}
+    cost = {"qpu": c_qpu, "gpu": c_gpu}
+    u1, u2 = units
+    return _QcscForkJoin(mu=rate[u1], r=rate[u2] / rate[u1], c1=cost[u1], c2=cost[u2],
+                         r_star=r_star, units=units, name=name)
 
 
-def build_qcsc_network(workload, *, c_qpu=C_QPU, c_gpu=C_GPU, c_cpu=C_CPU):
+def build_qcsc_network(workload, *, c_qpu=C_QPU, c_gpu=C_GPU, c_cpu=C_CPU,
+                      r_star=None):
     """The 14-station QCSC network for one workload. Costs are overridable so that the
-    QPU/GPU symmetry of the topology can be exercised under unit costs (spec 5.1)."""
+    QPU/GPU symmetry of the topology can be exercised under unit costs (spec 5.1).
+
+    `r_star` selects the fork-join ray (see qopt.ForkJoinStation); None keeps each
+    station's default r_star = r, which is the policy every recorded result was run at."""
     q_psq, g_psq = rates(workload, B_PSQ)
     q_psg, g_psg = rates(workload, B_PSG)
     q_ssq, g_ssq = rates(workload, B_SSQ)
     q_ssg, g_ssg = rates(workload, B_SSG)
     stations = [
         GG1Station.mm1(mu=MU_CPU, c=c_cpu, name="cpu_init_ps"),
-        _fork_join(workload, B_PP, "fj_pp", c_qpu, c_gpu),
+        _fork_join(workload, B_PP, "fj_pp", c_qpu, c_gpu, r_star),
         GG1Station.mm1(mu=q_psq, c=c_qpu, name="qpu_psq"),   # p0 branch: quantum first
         GG1Station.mm1(mu=g_psq, c=c_gpu, name="gpu_psq"),
         GG1Station.mm1(mu=g_psg, c=c_gpu, name="gpu_psg"),   # 1-p0 branch: classical first
@@ -134,7 +163,7 @@ def build_qcsc_network(workload, *, c_qpu=C_QPU, c_gpu=C_GPU, c_cpu=C_CPU):
         GG1Station.mm1(mu=g_ssq, c=c_gpu, name="gpu_ssq"),
         GG1Station.mm1(mu=g_ssg, c=c_gpu, name="gpu_ssg"),
         GG1Station.mm1(mu=q_ssg, c=c_qpu, name="qpu_ssg"),
-        _fork_join(workload, B_SP, "fj_sp", c_qpu, c_gpu),
+        _fork_join(workload, B_SP, "fj_sp", c_qpu, c_gpu, r_star),
         GG1Station.mm1(mu=MU_CPU, c=c_cpu, name="cpu_term_sp"),
     ]
     routes = [
@@ -182,8 +211,13 @@ UNITS_OF_PREFIX = {
 
 The single source of truth for both halves of the reporting contract: capacity_by_unit
 groups on this, and every station name must carry one of these prefixes. A fork-join maps
-to BOTH 'qpu' and 'gpu' because in qopt both of its servers receive the same S (see spec
-section 10 -- the paper instead sets S_2 = S_1/r, which qopt deliberately does not do).
+to BOTH 'qpu' and 'gpu' because it owns one server of each. The pair is UNORDERED here:
+which server is which flips with the workload, since server 1 is always the slower unit,
+so each station carries its own `units` field and capacity_by_unit asks for it.
+
+The two servers receive equal capacity only on the default ray r_star = r. The paper's
+rule is r_star = 1, which buys server 2 only S/r -- a different member of the same
+one-parameter family rather than a mistake (docs/forkjoin-s2-policy/, qopt.ForkJoinStation).
 """
 
 UNIT_PREFIXES = tuple(UNITS_OF_PREFIX)
@@ -191,13 +225,28 @@ UNIT_PREFIXES = tuple(UNITS_OF_PREFIX)
 
 
 def capacity_by_unit(network, capacities):
-    """Cumulative allocated capacity per unit type, grouped by UNITS_OF_PREFIX."""
+    """Cumulative allocated capacity per unit type, grouped by UNITS_OF_PREFIX.
+
+    A fork-join reports its two servers separately. They receive the same capacity only
+    at the default r_star = r, so adding S to both unit columns would overstate the
+    faster unit by r/r_star on any other ray.
+    """
     totals = {unit: 0.0 for units in UNITS_OF_PREFIX.values() for unit in units}
     for st, S in zip(network.stations, capacities):
         for prefix, units in UNITS_OF_PREFIX.items():
             if st.name.startswith(prefix):
-                for unit in units:
-                    totals[unit] += S
+                if len(units) == 1:
+                    totals[units[0]] += S
+                elif isinstance(st, _QcscForkJoin):
+                    for unit, amount in zip(units, st.capacity_toward(S, units)):
+                        totals[unit] += amount
+                else:
+                    # Adding S to every column was the old contract, and it is wrong on
+                    # any ray but r_star = r. Refuse rather than quietly overstate.
+                    raise ValueError(
+                        f"station {st.name!r} spans units {units} but cannot attribute "
+                        f"its capacity between them"
+                    )
                 break
         else:
             raise ValueError(
@@ -359,8 +408,8 @@ def main(argv=None):
 
     rows = run_analytic(budget)
     print_summary(rows, budget)
-    print("\n  (cumulative capacity: a fork-join's S counts on both sides, since both "
-          "of its servers receive it)")
+    print("\n  (cumulative capacity: a fork-join reports each server to its own unit; "
+          "on the default ray r_star = r both receive S)")
 
     url = os.environ.get("QOPT_QSIM_URL")
     if not url:
