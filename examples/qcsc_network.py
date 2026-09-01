@@ -144,8 +144,11 @@ def build_qcsc_network(workload, *, c_qpu=C_QPU, c_gpu=C_GPU, c_cpu=C_CPU,
     """The 14-station QCSC network for one workload. Costs are overridable so that the
     QPU/GPU symmetry of the topology can be exercised under unit costs (spec 5.1).
 
-    `r_star` selects the fork-join ray (see qopt.ForkJoinStation); None keeps each
-    station's default r_star = r, which is the policy every recorded result was run at."""
+    `r_star` selects the fork-join ray or the policy that chooses it (see
+    qopt.ForkJoinStation): a float, or one of R_STAR_INVARIANT_R / R_STAR_EQUAL_RATE /
+    R_STAR_TUNED. None keeps each station's default r_star = r, which is the policy every
+    recorded result was run at. R_STAR_TUNED reaches the objective a 0.02-grid sweep of
+    r_star found in all three workloads (findings section 7)."""
     q_psq, g_psq = rates(workload, B_PSQ)
     q_psg, g_psg = rates(workload, B_PSG)
     q_ssq, g_ssq = rates(workload, B_SSQ)

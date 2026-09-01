@@ -110,14 +110,21 @@ paper at `r* = 1` and the correction above at `r* = r`. So the paper's `c₁ + c
 network at a shared budget the paper's ray is optimal in `classical_dominant` (worth 24.55%)
 and 5.47% worse in `quantum_dominant`. `ForkJoinStation` now takes `r_star`, defaulting to
 `r`, so the correction adopted here remains the behaviour and both policies are reachable.
+It is also **solvable**: `r_star = R_STAR_TUNED` re-solves the local optimality condition
+at the station's own spend on every optimizer iteration — a fixed point nested inside
+eqs 21/22 — and reaches what a grid sweep of `r_star` finds in all three workloads,
+recovering the paper's `r* = 1` exactly in `classical_dominant`, where it is optimal.
 Stability still reads `S·mu > γ`, but `mu` is the *effectively* slower rate `µ̂₁·min(1, r*)`,
 which is what carries the implication above through `r* < 1`. Evidence and the local
 optimality condition: [`docs/forkjoin-s2-policy/findings.md`](forkjoin-s2-policy/findings.md).
 
 ### 3.3 FJ cost representation
 Decision: a FJ station stores **`c₁` and `c₂` separately**; the allocator forms
-`c_FJ = c₁ + c₂` internally. (The alternative — a single combined `c` — was rejected in
-favor of faithfully representing the two physical servers.)
+`c_FJ` internally. (The alternative — a single combined `c` — was rejected in favor of
+faithfully representing the two physical servers.) Since issue #10 that combination is
+`c₁ + c₂·r*/r`, the exact cost of the two capacities the station's ray buys, which is
+`c₁ + c₂` at the default `r* = r`; storing the two costs separately is what makes any
+other ray priceable at all.
 
 ### 3.4 `ζ = 0` instability guard
 An initial `ζ_i⁽⁰⁾ = 0` collapses eq 21 to `S_i = γ_i/µ̂_i` (the stability boundary),

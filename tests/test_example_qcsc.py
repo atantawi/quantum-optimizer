@@ -438,3 +438,130 @@ def test_capacity_by_unit_refuses_a_multi_unit_station_that_cannot_split():
         gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0, name="fj_pp")
     with pytest.raises(ValueError, match="cannot attribute its capacity"):
         capacity_by_unit(network, [1.0] * len(network.stations))
+
+
+# --------------------------------------------------------------------------------------
+# The nested r_star fixed point on the real 14-station network (issue #10 item 3). Every
+# reference figure is from findings section 7, produced at this same budget C = 41.04 by an
+# independent probe that patched the example's own topology.
+# --------------------------------------------------------------------------------------
+
+# findings section 7: objective under the paper's policy, and under the best ray found by
+# sweeping r_star on a 0.02 grid. Published to 6dp, so compared with a matching absolute
+# tolerance -- unlike EXPECTED_OBJECTIVE above, which carries the incumbent's full floats.
+# Half a unit of the last printed digit would be 5e-7, and `quantum_dominant`'s
+# equal-rate objective sits 4.99e-7 from its published figure -- passing with 0.2% of the
+# tolerance to spare, so any float-level reordering elsewhere would flip it red for
+# reasons unrelated to the policy. Doubled, which is still far tighter than any regression
+# in the ray this pins would produce.
+PUBLISHED_DP = 1e-6
+FINDINGS_SECTION_7 = {
+    "balanced":           dict(equal=6.401440, best=6.249439),
+    "quantum_dominant":   dict(equal=4.776428, best=4.431693),
+    "classical_dominant": dict(equal=2.613335, best=2.613335),
+}
+
+# findings section 7: the best ray found by sweeping r_star on a 0.02 grid. Compared with
+# that grid's own resolution as the tolerance, which is the only defensible figure -- a
+# sweep cannot locate an optimum finer than its step.
+#
+# Deliberately NOT compared against section 7's other triple, 1.4457 / 2.3195 / 1.0000.
+# Those are the local condition evaluated at the spend the INNER-SPLIT embedding converged
+# to, and that embedding is the one section 10 item 4 says not to use -- it converged at a
+# different spend (7.96 against 7.49), so its rays are not this computation's target. They
+# agree to 1.2e-3 and 1.5e-3, which is corroboration, not a specification.
+FINDINGS_BEST_RAY = {
+    "balanced": 1.440, "quantum_dominant": 2.320, "classical_dominant": 1.000,
+}
+SWEEP_GRID = 0.02
+
+
+def _qcsc_run(workload, r_star):
+    from qopt import Optimizer
+
+    from examples.qcsc_network import build_qcsc_network, shared_budget
+
+    net = build_qcsc_network(workload, r_star=r_star)
+    result = Optimizer(net, budget=shared_budget()).run()
+    rays = [st.r_star for st in net.stations if st.name.startswith("fj")]
+    return net, result, rays
+
+
+@pytest.mark.parametrize("workload", sorted(FINDINGS_SECTION_7))
+def test_named_policies_reproduce_the_recorded_objectives(workload):
+    """The two incumbents, selected by name, must land on their published numbers."""
+    from qopt import R_STAR_EQUAL_RATE, R_STAR_INVARIANT_R
+
+    assert _qcsc_run(workload, R_STAR_INVARIANT_R)[1].objective == \
+        pytest.approx(EXPECTED_OBJECTIVE[workload], rel=1e-12)
+    assert _qcsc_run(workload, R_STAR_EQUAL_RATE)[1].objective == \
+        pytest.approx(FINDINGS_SECTION_7[workload]["equal"], abs=PUBLISHED_DP)
+
+
+@pytest.mark.parametrize("workload", sorted(FINDINGS_SECTION_7))
+def test_tuning_reaches_the_swept_optimum_without_being_told_where_it_is(workload):
+    """The nested fixed point must find what a 0.02-grid sweep of r_star found.
+
+    Asserted as "no worse than", because the two are not the same computation: the sweep
+    picked the best point of a grid, while this solves the local condition at its own
+    converged spend, so it is free to land BETWEEN grid points and score marginally
+    better. It may not land worse.
+    """
+    from qopt import R_STAR_TUNED
+
+    want = FINDINGS_SECTION_7[workload]
+    _, result, rays = _qcsc_run(workload, R_STAR_TUNED)
+    assert result.converged
+    assert result.objective <= want["best"] + PUBLISHED_DP
+    # Both fork-joins share gamma and rates, so they must agree exactly.
+    assert rays[0] == pytest.approx(rays[1], rel=1e-12)
+    assert rays[0] == pytest.approx(FINDINGS_BEST_RAY[workload], abs=SWEEP_GRID)
+
+
+def test_tuning_recovers_the_papers_rule_exactly_where_it_is_optimal():
+    """`classical_dominant` is the one workload where r_star = 1 is the true optimum, and
+    where the incumbent loses to it by 24.55%. Tuning has to find that on its own -- and
+    find it exactly, not merely nearby, since r_star = 1 is `t_bot`'s kink."""
+    from qopt import R_STAR_EQUAL_RATE, R_STAR_TUNED
+
+    _, tuned, rays = _qcsc_run("classical_dominant", R_STAR_TUNED)
+    _, paper, _ = _qcsc_run("classical_dominant", R_STAR_EQUAL_RATE)
+    assert rays == pytest.approx([1.0, 1.0], abs=1e-9)
+    assert tuned.objective == pytest.approx(paper.objective, rel=1e-9)
+
+
+@pytest.mark.parametrize("workload", sorted(FINDINGS_SECTION_7))
+def test_tuning_spends_the_whole_shared_budget(workload):
+    """Pins the budget identity at the fixed point. Like its unit-level twin it catches a
+    WRONG rescale but not a missing one -- once r_star settles, `alloc_cost` stops changing
+    and eq 21's own allocation exhausts C either way. The mechanism is pinned by
+    test_retune_preserves_the_stations_spend_exactly."""
+    from qopt import R_STAR_TUNED
+
+    from examples.qcsc_network import shared_budget
+
+    net, result, _ = _qcsc_run(workload, R_STAR_TUNED)
+    spent = sum(st.alloc_cost * S for st, S in zip(net.stations, result.capacities))
+    assert spent == pytest.approx(shared_budget(), rel=1e-12)
+
+
+@pytest.mark.parametrize("workload", sorted(FINDINGS_SECTION_7))
+def test_capacity_by_unit_follows_a_tuned_station(workload):
+    """The reporting contract has to track a ray chosen during the run, not at
+    construction -- `capacity_by_unit` reads `r_star` when asked, so it does."""
+    from qopt import R_STAR_TUNED
+
+    from examples.qcsc_network import build_qcsc_network, capacity_by_unit
+
+    net, result, rays = _qcsc_run(workload, R_STAR_TUNED)
+    stations = list(net.stations)
+    fj = next(st for st in stations if st.name == "fj_pp")
+    S = result.capacities[stations.index(fj)]
+    # Server 2's share moved with the tuned ray, and the report has to use the moved one.
+    assert fj.server_capacities(S)[1] == pytest.approx(S * rays[0] / fj.r_base, rel=1e-12)
+    tuned_total = capacity_by_unit(net, result.capacities)
+    frozen = capacity_by_unit(
+        build_qcsc_network(workload, r_star=fj.r_base), result.capacities)
+    slow, fast = fj.units
+    assert tuned_total[fast] != pytest.approx(frozen[fast], rel=1e-9)
+    assert tuned_total[slow] == pytest.approx(frozen[slow], rel=1e-12)

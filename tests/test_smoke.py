@@ -41,3 +41,13 @@ def test_root_exports_the_whole_exception_hierarchy():
     ):
         assert issubclass(subclass, qopt.SimulationError)
         assert issubclass(subclass, qopt.QOptError)
+
+
+def test_r_star_policy_constants_are_exported():
+    import qopt
+    assert (qopt.R_STAR_INVARIANT_R, qopt.R_STAR_EQUAL_RATE,
+            qopt.R_STAR_TUNED, qopt.R_STAR_FIXED) == \
+        ("invariant-r", "equal-rate", "tuned", "fixed")
+    assert all(n in qopt.__all__ for n in
+               ("R_STAR_INVARIANT_R", "R_STAR_EQUAL_RATE", "R_STAR_TUNED",
+                "R_STAR_FIXED", "optimal_ray"))

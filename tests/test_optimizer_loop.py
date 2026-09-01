@@ -6,6 +6,12 @@ from qopt.allocator import min_feasible_budget
 from qopt.analyzer import AnalyticAnalyzer, Analyzer, Evaluation
 from qopt.network import Network, Route
 from qopt.optimizer import Optimizer, Result
+from qopt.forkjoin_policy import (
+    R_STAR_EQUAL_RATE,
+    R_STAR_INVARIANT_R,
+    R_STAR_TUNED,
+    optimal_ray,
+)
 from qopt.station import ForkJoinStation, GG1Station
 
 
@@ -425,3 +431,118 @@ def test_max_iter_exhaustion_still_warns_and_reports_max_iter():
     assert result.stop_reason == "max_iter"
     assert result.converged is False
     assert math.isfinite(result.residual)
+
+
+# --------------------------------------------------------------------------------------
+# Tuned r_star: the nested fixed point (issue #10 item 3).
+# --------------------------------------------------------------------------------------
+
+def _tuned_pair():
+    """A tuned fork-join priced like quantum_dominant, plus one ordinary queue."""
+    fj = ForkJoinStation(gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0,
+                         r_star=R_STAR_TUNED, name="fj")
+    return [fj, GG1Station.mm1(gamma=0.9, mu=1.0, c=1.0, name="q")]
+
+
+def test_tuned_station_reaches_a_self_consistent_fixed_point():
+    """All three equations must hold at once at the answer: eq 21 prices the station at
+    its own r_star, eq 22 takes zeta at the ray it runs, and r_star is the local optimum
+    for the spend eq 21 gave it. The last of those is what makes it a NESTED fixed point,
+    and it is what fails if the loop is allowed to converge before r_star settles.
+    """
+    stations = _tuned_pair()
+    fj = stations[0]
+    C = 4.0 * min_feasible_budget(stations)
+    res = Optimizer(stations, C).run()
+    assert res.converged
+    spend = res.capacities[0] * fj.alloc_cost
+    assert fj.r_star == pytest.approx(
+        optimal_ray(0.45, 1.0, 4.0, 4.0, 1.0, spend), rel=1e-9)
+    assert fj.r_star != 4.0          # it actually moved off the incumbent ray
+
+
+def test_tuning_spends_the_whole_budget_exactly():
+    """The budget identity has to survive a policy that reprices its own station.
+
+    This pins the invariant at the fixed point, where it holds for either of two reasons:
+    r_star has stopped moving, so eq 21's own allocation already exhausts C, AND `retune`
+    returns a spend-preserving capacity. It therefore catches a wrong rescale factor but
+    not a missing one -- the mechanism itself is pinned at station level, by
+    test_retune_preserves_the_stations_spend_exactly.
+    """
+    stations = _tuned_pair()
+    C = 4.0 * min_feasible_budget(stations)
+    res = Optimizer(stations, C).run()
+    spent = sum(st.alloc_cost * S for st, S in zip(stations, res.capacities))
+    assert spent == pytest.approx(C, rel=1e-12)
+
+
+def test_tuning_beats_both_incumbent_policies_at_the_same_budget():
+    def objective(r_star):
+        stations = _tuned_pair()
+        stations[0] = ForkJoinStation(gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0,
+                                      r_star=r_star, name="fj")
+        C = 4.0 * min_feasible_budget(_tuned_pair())
+        return Optimizer(stations, C).run().objective
+
+    tuned = objective(R_STAR_TUNED)
+    assert tuned < objective(R_STAR_INVARIANT_R)
+    assert tuned < objective(R_STAR_EQUAL_RATE)
+
+
+def test_tuning_does_not_degrade_convergence():
+    """A tuned run must not cost materially more iterations than a fixed ray.
+
+    What this actually guards is the INNER SOLVE's precision: replacing the bisection with
+    a golden-section minimizer of `t_ul` takes 9 iterations here against bisection's 6 and
+    the incumbent's 5, because r* then carries sqrt(epsilon) noise that keeps the outer
+    step above `tol`. That is a different mechanism from findings section 7's 9 iterations
+    under the inner-split embedding, which came from a mispriced zeta on a different
+    network -- the numbers coincide, the causes do not.
+    """
+    stations = _tuned_pair()
+    C = 4.0 * min_feasible_budget(stations)
+    tuned = Optimizer(stations, C).run()
+    incumbent = Optimizer(
+        [ForkJoinStation(gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0, name="fj"),
+         GG1Station.mm1(gamma=0.9, mu=1.0, c=1.0, name="q")], C).run()
+    assert tuned.converged and incumbent.converged
+    assert tuned.iterations <= incumbent.iterations + 2
+
+
+def test_tuning_survives_the_stochastic_path_with_damping_and_a_warm_start():
+    """r_star is a function of the station's spend and gamma alone, never of the measured
+    E[T], so it carries no simulation noise and needs no damping of its own. It also has
+    to survive the analytic warm start, which shares these station objects and therefore
+    tunes them before the simulated phase begins.
+    """
+    stations = _tuned_pair()
+    fj = stations[0]
+    C = 4.0 * min_feasible_budget(stations)
+    fake = DeterministicFake()
+    res = Optimizer(stations, C, analyzer=fake).run()
+    assert res.converged
+    assert res.warm_start_iterations > 0        # the warm start ran, and tuned
+    assert fj.r_star == pytest.approx(
+        optimal_ray(0.45, 1.0, 4.0, 4.0, 1.0, res.capacities[0] * fj.alloc_cost),
+        rel=1e-9)
+    spent = sum(st.alloc_cost * S for st, S in zip(stations, res.capacities))
+    assert spent == pytest.approx(C, rel=1e-12)
+
+
+def test_tuned_and_fixed_at_the_tuned_ray_reach_the_same_answer():
+    """The fixed point's defining property, stated as an equivalence: freezing r_star at
+    the value tuning converged to must reproduce the same allocation. If it did not, the
+    tuned run would have stopped somewhere that is not a fixed point of eq 21 at its own
+    prices."""
+    stations = _tuned_pair()
+    C = 4.0 * min_feasible_budget(stations)
+    tuned = Optimizer(stations, C).run()
+    frozen_stations = [
+        ForkJoinStation(gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0,
+                        r_star=stations[0].r_star, name="fj"),
+        GG1Station.mm1(gamma=0.9, mu=1.0, c=1.0, name="q"),
+    ]
+    frozen = Optimizer(frozen_stations, C).run()
+    assert frozen.capacities == pytest.approx(tuned.capacities, rel=1e-8)
+    assert frozen.objective == pytest.approx(tuned.objective, rel=1e-9)

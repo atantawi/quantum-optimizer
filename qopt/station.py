@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 
 from qopt.exceptions import InstabilityError
 from qopt.forkjoin_approx import t_ul
+from qopt.forkjoin_policy import R_STAR_TUNED, optimal_ray, resolve_r_star
 
 
 def distribution_dict(rate, scv):
@@ -133,6 +134,19 @@ class Station(ABC):
         """Eq 22 evaluated at this station's own analytic sojourn time."""
         return self.zeta_from(self.sojourn_time(S), S)
 
+    def retune(self, S):
+        """Adapt any free internal policy parameter to capacity S, returning the capacity
+        that buys the same SPEND under the station's possibly-changed `alloc_cost`.
+
+        Called by the Optimizer once per iteration, after eq 21 has allocated. A station
+        with no free parameter has nothing to adapt and nothing to reprice, so the default
+        returns S untouched -- this hook costs every other station type exactly nothing.
+
+        Returning a capacity rather than mutating S is what keeps the budget satisfied
+        across a repricing, and what keeps S meaning what the station says it means.
+        """
+        return S
+
     def check_stable(self, S):
         """Raise InstabilityError if capacity S leaves this station unstable.
 
@@ -225,9 +239,26 @@ class ForkJoinStation(Station):
 
     so server 2 buys capacity S*r_star/r and the station spends S*(c1 + c2*r_star/r).
     A ray is what keeps spend linear in S, which is what eq 21's budget column requires.
-    Both established policies are members: `r_star = r` (the default) gives both servers
-    the same capacity S and costs c1 + c2, and `r_star = 1` equalizes the effective rates
-    and costs c1 + c2/r, which is the paper's rule. See docs/forkjoin-s2-policy/.
+
+    `r_star` takes either a positive float -- some fixed ray of the family -- or one of
+    three named policies, and both established rules are members of the family:
+
+        R_STAR_INVARIANT_R  r_star = r, the default: both servers get capacity S, cost
+                            c1 + c2. qopt's incumbent.
+        R_STAR_EQUAL_RATE   r_star = 1: server 2 gets S/r, cost c1 + c2/r. The paper's
+                            rule, and c1 + c2/r is the exact cost of its own capacities.
+        R_STAR_TUNED        r_star solved from the local optimality condition at this
+                            station's own spend, once per optimizer iteration. Neither
+                            incumbent dominates the other -- the paper's rule wins
+                            `classical_dominant` by 24.55% and loses `quantum_dominant`
+                            by 5.47% -- and this finds the better ray in both.
+
+    A tuned station starts on the ray r_star = 1, which is the one that minimizes its
+    stability floor -- the Optimizer checks feasibility once, before any retune, so
+    starting at the incumbent would refuse budgets a tuned station can actually serve. It
+    is then MUTATED by `retune` during a run, so its final `r_star` is readable off the
+    station afterwards. See
+    docs/forkjoin-s2-policy/ and qopt.forkjoin_policy.
 
     Fields the allocator and eqs 21/22 read, which are EFFECTIVE and not the constructor
     arguments:
@@ -246,10 +277,7 @@ class ForkJoinStation(Station):
                  name=None):
         if not math.isfinite(r) or r < 1:
             raise ValueError(f"r must be a finite number >= 1, got {r}")
-        if r_star is None:
-            r_star = r
-        elif not math.isfinite(r_star) or r_star <= 0:
-            raise ValueError(f"r_star must be a finite number > 0, got {r_star}")
+        self._policy, r_star = resolve_r_star(r_star, r)
         # Anchor on whichever server the ray leaves effectively slower, so eq 21's base
         # term gamma/mu provisions the BINDING server and eq 22's zeta is taken against a
         # rate the station actually has. Without this, r_star < 1 silently starves server
@@ -261,11 +289,63 @@ class ForkJoinStation(Station):
             raise ValueError(f"c1 must be a finite number > 0, got {c1}")
         if not math.isfinite(c2) or c2 <= 0:
             raise ValueError(f"c2 must be a finite number > 0, got {c2}")
-        self.r = max(1.0, r_star) / k
+        self.mu_base = mu
         self.r_base = r
-        self.r_star = r_star
         self.c1 = c1
         self.c2 = c2
+        self._anchor(r_star)
+
+    def _anchor(self, r_star):
+        """Move onto the ray `r_star`, re-deriving the effective `mu` and `r` from it.
+
+        `mu` is recomputed from `mu_base` by the SAME expression __init__ handed to
+        Station, so re-anchoring to the constructed ray is bit-for-bit a no-op.
+        """
+        k = min(1.0, r_star)
+        self.r_star = r_star
+        self.mu = self.mu_base * k
+        self.r = max(1.0, r_star) / k
+
+    @property
+    def policy(self):
+        """Which r_star policy this station runs (a qopt.R_STAR_* constant).
+
+        Read-only and fixed at construction: retuning moves `r_star` within the `tuned`
+        policy, it does not consume or change the policy itself.
+        """
+        return self._policy
+
+    def retune(self, S):
+        """Under `tuned`, move to the locally optimal ray for this station's own spend.
+
+        The spend is `S*alloc_cost`, which in effective rates is exactly
+        `beta_1*m1 + beta_2*m2` with `beta_k = c_k/mu_k` -- so the local condition is
+        applied at the spend eq 21 gave, priced as eq 21 priced it. That consistency is
+        the whole difference from the inner-split embedding this replaces, which re-split
+        at a frozen `c1 + c2`: there "S" stopped meaning "server 1's capacity", eq 22's
+        zeta anchored to a rate the station did not have, and convergence degraded.
+
+        One scalar minimization, no inner iteration -- at a fixed spend the optimum is
+        determined. The fixed point is closed by the OUTER loop, because the spend comes
+        from eq 21, whose prices depend on the r_star chosen here.
+
+        Deliberately mutating, and the only method that rewrites a station's queueing
+        coefficients (`bind_gamma` mutates too, but only to attach a derived gamma once):
+        `r_star`, `mu` and `r` are what the allocator reads, so the retuned station has to
+        *be* the retuned station. The chosen ray is readable off `r_star` after a run.
+
+        One consequence: a tuned station is STATEFUL ACROSS RUNS. It sits on the starting
+        ray only as CONSTRUCTED, so optimizing the same objects a second time begins from
+        the first run's answer. That reaches the same place -- the differences measured are
+        at the last ulp -- but the run is no longer a pure function of
+        (stations-as-constructed, budget). Construct fresh stations per run if that matters.
+        """
+        if self._policy != R_STAR_TUNED:
+            return S
+        spend = S * self.alloc_cost
+        self._anchor(optimal_ray(self.gamma, self.mu_base, self.r_base,
+                                 self.c1, self.c2, spend))
+        return spend / self.alloc_cost
 
     @property
     def alloc_cost(self):

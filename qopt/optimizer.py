@@ -176,6 +176,38 @@ class Optimizer:
                 S_new = [
                     (1.0 - theta) * s + theta * t for s, t in zip(S, S_target)
                 ]
+            # Let each station adapt any free internal policy parameter to the capacity
+            # it just received, repricing itself and handing back the capacity that buys
+            # the same spend. Spend-preserving, so the budget stays exhausted and eq 21
+            # does not have to be re-run; a no-op returning `s` itself for every station
+            # without a free parameter, which makes this bit-for-bit inert on the default
+            # path. A fork-join's r_star is the only such parameter today (issue #10).
+            #
+            # Placed before the residual so that the step reported for an iteration
+            # covers everything that moved in it. That ordering is tidiness, not
+            # correctness: r_star only reaches the stopping rule through `alloc_cost` and
+            # so through S, and a settled S already implies a settled r_star, one
+            # iteration later at worst. What DOES matter is that the inner solve be
+            # precise -- see forkjoin_policy._min_on_spend_line. A policy parameter
+            # carrying sqrt(epsilon) noise makes this term jitter above a 1e-9 tolerance
+            # for several iterations after the answer has been reached, and placing the
+            # retune here is what exposes that rather than hiding it.
+            #
+            # No damping is needed here -- but NOT because r_star is noise-free. It is a
+            # function of the station's spend, and on the simulated path that spend
+            # descends from a measured E[T], so noise does reach it (injecting +/-2% noise
+            # into E[T] moves the converged r_star by ~6e-4 relative). The reason is that
+            # the retune adds no noise of its OWN: it is an exact function of the S handed
+            # to it, and that S has already been damped, so damping here would attenuate
+            # one perturbation twice. And a retune cannot make the budget infeasible: it
+            # lands the station strictly inside its own stability region, so
+            # floor_i < spend_i for every station and sum(floor) < sum(spend) == C. That
+            # holds only because forkjoin_policy guards the ray it returns against the
+            # float cancellation that can otherwise place it just outside -- without that
+            # guard this paragraph was false, and the violation escaped as an
+            # InstabilityError raised from inside this loop.
+            S_new = [st.retune(s) for st, s in zip(stations, S_new)]
+
             residual = max(abs(a - b) for a, b in zip(S_new, S))
             S = S_new
 
@@ -187,6 +219,13 @@ class Optimizer:
             # `allocate`'s output. Comparing either against the damped step would scale it
             # by 1/theta -- `tol=1e-9` would mean 2e-9 and `noise_kappa=1.0` would mean 2.0
             # at the stochastic default theta=0.5.
+            #
+            # One caveat since the retune moved above: a retune's rescale is NOT damped,
+            # so dividing by theta scales that part of the step up rather than restoring
+            # it (measured at theta = 0.5: a fork-join's damped move 3.6e-2 against its
+            # undamped retune move 1.6e-1). The bias is conservative -- it can only make
+            # the loop harder to stop, never easier -- and in practice an ordinary station
+            # is the argmax of the max() below, so it does not reach `step` at all.
             #
             # Normalizing the step once, rather than scaling each term, keeps both knobs
             # meaning exactly what they say at every damping value, and keeps `tol`

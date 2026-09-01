@@ -73,3 +73,14 @@ def test_construction_validation(kwargs):
 def test_invalid_cov_rejected(cov_a, cov_s):
     with pytest.raises(ValueError):
         GG1Station(gamma=0.5, mu=1.0, c=1.0, cov_a=cov_a, cov_s=cov_s)
+
+
+def test_retune_is_a_no_op_for_a_station_with_no_free_policy_parameter():
+    """The hook exists on the base class so the Optimizer can call it unconditionally.
+    A single-server station has nothing to reprice, so it must return S untouched and
+    leave its own coefficients alone."""
+    st = GG1Station.mm1(gamma=0.6, mu=1.0, c=2.0, name="q")
+    before = (st.mu, st.alloc_cost)
+    for S in (1.0, 2.5, 1e6):
+        assert st.retune(S) is S
+    assert (st.mu, st.alloc_cost) == before
