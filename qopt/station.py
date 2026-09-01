@@ -147,6 +147,20 @@ class Station(ABC):
         """
         return S
 
+    def reset_policy(self):
+        """Restore any free internal policy parameter to its constructed value.
+
+        `retune` mutates, so the Optimizer calls this once at the start of every run to
+        undo whatever a previous run left behind. That is what keeps a run a pure function
+        of (stations-as-constructed, budget) even when the same objects are reused, and it
+        matters beyond reproducibility: the retuned parameter can move the station's own
+        stability floor, and the Optimizer's feasibility check reads that floor BEFORE the
+        first retune gets a chance to correct it.
+
+        A station with no free parameter has nothing to restore, so the default does
+        nothing -- this hook costs every other station type exactly nothing.
+        """
+
     def check_stable(self, S):
         """Raise InstabilityError if capacity S leaves this station unstable.
 
@@ -293,6 +307,7 @@ class ForkJoinStation(Station):
         self.r_base = r
         self.c1 = c1
         self.c2 = c2
+        self._initial_r_star = r_star
         self._anchor(r_star)
 
     def _anchor(self, r_star):
@@ -334,11 +349,10 @@ class ForkJoinStation(Station):
         `r_star`, `mu` and `r` are what the allocator reads, so the retuned station has to
         *be* the retuned station. The chosen ray is readable off `r_star` after a run.
 
-        One consequence: a tuned station is STATEFUL ACROSS RUNS. It sits on the starting
-        ray only as CONSTRUCTED, so optimizing the same objects a second time begins from
-        the first run's answer. That reaches the same place -- the differences measured are
-        at the last ulp -- but the run is no longer a pure function of
-        (stations-as-constructed, budget). Construct fresh stations per run if that matters.
+        Mutation makes a tuned station stateful, so `reset_policy` exists to undo it and
+        the Optimizer calls that at the start of every run. Reusing the same objects is
+        therefore safe and bit-for-bit reproducible; between runs, though, `r_star` reads
+        as the last run's answer rather than as the constructed ray.
         """
         if self._policy != R_STAR_TUNED:
             return S
@@ -346,6 +360,26 @@ class ForkJoinStation(Station):
         self._anchor(optimal_ray(self.gamma, self.mu_base, self.r_base,
                                  self.c1, self.c2, spend))
         return spend / self.alloc_cost
+
+    def reset_policy(self):
+        """Return to the constructed ray, undoing every `retune` a previous run applied.
+
+        Inert on every policy but `tuned`, whose ray is the only one that moves: for the
+        others this re-anchors to the value already held, which `_anchor` does bit-for-bit.
+
+        For `tuned` it is load-bearing, not just hygiene. The station's floor over the
+        family is minimized at exactly the constructed ray r_star = 1, and strictly so, so
+        a run that ends anywhere else advertises a higher floor than the policy's own; and
+        the Optimizer evaluates
+        `min_feasible_budget` ONCE, before the first retune. Without this a station reused
+        at a lower budget rejects it against the PREVIOUS run's floor -- so a descending
+        budget sweep broke partway down while a freshly constructed equivalent converged.
+
+        Restoring the ray is the whole fix, and repricing the floor instead would not be:
+        eq 21 is allocated before the first retune too, so at a budget between the two
+        floors a stale ray produces negative slack and an immediate InstabilityError.
+        """
+        self._anchor(self._initial_r_star)
 
     @property
     def alloc_cost(self):

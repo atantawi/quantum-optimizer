@@ -84,3 +84,13 @@ def test_retune_is_a_no_op_for_a_station_with_no_free_policy_parameter():
     for S in (1.0, 2.5, 1e6):
         assert st.retune(S) is S
     assert (st.mu, st.alloc_cost) == before
+
+
+def test_reset_policy_is_a_no_op_for_a_station_with_no_free_policy_parameter():
+    """The other half of the same hook pair: the Optimizer restores every station's policy
+    parameter before it checks feasibility, so this must also be callable unconditionally
+    and leave a single-server station exactly as it was."""
+    st = GG1Station.mm1(gamma=0.6, mu=1.0, c=2.0, name="q")
+    before = (st.mu, st.alloc_cost)
+    assert st.reset_policy() is None
+    assert (st.mu, st.alloc_cost) == before

@@ -156,8 +156,9 @@ not a fudge factor.
 R_STAR_TUNED = "tuned"
 """Solve `r_star` from the local optimality condition at the station's own spend.
 
-The station starts on the incumbent ray and is retuned by the optimizer each iteration,
-making `r_star` the inner variable of a nested fixed point.
+The station starts on the ray `r_star = 1` -- the one that minimizes its stability floor,
+see `_INITIAL_R_STAR` -- and is retuned by the optimizer each iteration, making `r_star`
+the inner variable of a nested fixed point.
 """
 
 R_STAR_FIXED = "fixed"

@@ -511,10 +511,13 @@ def test_tuning_does_not_degrade_convergence():
 
 
 def test_tuning_survives_the_stochastic_path_with_damping_and_a_warm_start():
-    """r_star is a function of the station's spend and gamma alone, never of the measured
-    E[T], so it carries no simulation noise and needs no damping of its own. It also has
-    to survive the analytic warm start, which shares these station objects and therefore
-    tunes them before the simulated phase begins.
+    """r_star does carry simulation noise -- it is a function of the station's spend, and
+    on this path that spend descends from a measured E[T] (injecting +/-2% noise into E[T]
+    moves the converged r_star by ~6e-4 relative). It still needs no damping of its own,
+    but for a different reason: the retune adds no noise of its OWN, being an exact
+    function of an S that has already been damped, so damping here would attenuate one
+    perturbation twice. r_star also has to survive the analytic warm start, which shares
+    these station objects and therefore tunes them before the simulated phase begins.
     """
     stations = _tuned_pair()
     fj = stations[0]
@@ -528,6 +531,100 @@ def test_tuning_survives_the_stochastic_path_with_damping_and_a_warm_start():
         rel=1e-9)
     spent = sum(st.alloc_cost * S for st, S in zip(stations, res.capacities))
     assert spent == pytest.approx(C, rel=1e-12)
+
+
+def test_a_descending_budget_sweep_may_reuse_tuned_stations():
+    """A tuned station that has already run must not refuse a budget it can serve.
+
+    `retune` mutates the ray, and the ray it lands on at a generous budget advertises a
+    HIGHER stability floor than the policy's minimum at r_star = 1. Since the Optimizer
+    checks `min_feasible_budget` once, before any retune, a station reused at a lower
+    budget would fail that check on a floor belonging to the previous run -- so feasibility
+    depended on run history, and a descending sweep broke partway down. Restoring the
+    starting ray first is what makes the check see the policy's own floor.
+    """
+    stations = _tuned_pair()
+    floor = min_feasible_budget(stations)
+    Optimizer(stations, 20.0 * floor).run()
+    stale = min_feasible_budget(stations)
+    assert stale > floor          # the high-budget ray really does advertise more
+    C = 0.5 * (floor + stale)     # feasible for the policy, not for the ray it ended on
+    reused = Optimizer(stations, C).run()
+    fresh = Optimizer(_tuned_pair(), C).run()
+    assert reused.converged
+    assert reused.capacities == fresh.capacities        # bit-for-bit
+    assert reused.objective == fresh.objective
+
+
+# The single tuned station of the descending-sweep report, kept separate from
+# `_tuned_pair` so the two floors are the station's own and can be pinned as numbers.
+FJ_SWEEP = dict(gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0)
+
+
+def test_the_descending_sweep_figures_on_record():
+    """Pins the measured figures docs/forkjoin-s2-policy/implementation.md cites for this,
+    so that document stays executable rather than transcribed."""
+    st = ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")
+    floor = min_feasible_budget([st])
+    assert floor == pytest.approx(1.9125, rel=1e-12)
+    Optimizer([st], 20.0 * floor).run()
+    assert st.r_star == pytest.approx(2.6925527241298357, rel=1e-9)
+    assert min_feasible_budget([st]) == pytest.approx(2.102912181464607, rel=1e-9)
+
+    C = 2.008125          # above the policy's floor, below the ray it ended on
+    reused = Optimizer([st], C).run()
+    control = [ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")]
+    fresh = Optimizer(control, C).run()
+    assert reused.converged
+    assert reused.capacities == fresh.capacities
+    assert reused.objective == fresh.objective
+
+
+def test_a_repriced_floor_would_not_have_been_enough_on_its_own():
+    """Why the reset restores the RAY, rather than the feasibility check reading a
+    policy-aware floor off a station left on a stale one.
+
+    eq 21 is allocated before the first retune too, so at a budget between the two floors
+    the stale ray gives NEGATIVE slack: accepting that budget without restoring the ray
+    trades a clean rejection for an InstabilityError raised from inside the loop, which is
+    strictly worse. This pins that arithmetic, so the reset cannot be "simplified" into a
+    floor override.
+    """
+    from qopt.allocator import allocate
+    from qopt.exceptions import InstabilityError
+
+    st = ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")
+    policy_floor = min_feasible_budget([st])
+    Optimizer([st], 20.0 * policy_floor).run()          # leaves the ray at ~2.69
+    stale_floor = min_feasible_budget([st])
+    C = 0.5 * (policy_floor + stale_floor)
+    assert policy_floor < C < stale_floor
+
+    slack = C - st.alloc_cost * st.gamma / st.mu
+    assert slack == pytest.approx(-0.09520609073230357, rel=1e-9)
+    S = allocate([st], C, [st.default_zeta])
+    assert S[0] * st.mu == pytest.approx(0.4296269472367134, rel=1e-9)
+    with pytest.raises(InstabilityError):
+        st.check_stable(S[0])
+
+    # And the real path, which restores the ray, serves that same budget.
+    assert Optimizer([st], C).run().converged
+
+
+def test_reusing_tuned_stations_reproduces_a_fresh_run_exactly():
+    """A run is a pure function of (stations-as-constructed, budget), tuning included.
+
+    Without the reset the second run warm-starts from the first's answer, which is a
+    different iterate sequence -- measured: 5 iterations against 6, and capacities agreeing
+    only to ~1e-13. Iterations are asserted too because the capacities alone converge to
+    nearly the same place either way, so they are the weaker witness of the two.
+    """
+    stations = _tuned_pair()
+    C = 4.0 * min_feasible_budget(stations)
+    first = Optimizer(stations, C).run()
+    second = Optimizer(stations, C).run()
+    assert second.capacities == first.capacities       # bit-for-bit
+    assert second.iterations == first.iterations
 
 
 def test_tuned_and_fixed_at_the_tuned_ray_reach_the_same_answer():

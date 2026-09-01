@@ -112,6 +112,18 @@ class Optimizer:
     def run(self):
         stations = self.stations
 
+        # Undo any policy parameter a previous run of these same objects left mutated,
+        # BEFORE reading the feasibility floor off them. A no-op for every station without
+        # a free parameter, and for a fork-join on a fixed ray. For a tuned fork-join it is
+        # a correctness requirement in both directions: the floor checked just below and
+        # eq 21's first allocation are both evaluated at the station's current prices, and
+        # a ray left over from a more generous budget carries a higher floor than the
+        # policy's own -- so the run would reject a budget it can serve, or allocate
+        # negative slack against it. This also makes a run a pure function of
+        # (stations-as-constructed, budget), so `r_star` after a run is that run's answer.
+        for st in stations:
+            st.reset_policy()
+
         # Guard: budget must exceed the minimum needed for stability (eq 21 slack > 0).
         # `isfinite` first because NaN slips through every ordering comparison below.
         if not math.isfinite(self.budget):

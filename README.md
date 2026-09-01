@@ -132,8 +132,12 @@ that reason. Pass a float for a fixed ray, or one of three named policies:
 Neither incumbent dominates the other: the paper's rule wins `classical_dominant` by
 24.55% and loses `quantum_dominant` by 5.47%. `R_STAR_TUNED` re-solves `r_star` on every
 optimizer iteration — a fixed point nested inside eq 21/22 — and reaches what a grid sweep
-of `r_star` finds, in all three workloads. See
-[`docs/forkjoin-s2-policy/findings.md`](docs/forkjoin-s2-policy/findings.md).
+of `r_star` finds, in all three workloads. It does that by *mutating* the station, so
+`r_star` after a run is that run's chosen ray; the `Optimizer` restores the starting ray at
+the beginning of every run, which keeps a run a pure function of the stations as
+constructed and the budget, however many times the same objects are reused. See
+[`docs/forkjoin-s2-policy/findings.md`](docs/forkjoin-s2-policy/findings.md) and
+[`implementation.md`](docs/forkjoin-s2-policy/implementation.md).
 
 That form — a plain list of stations with hand-supplied `gamma` — remains fully supported.
 `examples/mixed_network.py` is the same three stations wired into a `Network` instead, so

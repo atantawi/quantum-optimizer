@@ -2,7 +2,7 @@
 
 Companion to [`findings.md`](findings.md), whose §10 ("If this were to be implemented") was
 explicitly undecided. This records the decisions taken, the numbers the implementation
-produces, and the four places measurement contradicted the plan. Issue #10; PRs #12 and #13.
+produces, and the five places measurement contradicted the plan. Issue #10; PRs #12 and #13.
 
 Every figure here is reproducible from the committed test suite — the reference constants
 live in `tests/test_example_qcsc.py` (`FINDINGS_SECTION_7`, `FINDINGS_BEST_RAY`, `TUNED`) and
@@ -24,7 +24,9 @@ family — or one of three named policies:
 spend line. `Station.retune(S) -> S` is a new base-class hook, a no-op on every station but a
 tuned fork-join, which the `Optimizer` calls once per iteration; it reprices the station and
 returns the capacity that buys the *same spend*, so the budget stays exhausted and `S` keeps
-meaning "server 1's capacity".
+meaning "server 1's capacity". Its counterpart `Station.reset_policy()` restores the
+constructed ray, and the `Optimizer` calls it at the start of every run — see the fifth
+correction below, which is why that is a correctness requirement and not just hygiene.
 
 **The nesting is one-sided.** At a fixed spend the inner optimum is determined — one scalar
 solve, no inner loop. The fixed point closes through the outer loop, because the spend comes
@@ -57,7 +59,7 @@ optimality condition evaluated at the converged spend": those were computed at t
 at a different spend (7.96 against 7.49). They agree with the tuned rays to 1.2e-3 and 1.5e-3.
 That is corroboration, not a specification, so the tests compare against the sweep grid.
 
-## Four corrections to the plan
+## Five corrections to the plan
 
 **§10 item 3 named the right rule, but the probe's method cannot deliver it.** Minimizing
 `t_ul` along the spend line pins `r*` only to `√ε` (~1e-8 relative), because a quadratic
@@ -93,12 +95,34 @@ moves the converged `r_star` by ~6e-4 relative. It still needs no damping of its
 a different reason than "it is deterministic" — the `S` it reads has already been damped, so
 damping the retune too would attenuate one perturbation twice.
 
+**A mutating policy parameter needs an explicit reset, or feasibility depends on run history.**
+The starting-ray correction above only holds for a station *as constructed*. `retune` mutates,
+so a tuned station that has already run sits on that run's ray — which, being anything other
+than `r* = 1`, advertises a strictly higher floor than the policy's own. With
+`min_feasible_budget` evaluated once, before the first retune, a station reused at a lower
+budget rejected it against the **previous** run's floor: measured on `γ=.45, μ=1, r=4, c₁=4,
+c₂=1`, a run at `20×` the floor leaves `r* = 2.69255` and lifts the advertised floor from
+`1.91250` to `2.10291`, so budget `2.008125` raised `InfeasibleBudgetError` while a freshly
+constructed equivalent converged. A descending budget sweep therefore broke partway down.
+
+Repricing the floor to the policy's minimum instead of restoring the ray does **not** fix it,
+and this was checked rather than assumed: eq 21 is allocated before the first retune too, so at
+budget `2.00771`, midway between the two floors, the stale ray gives slack `−0.09521` and the run
+dies on an `InstabilityError` (`S·μ = 0.42963 ≤ γ = 0.45`) instead of a clean rejection. So
+the fix is `reset_policy()`, called before the feasibility check. It also removes the caveat the `retune`
+docstring used to carry: a run is now a pure function of (stations-as-constructed, budget), and
+reusing tuned station objects reproduces a fresh run **bit-for-bit**, iteration count included.
+
 ## Validation
 
-- Suite 349 passed / 10 skipped.
+- Suite 356 passed / 10 skipped.
 - 348 runs over budget multiples from `1.000001×` the floor, eight hardware configurations and
   three damping values, warnings promoted to errors: all converged, budget exact at every
   answer, every station stable, and **45 runs in the `r* < 1` regime**.
+- A further 432 runs re-walk that grid over **reused** station objects, ascending and
+  descending, each against a freshly constructed control: every one converged, and reuse
+  reproduced the control **bit-for-bit** (162 of them in the `r* < 1` regime). The same sweep
+  fails on the pre-reset code at the second budget it tries.
 - Iteration counts track the incumbent's at every damping — 120 against 119 at `θ = 0.1`, 20
   against 19 at `θ = 0.5`.
 - `r*` over a budget sweep (125 multiples of each workload's own floor, `1.000001×` to 40×)
@@ -108,7 +132,8 @@ damping the retune too would attenuate one perturbation twice.
   requires.
 - The floor a tuned station advertises comes out 6.8400 / 5.8275 / 2.7900, which are exactly
   findings §7's *paper* floors (6.840 / 5.828 / 2.790) — the ones §4b identified as optimal.
-  That is the starting-ray correction below, visible from the outside.
+  That is the starting-ray correction above, visible from the outside — and it now holds
+  for a reused station too, not only a freshly constructed one.
 
 ## Still open
 

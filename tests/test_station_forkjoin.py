@@ -261,6 +261,34 @@ def test_retune_is_a_no_op_on_every_policy_but_tuned():
         assert (st.r_star, st.mu, st.r, st.alloc_cost) == before
 
 
+def test_reset_policy_returns_a_tuned_station_to_its_starting_ray():
+    """`retune` mutates, so something has to undo it: a tuned station that has already run
+    sits on the ray that run ended on, and that ray advertises a HIGHER stability floor
+    than the policy's own minimum at r_star = 1. Restoring the starting ray is what keeps a
+    reused station's feasibility from depending on the budget it last saw.
+    """
+    st = ForkJoinStation(**FJ, r_star=R_STAR_TUNED)
+    start = (st.r_star, st.mu, st.r, st.alloc_cost)
+    st.retune(6.0)
+    assert st.r_star != 1.0                       # it did move off the starting ray
+    assert min_feasible_budget([st]) > min_feasible_budget(
+        [ForkJoinStation(**FJ, r_star=R_STAR_TUNED)])
+    st.reset_policy()
+    # Bit-for-bit, not approximately: re-anchoring recomputes `mu` by the same expression
+    # __init__ used, so a restored station must be indistinguishable from a fresh one.
+    assert (st.r_star, st.mu, st.r, st.alloc_cost) == start
+
+
+def test_reset_policy_is_a_no_op_on_every_policy_but_tuned():
+    """Only `tuned` has a parameter that moves, so every other policy must be untouched --
+    including a fixed float ray, which a reset must not quietly snap to 1."""
+    for r_star in (None, R_STAR_INVARIANT_R, R_STAR_EQUAL_RATE, 2.32):
+        st = ForkJoinStation(**FJ, r_star=r_star)
+        before = (st.r_star, st.mu, st.r, st.alloc_cost)
+        st.reset_policy()
+        assert (st.r_star, st.mu, st.r, st.alloc_cost) == before
+
+
 def test_retune_moves_a_tuned_station_onto_the_locally_optimal_ray():
     st = ForkJoinStation(**FJ, r_star=R_STAR_TUNED)
     S = 3.0
