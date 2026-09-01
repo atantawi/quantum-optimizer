@@ -738,6 +738,12 @@ def parse_args(argv):
     args = p.parse_args(argv)
 
     args.workloads = [w.strip() for w in args.workloads.split(",") if w.strip()]
+    if not args.workloads:
+        # An empty grid leaves `cells` empty, and every summary block indexes it -- the crash
+        # lands after the argument parsing that should have caught it.
+        p.error("--workloads is empty; at least one workload is needed")
+    if len(set(args.workloads)) != len(args.workloads):
+        p.error(f"--workloads contains duplicates {args.workloads}")
     unknown = set(args.workloads) - set(qn.WORKLOADS)
     if unknown:
         p.error(f"unknown workload(s) {sorted(unknown)}; expected {qn.WORKLOADS}")
