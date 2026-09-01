@@ -4,6 +4,12 @@
 **Status:** Spike. Exploratory; nothing in `qopt/` was changed.
 **Reproduce:** `python docs/forkjoin-s2-policy/probe.py`, output committed alongside as
 [`probe-output.txt`](probe-output.txt). Every number below comes from that file.
+**Superseded in part, 2026-09-01:** this is kept as the original spike record and is not
+rewritten, so two things in it are stale as *status* rather than as reasoning. §9's "no
+simulated cross-check was run" was true then and is not now — it ran, and confirmed all
+three gains; and §9's claim that every best ray is closer to homogeneity than `r = 4` is
+false for `balanced`, whose hardware is `r = 1`. Both are settled in
+[`implementation.md`](implementation.md), which is the maintained document.
 
 ## 1. The question
 

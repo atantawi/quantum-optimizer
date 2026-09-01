@@ -1,0 +1,861 @@
+SIMULATED CROSS-CHECK of the fork-join r* policies (issue #10, last open item)
+
+service   http://localhost:8080
+stopping  {'alpha': 0.05, 'precision': 0.02, 'minSamples': 100000, 'maxSamples': 4000000, 'maxWallClockSeconds': 300}
+budget    C = 41.040000  (BUDGET_MULTIPLE = 6 x the balanced floor, at the default ray)
+seeds     20260729, 8675309, 31415926, 2718281, 16180339
+grid      3 workloads x 3 policies x 5 seeds = 45 simulated passes
+baseline  invariant-r (qopt's incumbent ray r* = r); every gain is against it
+
+A re-run at these seeds reproduces bit-identically -- the service is deterministic given a
+seed -- so a repeat confirms the pipeline and is NOT a second sample. Vary the seeds for that.
+
+
+=== 0. SERVICE PROVENANCE, measured (qsim-service #11 and #13) ===
+
+  An M/M/1 at three sample floors. `samplesAnalyzed` must rise with the floor
+  (#11: minSamples was validated and then never written into the JSIMG document)
+  and `alpha` must come back as the significance level, not its complement (#13).
+
+   minSamples  samplesAnalyzed   alpha  precision  completed
+         1000            87040    0.05    0.02000       True
+       100000           174080    0.05    0.02000       True
+       400000           696320    0.05    0.02000       True
+
+  One `[Error] ... Attribute 'minSamples' is not allowed ...` line per /simulate
+  on the service's stderr is EXPECTED and non-fatal: JMT's bundled schema never
+  declared the attribute, but SimLoader reads it anyway.
+
+
+=== A. ANALYTIC GRID (no simulator; the predictions under test) ===
+  workload             policy         floor  C/floor   objective   gain %    fj ray   cum QPU   cum GPU   cum CPU
+  balanced             invariant-r   6.8400     6.00    6.401440     0.00    1.0000    7.1228   10.3916    2.1574
+  balanced             equal-rate    6.8400     6.00    6.401440     0.00    1.0000    7.1228   10.3916    2.1574
+  balanced             tuned         6.8400     6.00    6.249429     2.37    1.4474    6.8389   11.5146    2.1700
+  quantum_dominant     invariant-r   6.5025     6.31    4.528844     0.00    4.0000    7.7635    7.4260    2.5600
+  quantum_dominant     equal-rate    5.8275     7.04    4.776428    -5.47    1.0000    8.3863    4.9764    2.5185
+  quantum_dominant     tuned         5.8275     7.04    4.431691     2.15    2.3161    8.0621    6.1912    2.6006
+  classical_dominant   invariant-r   5.4900     7.48    3.463677     0.00    4.0000    6.1902   13.3238    2.9555
+  classical_dominant   equal-rate    2.7900    14.71    2.613335    24.55    1.0000    4.6910   18.7641    3.5119
+  classical_dominant   tuned         2.7900    14.71    2.613335    24.55    1.0000    4.6910   18.7641    3.5119
+
+  Both fork-joins share gamma and rates, so fj_pp and fj_sp always land on the
+  same ray -- three workloads are three data points, not six (findings 9).
+  `floor` moves with the policy: the tuned/paper floors are the lower ones, which
+  is why one shared C is feasible everywhere (implementation.md, min_spend).
+
+
+=== B. PER-CELL MEASUREMENTS ===
+
+  CELL balanced / invariant-r / seed 20260729
+    analytic 6.401440   measured 6.373131   delta -0.442%
+    objective half-width: conservative +/-0.063582 (0.998%), independent +/-0.022333 (0.350%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.5s
+    station gaps: 11/14 negative, mean -0.307%, worst -1.094%, 1 over their own CI half-width
+
+  FULL TABLE  (balanced / invariant-r / seed 20260729)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 5   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.5391    0.0966    0.9983   (0.095953, 0.097285)
+  fj_pp         0.4500    1.7020    1.1595    1.4517   (1.145575, 1.173412)
+  qpu_psq       0.2250    0.9302    0.6051    0.9896   (0.598918, 0.611381)
+  gpu_psq       0.2250    1.7461    0.3057    0.9988   (0.302594, 0.308820)
+  gpu_psg       0.2250    1.7487    0.3046    0.9967   (0.302798, 0.306384)
+  qpu_psg       0.2250    0.9292    0.6082    0.9934   (0.603899, 0.612469)
+  cpu_term_ps   0.4500    0.5388    0.0966    0.9972   (0.095891, 0.097243)
+  cpu_init_sp   0.4500    0.5394    0.0969    1.0013   (0.095904, 0.097823)
+  qpu_ssq       0.2250    0.9302    0.6091    0.9961   (0.602678, 0.615448)
+  gpu_ssq       0.2250    1.7463    0.3057    0.9989   (0.302093, 0.309325)
+  gpu_ssg       0.2250    1.7460    0.3076    1.0049   (0.304599, 0.310571)
+  qpu_ssg       0.2250    0.9294    0.6091    0.9952   (0.600896, 0.617247)
+  fj_sp         0.4500    1.7022    1.1723    1.4679   (1.162101, 1.182414)
+  cpu_term_sp   0.4500    0.5387    0.0963    0.9938   (0.095649, 0.096891)
+  objective (sum w*E[T], w = 1)      = 6.373131
+  mean job sojourn (visit-weighted)  = 2.272800   [diagnostic]
+  system response time = 2.270837 CI (2.259530, 2.282144)   [diagnostic]
+
+DIFFERENCE (balanced / invariant-r / seed 20260729): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.096741     0.096619  -0.000122   -0.13%                 no
+  fj_pp            1.171706     1.159494  -0.012212   -1.04%                 no
+  qpu_psq          0.611844     0.605150  -0.006694   -1.09%                yes
+  gpu_psq          0.305922     0.305707  -0.000215   -0.07%                 no
+  gpu_psg          0.305922     0.304591  -0.001331   -0.44%                 no
+  qpu_psg          0.611844     0.608184  -0.003660   -0.60%                 no
+  cpu_term_ps      0.096741     0.096567  -0.000174   -0.18%                 no
+  cpu_init_sp      0.096741     0.096864   0.000122    0.13%                 no
+  qpu_ssq          0.611844     0.609063  -0.002781   -0.45%                 no
+  gpu_ssq          0.305922     0.305709  -0.000213   -0.07%                 no
+  gpu_ssg          0.305922     0.307585   0.001663    0.54%                 no
+  qpu_ssg          0.611844     0.609072  -0.002773   -0.45%                 no
+  fj_sp            1.171706     1.172258   0.000552    0.05%                 no
+  cpu_term_sp      0.096741     0.096270  -0.000471   -0.49%                 no
+
+  CELL balanced / invariant-r / seed 8675309
+    analytic 6.401440   measured 6.393747   delta -0.120%
+    objective half-width: conservative +/-0.071624 (1.120%), independent +/-0.026166 (0.409%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.5s
+    station gaps: 9/14 negative, mean -0.071%, worst +0.573%, 0 over their own CI half-width
+
+  CELL balanced / invariant-r / seed 31415926
+    analytic 6.401440   measured 6.414104   delta +0.198%
+    objective half-width: conservative +/-0.064493 (1.005%), independent +/-0.025363 (0.395%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.3s
+    station gaps: 8/14 negative, mean -0.061%, worst +1.165%, 0 over their own CI half-width
+
+  CELL balanced / invariant-r / seed 2718281
+    analytic 6.401440   measured 6.398315   delta -0.049%
+    objective half-width: conservative +/-0.055734 (0.871%), independent +/-0.019973 (0.312%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   15.5s
+    station gaps: 10/14 negative, mean -0.184%, worst -1.044%, 1 over their own CI half-width
+
+  CELL balanced / invariant-r / seed 16180339
+    analytic 6.401440   measured 6.394957   delta -0.101%
+    objective half-width: conservative +/-0.058914 (0.921%), independent +/-0.022420 (0.351%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.2s
+    station gaps: 7/14 negative, mean -0.062%, worst -0.737%, 1 over their own CI half-width
+
+  CELL balanced / equal-rate / seed 20260729
+    analytic 6.401440   measured 6.373131   delta -0.442%
+    objective half-width: conservative +/-0.063582 (0.998%), independent +/-0.022333 (0.350%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.1s
+    station gaps: 11/14 negative, mean -0.307%, worst -1.094%, 1 over their own CI half-width
+
+  FULL TABLE  (balanced / equal-rate / seed 20260729)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 5   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.5391    0.0966    0.9983   (0.095953, 0.097285)
+  fj_pp         0.4500    1.7020    1.1595    1.4517   (1.145575, 1.173412)
+  qpu_psq       0.2250    0.9302    0.6051    0.9896   (0.598918, 0.611381)
+  gpu_psq       0.2250    1.7461    0.3057    0.9988   (0.302594, 0.308820)
+  gpu_psg       0.2250    1.7487    0.3046    0.9967   (0.302798, 0.306384)
+  qpu_psg       0.2250    0.9292    0.6082    0.9934   (0.603899, 0.612469)
+  cpu_term_ps   0.4500    0.5388    0.0966    0.9972   (0.095891, 0.097243)
+  cpu_init_sp   0.4500    0.5394    0.0969    1.0013   (0.095904, 0.097823)
+  qpu_ssq       0.2250    0.9302    0.6091    0.9961   (0.602678, 0.615448)
+  gpu_ssq       0.2250    1.7463    0.3057    0.9989   (0.302093, 0.309325)
+  gpu_ssg       0.2250    1.7460    0.3076    1.0049   (0.304599, 0.310571)
+  qpu_ssg       0.2250    0.9294    0.6091    0.9952   (0.600896, 0.617247)
+  fj_sp         0.4500    1.7022    1.1723    1.4679   (1.162101, 1.182414)
+  cpu_term_sp   0.4500    0.5387    0.0963    0.9938   (0.095649, 0.096891)
+  objective (sum w*E[T], w = 1)      = 6.373131
+  mean job sojourn (visit-weighted)  = 2.272800   [diagnostic]
+  system response time = 2.270837 CI (2.259530, 2.282144)   [diagnostic]
+
+DIFFERENCE (balanced / equal-rate / seed 20260729): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.096741     0.096619  -0.000122   -0.13%                 no
+  fj_pp            1.171706     1.159494  -0.012212   -1.04%                 no
+  qpu_psq          0.611844     0.605150  -0.006694   -1.09%                yes
+  gpu_psq          0.305922     0.305707  -0.000215   -0.07%                 no
+  gpu_psg          0.305922     0.304591  -0.001331   -0.44%                 no
+  qpu_psg          0.611844     0.608184  -0.003660   -0.60%                 no
+  cpu_term_ps      0.096741     0.096567  -0.000174   -0.18%                 no
+  cpu_init_sp      0.096741     0.096864   0.000122    0.13%                 no
+  qpu_ssq          0.611844     0.609063  -0.002781   -0.45%                 no
+  gpu_ssq          0.305922     0.305709  -0.000213   -0.07%                 no
+  gpu_ssg          0.305922     0.307585   0.001663    0.54%                 no
+  qpu_ssg          0.611844     0.609072  -0.002773   -0.45%                 no
+  fj_sp            1.171706     1.172258   0.000552    0.05%                 no
+  cpu_term_sp      0.096741     0.096270  -0.000471   -0.49%                 no
+
+  CELL balanced / equal-rate / seed 8675309
+    analytic 6.401440   measured 6.393747   delta -0.120%
+    objective half-width: conservative +/-0.071624 (1.120%), independent +/-0.026166 (0.409%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.0s
+    station gaps: 9/14 negative, mean -0.071%, worst +0.573%, 0 over their own CI half-width
+
+  CELL balanced / equal-rate / seed 31415926
+    analytic 6.401440   measured 6.414104   delta +0.198%
+    objective half-width: conservative +/-0.064493 (1.005%), independent +/-0.025363 (0.395%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   15.8s
+    station gaps: 8/14 negative, mean -0.061%, worst +1.165%, 0 over their own CI half-width
+
+  CELL balanced / equal-rate / seed 2718281
+    analytic 6.401440   measured 6.398315   delta -0.049%
+    objective half-width: conservative +/-0.055734 (0.871%), independent +/-0.019973 (0.312%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   15.5s
+    station gaps: 10/14 negative, mean -0.184%, worst -1.044%, 1 over their own CI half-width
+
+  CELL balanced / equal-rate / seed 16180339
+    analytic 6.401440   measured 6.394957   delta -0.101%
+    objective half-width: conservative +/-0.058914 (0.921%), independent +/-0.022420 (0.351%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.5s
+    station gaps: 7/14 negative, mean -0.062%, worst -0.737%, 1 over their own CI half-width
+
+  CELL balanced / tuned / seed 20260729
+    analytic 6.249429   measured 6.235586   delta -0.222%
+    objective half-width: conservative +/-0.071770 (1.151%), independent +/-0.026794 (0.430%), 0 station(s) without a CI
+    ray analytic 1.447382   simulated 1.447378
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   13.4s
+    station gaps: 10/14 negative, mean -0.135%, worst -1.180%, 0 over their own CI half-width
+
+  FULL TABLE  (balanced / tuned / seed 20260729)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 6   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.5428    0.0961    0.9996   (0.095422, 0.096708)
+  fj_pp         0.4500    1.5500    1.0950    1.2045   (1.079928, 1.109983)
+  qpu_psq       0.2250    0.9336    0.6075    0.9977   (0.599233, 0.615733)
+  gpu_psq       0.2250    1.7566    0.3038    0.9988   (0.299958, 0.307562)
+  gpu_psg       0.2250    1.7550    0.3032    0.9961   (0.300976, 0.305472)
+  qpu_psg       0.2250    0.9352    0.6096    1.0029   (0.601844, 0.617281)
+  cpu_term_ps   0.4500    0.5431    0.0958    0.9976   (0.095142, 0.096505)
+  cpu_init_sp   0.4500    0.5432    0.0962    1.0022   (0.094898, 0.097586)
+  qpu_ssq       0.2250    0.9354    0.6083    1.0011   (0.603568, 0.612937)
+  gpu_ssq       0.2250    1.7566    0.3040    0.9996   (0.300895, 0.307088)
+  gpu_ssg       0.2250    1.7581    0.3061    1.0073   (0.303760, 0.308364)
+  qpu_ssg       0.2250    0.9348    0.6067    0.9977   (0.602087, 0.611327)
+  fj_sp         0.4500    1.5499    1.1078    1.2185   (1.090959, 1.124652)
+  cpu_term_sp   0.4500    0.5422    0.0957    0.9942   (0.095145, 0.096158)
+  objective (sum w*E[T], w = 1)      = 6.235586
+  mean job sojourn (visit-weighted)  = 2.205532   [diagnostic]
+  system response time = 2.201324 CI (2.174249, 2.228399)   [diagnostic]
+
+DIFFERENCE (balanced / tuned / seed 20260729): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.096153     0.096065  -0.000088   -0.09%                 no
+  fj_pp            1.108029     1.094956  -0.013073   -1.18%                 no
+  qpu_psq          0.608126     0.607483  -0.000643   -0.11%                 no
+  gpu_psq          0.304063     0.303760  -0.000303   -0.10%                 no
+  gpu_psg          0.304063     0.303224  -0.000839   -0.28%                 no
+  qpu_psg          0.608126     0.609563   0.001436    0.24%                 no
+  cpu_term_ps      0.096153     0.095824  -0.000329   -0.34%                 no
+  cpu_init_sp      0.096153     0.096242   0.000089    0.09%                 no
+  qpu_ssq          0.608126     0.608253   0.000126    0.02%                 no
+  gpu_ssq          0.304063     0.303991  -0.000072   -0.02%                 no
+  gpu_ssg          0.304063     0.306062   0.001999    0.66%                 no
+  qpu_ssg          0.608126     0.606707  -0.001419   -0.23%                 no
+  fj_sp            1.108029     1.107805  -0.000224   -0.02%                 no
+  cpu_term_sp      0.096153     0.095651  -0.000502   -0.52%                 no
+
+  CELL balanced / tuned / seed 8675309
+    analytic 6.249429   measured 6.236245   delta -0.211%
+    objective half-width: conservative +/-0.067603 (1.084%), independent +/-0.024272 (0.389%), 0 station(s) without a CI
+    ray analytic 1.447382   simulated 1.447216
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   17.0s
+    station gaps: 12/14 negative, mean -0.334%, worst -1.522%, 2 over their own CI half-width
+    DEGRADED (1):
+      - cpu_term_sp: simulated throughput 0.454929 CI (0.450017, 0.459950) excludes derived gamma=0.450000
+
+  CELL balanced / tuned / seed 31415926
+    analytic 6.249429   measured 6.222867   delta -0.425%
+    objective half-width: conservative +/-0.062915 (1.011%), independent +/-0.021990 (0.353%), 0 station(s) without a CI
+    ray analytic 1.447382   simulated 1.447338
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   17.2s
+    station gaps: 11/14 negative, mean -0.398%, worst -0.976%, 2 over their own CI half-width
+
+  CELL balanced / tuned / seed 2718281
+    analytic 6.249429   measured 6.230424   delta -0.304%
+    objective half-width: conservative +/-0.065018 (1.044%), independent +/-0.023592 (0.379%), 0 station(s) without a CI
+    ray analytic 1.447382   simulated 1.447238
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   16.1s
+    station gaps: 10/14 negative, mean -0.222%, worst -0.942%, 0 over their own CI half-width
+
+  CELL balanced / tuned / seed 16180339
+    analytic 6.249429   measured 6.238158   delta -0.180%
+    objective half-width: conservative +/-0.068164 (1.093%), independent +/-0.025965 (0.416%), 0 station(s) without a CI
+    ray analytic 1.447382   simulated 1.447016
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   14.8s
+    station gaps: 9/14 negative, mean -0.123%, worst -0.784%, 1 over their own CI half-width
+
+  CELL quantum_dominant / invariant-r / seed 20260729
+    analytic 4.528844   measured 4.518446   delta -0.230%
+    objective half-width: conservative +/-0.046931 (1.039%), independent +/-0.017598 (0.389%), 0 station(s) without a CI
+    ray analytic 4.000000   simulated 4.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   14.7s
+    station gaps: 10/14 negative, mean -0.166%, worst -0.844%, 1 over their own CI half-width
+
+  FULL TABLE  (quantum_dominant / invariant-r / seed 20260729)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 5   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.6403    0.0812    1.0029   (0.080618, 0.081725)
+  fj_pp         0.4500    1.7057    0.8210    1.0309   (0.812353, 0.829620)
+  qpu_psq       0.2250    1.0879    0.5089    0.9928   (0.504150, 0.513691)
+  gpu_psq       0.2250    1.0046    0.1283    1.0023   (0.127523, 0.129086)
+  gpu_psg       0.2250    1.0050    0.1286    1.0047   (0.127082, 0.130054)
+  qpu_psg       0.2250    1.0884    0.5144    1.0040   (0.508835, 0.519954)
+  cpu_term_ps   0.4500    0.6395    0.0808    0.9967   (0.080207, 0.081330)
+  cpu_init_sp   0.4500    0.6401    0.0809    0.9994   (0.080353, 0.081481)
+  qpu_ssq       0.2250    1.0897    0.5099    0.9965   (0.503691, 0.516058)
+  gpu_ssq       0.2250    1.0047    0.1273    0.9947   (0.126343, 0.128306)
+  gpu_ssg       0.2250    1.0054    0.1280    1.0006   (0.127081, 0.128876)
+  qpu_ssg       0.2250    1.0886    0.5114    0.9984   (0.506780, 0.516070)
+  fj_sp         0.4500    1.7027    0.8175    1.0241   (0.806761, 0.828288)
+  cpu_term_sp   0.4500    0.6402    0.0803    0.9918   (0.079737, 0.080839)
+  objective (sum w*E[T], w = 1)      = 4.518446
+  mean job sojourn (visit-weighted)  = 1.620026   [diagnostic]
+  system response time = 1.616218 CI (1.605904, 1.626532)   [diagnostic]
+
+DIFFERENCE (quantum_dominant / invariant-r / seed 20260729): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.080972     0.081172   0.000200    0.25%                 no
+  fj_pp            0.822204     0.820986  -0.001217   -0.15%                 no
+  qpu_psq          0.512110     0.508920  -0.003190   -0.62%                 no
+  gpu_psq          0.128027     0.128305   0.000277    0.22%                 no
+  gpu_psg          0.128027     0.128568   0.000541    0.42%                 no
+  qpu_psg          0.512110     0.514395   0.002285    0.45%                 no
+  cpu_term_ps      0.080972     0.080769  -0.000203   -0.25%                 no
+  cpu_init_sp      0.080972     0.080917  -0.000055   -0.07%                 no
+  qpu_ssq          0.512110     0.509874  -0.002236   -0.44%                 no
+  gpu_ssq          0.128027     0.127324  -0.000703   -0.55%                 no
+  gpu_ssg          0.128027     0.127978  -0.000049   -0.04%                 no
+  qpu_ssg          0.512110     0.511425  -0.000685   -0.13%                 no
+  fj_sp            0.822204     0.817525  -0.004679   -0.57%                 no
+  cpu_term_sp      0.080972     0.080288  -0.000684   -0.84%                yes
+
+  CELL quantum_dominant / invariant-r / seed 8675309
+    analytic 4.528844   measured 4.506983   delta -0.483%
+    objective half-width: conservative +/-0.043198 (0.958%), independent +/-0.016006 (0.355%), 0 station(s) without a CI
+    ray analytic 4.000000   simulated 4.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   14.1s
+    station gaps: 9/14 negative, mean -0.245%, worst -0.924%, 1 over their own CI half-width
+
+  CELL quantum_dominant / invariant-r / seed 31415926
+    analytic 4.528844   measured 4.519511   delta -0.206%
+    objective half-width: conservative +/-0.047579 (1.053%), independent +/-0.018077 (0.400%), 0 station(s) without a CI
+    ray analytic 4.000000   simulated 4.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.1s
+    station gaps: 11/14 negative, mean -0.168%, worst -0.854%, 1 over their own CI half-width
+
+  CELL quantum_dominant / invariant-r / seed 2718281
+    analytic 4.528844   measured 4.524226   delta -0.102%
+    objective half-width: conservative +/-0.041098 (0.908%), independent +/-0.015735 (0.348%), 0 station(s) without a CI
+    ray analytic 4.000000   simulated 4.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   14.4s
+    station gaps: 11/14 negative, mean -0.144%, worst +0.636%, 0 over their own CI half-width
+
+  CELL quantum_dominant / invariant-r / seed 16180339
+    analytic 4.528844   measured 4.529823   delta +0.022%
+    objective half-width: conservative +/-0.047745 (1.054%), independent +/-0.017135 (0.378%), 0 station(s) without a CI
+    ray analytic 4.000000   simulated 4.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   14.6s
+    station gaps: 8/14 negative, mean -0.054%, worst -0.757%, 1 over their own CI half-width
+
+  CELL quantum_dominant / equal-rate / seed 20260729
+    analytic 4.776428   measured 4.759822   delta -0.348%
+    objective half-width: conservative +/-0.042702 (0.897%), independent +/-0.015600 (0.328%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   16.2s
+    station gaps: 11/14 negative, mean -0.278%, worst -0.567%, 0 over their own CI half-width
+
+  FULL TABLE  (quantum_dominant / equal-rate / seed 20260729)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 4   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.6291    0.0819    0.9937   (0.081093, 0.082712)
+  fj_pp         0.4500    2.0490    0.9176    1.4672   (0.910864, 0.924241)
+  qpu_psq       0.2250    1.0691    0.5192    0.9934   (0.513782, 0.524660)
+  gpu_psq       0.2250    0.9880    0.1300    0.9984   (0.128513, 0.131527)
+  gpu_psg       0.2250    0.9878    0.1295    0.9945   (0.128116, 0.130949)
+  qpu_psg       0.2250    1.0736    0.5189    0.9974   (0.514660, 0.523198)
+  cpu_term_ps   0.4500    0.6302    0.0821    0.9978   (0.081528, 0.082656)
+  cpu_init_sp   0.4500    0.6300    0.0824    1.0012   (0.081813, 0.083000)
+  qpu_ssq       0.2250    1.0733    0.5183    0.9959   (0.514738, 0.521812)
+  gpu_ssq       0.2250    0.9881    0.1305    1.0025   (0.129043, 0.132016)
+  gpu_ssg       0.2250    0.9885    0.1303    1.0013   (0.129446, 0.131204)
+  qpu_ssg       0.2250    1.0727    0.5205    0.9996   (0.516558, 0.524479)
+  fj_sp         0.4500    2.0484    0.9166    1.4651   (0.905990, 0.927269)
+  cpu_term_sp   0.4500    0.6296    0.0819    0.9943   (0.080974, 0.082800)
+  objective (sum w*E[T], w = 1)      = 4.759822
+  mean job sojourn (visit-weighted)  = 1.730573   [diagnostic]
+  system response time = 1.728624 CI (1.719383, 1.737865)   [diagnostic]
+
+DIFFERENCE (quantum_dominant / equal-rate / seed 20260729): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.082355     0.081903  -0.000452   -0.55%                 no
+  fj_pp            0.921363     0.917553  -0.003810   -0.41%                 no
+  qpu_psq          0.520857     0.519221  -0.001636   -0.31%                 no
+  gpu_psq          0.130214     0.130020  -0.000194   -0.15%                 no
+  gpu_psg          0.130214     0.129533  -0.000682   -0.52%                 no
+  qpu_psg          0.520857     0.518929  -0.001927   -0.37%                 no
+  cpu_term_ps      0.082355     0.082092  -0.000262   -0.32%                 no
+  cpu_init_sp      0.082355     0.082406   0.000052    0.06%                 no
+  qpu_ssq          0.520857     0.518275  -0.002582   -0.50%                 no
+  gpu_ssq          0.130214     0.130530   0.000315    0.24%                 no
+  gpu_ssg          0.130214     0.130325   0.000111    0.09%                 no
+  qpu_ssg          0.520857     0.520519  -0.000338   -0.06%                 no
+  fj_sp            0.921363     0.916630  -0.004733   -0.51%                 no
+  cpu_term_sp      0.082355     0.081887  -0.000467   -0.57%                 no
+
+  CELL quantum_dominant / equal-rate / seed 8675309
+    analytic 4.776428   measured 4.759926   delta -0.345%
+    objective half-width: conservative +/-0.044086 (0.926%), independent +/-0.015223 (0.320%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.4s
+    station gaps: 12/14 negative, mean -0.333%, worst -1.012%, 1 over their own CI half-width
+    DEGRADED (2):
+      - gpu_psg: simulated throughput 0.226306 CI (0.225031, 0.227595) excludes derived gamma=0.225000
+      - qpu_psg: simulated throughput 0.226306 CI (0.225034, 0.227593) excludes derived gamma=0.225000
+
+  CELL quantum_dominant / equal-rate / seed 31415926
+    analytic 4.776428   measured 4.775556   delta -0.018%
+    objective half-width: conservative +/-0.035901 (0.752%), independent +/-0.012170 (0.255%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   14.8s
+    station gaps: 9/14 negative, mean -0.085%, worst -0.643%, 0 over their own CI half-width
+
+  CELL quantum_dominant / equal-rate / seed 2718281
+    analytic 4.776428   measured 4.775039   delta -0.029%
+    objective half-width: conservative +/-0.038019 (0.796%), independent +/-0.013464 (0.282%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.1s
+    station gaps: 10/14 negative, mean -0.141%, worst -0.599%, 0 over their own CI half-width
+
+  CELL quantum_dominant / equal-rate / seed 16180339
+    analytic 4.776428   measured 4.782064   delta +0.118%
+    objective half-width: conservative +/-0.039235 (0.820%), independent +/-0.013720 (0.287%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   14.3s
+    station gaps: 9/14 negative, mean -0.053%, worst -0.816%, 0 over their own CI half-width
+
+  CELL quantum_dominant / tuned / seed 20260729
+    analytic 4.431691   measured 4.416174   delta -0.350%
+    objective half-width: conservative +/-0.047269 (1.070%), independent +/-0.017025 (0.386%), 0 station(s) without a CI
+    ray analytic 2.316118   simulated 2.316444
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   14.7s
+    station gaps: 11/14 negative, mean -0.227%, worst -1.087%, 0 over their own CI half-width
+
+  FULL TABLE  (quantum_dominant / tuned / seed 20260729)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 6   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.6499    0.0796    0.9986   (0.078704, 0.080461)
+  fj_pp         0.4500    1.8225    0.7883    1.0819   (0.778652, 0.797899)
+  qpu_psq       0.2250    1.1046    0.5051    1.0022   (0.498207, 0.512030)
+  gpu_psq       0.2250    1.0207    0.1257    0.9983   (0.124767, 0.126672)
+  gpu_psg       0.2250    1.0203    0.1255    0.9957   (0.124101, 0.126806)
+  qpu_psg       0.2250    1.1052    0.5045    1.0016   (0.500025, 0.508894)
+  cpu_term_ps   0.4500    0.6501    0.0796    0.9990   (0.078964, 0.080202)
+  cpu_init_sp   0.4500    0.6508    0.0802    1.0082   (0.079230, 0.081243)
+  qpu_ssq       0.2250    1.1062    0.5009    0.9955   (0.494945, 0.506901)
+  gpu_ssq       0.2250    1.0201    0.1256    0.9966   (0.124812, 0.126363)
+  gpu_ssg       0.2250    1.0204    0.1259    0.9996   (0.124997, 0.126843)
+  qpu_ssg       0.2250    1.1047    0.5017    0.9955   (0.495529, 0.507788)
+  fj_sp         0.4500    1.8190    0.7946    1.0878   (0.787556, 0.801659)
+  cpu_term_sp   0.4500    0.6503    0.0790    0.9925   (0.078416, 0.079681)
+  objective (sum w*E[T], w = 1)      = 4.416174
+  mean job sojourn (visit-weighted)  = 1.579377   [diagnostic]
+  system response time = 1.577371 CI (1.568967, 1.585776)   [diagnostic]
+
+DIFFERENCE (quantum_dominant / tuned / seed 20260729): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.079663     0.079583  -0.000080   -0.10%                 no
+  fj_pp            0.796942     0.788275  -0.008667   -1.09%                 no
+  qpu_psq          0.503831     0.505119   0.001287    0.26%                 no
+  gpu_psq          0.125958     0.125719  -0.000239   -0.19%                 no
+  gpu_psg          0.125958     0.125454  -0.000504   -0.40%                 no
+  qpu_psg          0.503831     0.504460   0.000628    0.12%                 no
+  cpu_term_ps      0.079663     0.079583  -0.000080   -0.10%                 no
+  cpu_init_sp      0.079663     0.080236   0.000573    0.72%                 no
+  qpu_ssq          0.503831     0.500923  -0.002908   -0.58%                 no
+  gpu_ssq          0.125958     0.125588  -0.000370   -0.29%                 no
+  gpu_ssg          0.125958     0.125920  -0.000037   -0.03%                 no
+  qpu_ssg          0.503831     0.501659  -0.002173   -0.43%                 no
+  fj_sp            0.796942     0.794607  -0.002335   -0.29%                 no
+  cpu_term_sp      0.079663     0.079048  -0.000614   -0.77%                 no
+
+  CELL quantum_dominant / tuned / seed 8675309
+    analytic 4.431691   measured 4.422229   delta -0.214%
+    objective half-width: conservative +/-0.049650 (1.123%), independent +/-0.019422 (0.439%), 0 station(s) without a CI
+    ray analytic 2.316118   simulated 2.315637
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   14.6s
+    station gaps: 9/14 negative, mean -0.107%, worst -0.702%, 0 over their own CI half-width
+
+  CELL quantum_dominant / tuned / seed 31415926
+    analytic 4.431691   measured 4.423955   delta -0.175%
+    objective half-width: conservative +/-0.041803 (0.945%), independent +/-0.016115 (0.364%), 0 station(s) without a CI
+    ray analytic 2.316118   simulated 2.316506
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   15.5s
+    station gaps: 9/14 negative, mean -0.086%, worst -0.672%, 0 over their own CI half-width
+
+  CELL quantum_dominant / tuned / seed 2718281
+    analytic 4.431691   measured 4.420374   delta -0.255%
+    objective half-width: conservative +/-0.043174 (0.977%), independent +/-0.016722 (0.378%), 0 station(s) without a CI
+    ray analytic 2.316118   simulated 2.315748
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   15.9s
+    station gaps: 10/14 negative, mean -0.227%, worst -0.659%, 0 over their own CI half-width
+    DEGRADED (1):
+      - qpu_psq: simulated throughput 0.226610 CI (0.225119, 0.228121) excludes derived gamma=0.225000
+
+  CELL quantum_dominant / tuned / seed 16180339
+    analytic 4.431691   measured 4.430180   delta -0.034%
+    objective half-width: conservative +/-0.044635 (1.008%), independent +/-0.016698 (0.377%), 0 station(s) without a CI
+    ray analytic 2.316118   simulated 2.315611
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   14.0s
+    station gaps: 7/14 negative, mean -0.055%, worst -0.726%, 0 over their own CI half-width
+
+  CELL classical_dominant / invariant-r / seed 20260729
+    analytic 3.463677   measured 3.448158   delta -0.448%
+    objective half-width: conservative +/-0.034496 (1.000%), independent +/-0.013048 (0.378%), 0 station(s) without a CI
+    ray analytic 4.000000   simulated 4.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   15.1s
+    station gaps: 10/14 negative, mean -0.251%, worst -0.835%, 0 over their own CI half-width
+
+  FULL TABLE  (classical_dominant / invariant-r / seed 20260729)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 5   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.7382    0.0701    1.0034   (0.069576, 0.070613)
+  fj_pp         0.4500    1.9069    0.7047    1.0267   (0.697656, 0.711723)
+  qpu_psq       0.2250    0.5943    0.2189    0.9914   (0.216165, 0.221581)
+  gpu_psq       0.2250    2.3776    0.2207    0.9998   (0.218911, 0.222465)
+  gpu_psg       0.2250    2.3800    0.2200    0.9979   (0.218525, 0.221567)
+  qpu_psg       0.2250    0.5937    0.2217    1.0030   (0.219263, 0.224052)
+  cpu_term_ps   0.4500    0.7382    0.0696    0.9963   (0.069135, 0.070060)
+  cpu_init_sp   0.4500    0.7387    0.0699    1.0018   (0.069094, 0.070772)
+  qpu_ssq       0.2250    0.5946    0.2192    0.9936   (0.217531, 0.220925)
+  gpu_ssq       0.2250    2.3766    0.2200    0.9964   (0.217567, 0.222530)
+  gpu_ssg       0.2250    2.3798    0.2190    0.9932   (0.217286, 0.220761)
+  qpu_ssg       0.2250    0.5945    0.2207    1.0000   (0.219084, 0.222330)
+  fj_sp         0.4500    1.9060    0.7037    1.0246   (0.694436, 0.713003)
+  cpu_term_sp   0.4500    0.7379    0.0699    0.9994   (0.069432, 0.070272)
+  objective (sum w*E[T], w = 1)      = 3.448158
+  mean job sojourn (visit-weighted)  = 1.284011   [diagnostic]
+  system response time = 1.280886 CI (1.273053, 1.288720)   [diagnostic]
+
+DIFFERENCE (classical_dominant / invariant-r / seed 20260729): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.069797     0.070095   0.000298    0.43%                 no
+  fj_pp            0.709381     0.704690  -0.004692   -0.66%                 no
+  qpu_psq          0.220716     0.218873  -0.001843   -0.84%                 no
+  gpu_psq          0.220716     0.220688  -0.000028   -0.01%                 no
+  gpu_psg          0.220716     0.220046  -0.000670   -0.30%                 no
+  qpu_psg          0.220716     0.221658   0.000942    0.43%                 no
+  cpu_term_ps      0.069797     0.069598  -0.000199   -0.28%                 no
+  cpu_init_sp      0.069797     0.069933   0.000137    0.20%                 no
+  qpu_ssq          0.220716     0.219228  -0.001488   -0.67%                 no
+  gpu_ssq          0.220716     0.220048  -0.000668   -0.30%                 no
+  gpu_ssg          0.220716     0.219024  -0.001693   -0.77%                 no
+  qpu_ssg          0.220716     0.220707  -0.000009   -0.00%                 no
+  fj_sp            0.709381     0.703719  -0.005662   -0.80%                 no
+  cpu_term_sp      0.069797     0.069852   0.000055    0.08%                 no
+
+  CELL classical_dominant / invariant-r / seed 8675309
+    analytic 3.463677   measured 3.464070   delta +0.011%
+    objective half-width: conservative +/-0.029694 (0.857%), independent +/-0.010638 (0.307%), 0 station(s) without a CI
+    ray analytic 4.000000   simulated 4.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   14.5s
+    station gaps: 11/14 negative, mean -0.132%, worst -0.439%, 0 over their own CI half-width
+    DEGRADED (1):
+      - cpu_term_sp: simulated throughput 0.447179 CI (0.444527, 0.449863) excludes derived gamma=0.450000
+
+  CELL classical_dominant / invariant-r / seed 31415926
+    analytic 3.463677   measured 3.462505   delta -0.034%
+    objective half-width: conservative +/-0.031484 (0.909%), independent +/-0.010474 (0.302%), 0 station(s) without a CI
+    ray analytic 4.000000   simulated 4.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   15.4s
+    station gaps: 6/14 negative, mean +0.002%, worst +0.646%, 1 over their own CI half-width
+
+  CELL classical_dominant / invariant-r / seed 2718281
+    analytic 3.463677   measured 3.464455   delta +0.022%
+    objective half-width: conservative +/-0.030869 (0.891%), independent +/-0.011681 (0.337%), 0 station(s) without a CI
+    ray analytic 4.000000   simulated 4.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   17.0s
+    station gaps: 9/14 negative, mean -0.066%, worst -0.997%, 0 over their own CI half-width
+
+  CELL classical_dominant / invariant-r / seed 16180339
+    analytic 3.463677   measured 3.460911   delta -0.080%
+    objective half-width: conservative +/-0.035344 (1.021%), independent +/-0.014143 (0.409%), 0 station(s) without a CI
+    ray analytic 4.000000   simulated 4.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.0s
+    station gaps: 6/14 negative, mean +0.020%, worst +0.765%, 1 over their own CI half-width
+
+  CELL classical_dominant / equal-rate / seed 20260729
+    analytic 2.613335   measured 2.607234   delta -0.233%
+    objective half-width: conservative +/-0.019361 (0.743%), independent +/-0.005997 (0.230%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   16.3s
+    station gaps: 10/14 negative, mean -0.149%, worst -0.529%, 0 over their own CI half-width
+
+  FULL TABLE  (classical_dominant / equal-rate / seed 20260729)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 4   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.8775    0.0587    1.0031   (0.058239, 0.059077)
+  fj_pp         0.4500    3.7498    0.4493    1.4826   (0.446130, 0.452461)
+  qpu_psq       0.2250    0.7036    0.1838    0.9935   (0.182745, 0.184954)
+  gpu_psq       0.2250    2.8157    0.1842    0.9959   (0.182942, 0.185468)
+  gpu_psg       0.2250    2.8173    0.1845    0.9982   (0.183417, 0.185627)
+  qpu_psg       0.2250    0.7044    0.1848    1.0000   (0.183638, 0.186010)
+  cpu_term_ps   0.4500    0.8769    0.0584    0.9974   (0.057728, 0.059018)
+  cpu_init_sp   0.4500    0.8782    0.0585    1.0004   (0.058113, 0.058798)
+  qpu_ssq       0.2250    0.7054    0.1841    0.9977   (0.182809, 0.185486)
+  gpu_ssq       0.2250    2.8184    0.1843    0.9976   (0.182163, 0.186505)
+  gpu_ssg       0.2250    2.8176    0.1849    1.0003   (0.183681, 0.186095)
+  qpu_ssg       0.2250    0.7042    0.1852    1.0016   (0.183030, 0.187337)
+  fj_sp         0.4500    3.7457    0.4481    1.4768   (0.445519, 0.450715)
+  cpu_term_sp   0.4500    0.8771    0.0584    0.9979   (0.057719, 0.059044)
+  objective (sum w*E[T], w = 1)      = 2.607234
+  mean job sojourn (visit-weighted)  = 0.934628   [diagnostic]
+  system response time = 0.932765 CI (0.923580, 0.941951)   [diagnostic]
+
+DIFFERENCE (classical_dominant / equal-rate / seed 20260729): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.058448     0.058658   0.000210    0.36%                 no
+  fj_pp            0.450462     0.449296  -0.001166   -0.26%                 no
+  qpu_psq          0.184828     0.183849  -0.000978   -0.53%                 no
+  gpu_psq          0.184828     0.184205  -0.000622   -0.34%                 no
+  gpu_psg          0.184828     0.184522  -0.000305   -0.17%                 no
+  qpu_psg          0.184828     0.184824  -0.000003   -0.00%                 no
+  cpu_term_ps      0.058448     0.058373  -0.000075   -0.13%                 no
+  cpu_init_sp      0.058448     0.058455   0.000008    0.01%                 no
+  qpu_ssq          0.184828     0.184147  -0.000680   -0.37%                 no
+  gpu_ssq          0.184828     0.184334  -0.000494   -0.27%                 no
+  gpu_ssg          0.184828     0.184888   0.000060    0.03%                 no
+  qpu_ssg          0.184828     0.185183   0.000356    0.19%                 no
+  fj_sp            0.450462     0.448117  -0.002345   -0.52%                 no
+  cpu_term_sp      0.058448     0.058382  -0.000066   -0.11%                 no
+
+  CELL classical_dominant / equal-rate / seed 8675309
+    analytic 2.613335   measured 2.610949   delta -0.091%
+    objective half-width: conservative +/-0.021462 (0.822%), independent +/-0.007172 (0.275%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.4s
+    station gaps: 8/14 negative, mean -0.120%, worst -0.722%, 1 over their own CI half-width
+
+  CELL classical_dominant / equal-rate / seed 31415926
+    analytic 2.613335   measured 2.619017   delta +0.217%
+    objective half-width: conservative +/-0.024124 (0.921%), independent +/-0.007868 (0.300%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   14.7s
+    station gaps: 5/14 negative, mean +0.113%, worst +1.032%, 0 over their own CI half-width
+
+  CELL classical_dominant / equal-rate / seed 2718281
+    analytic 2.613335   measured 2.614330   delta +0.038%
+    objective half-width: conservative +/-0.020457 (0.783%), independent +/-0.006364 (0.243%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   13.9s
+    station gaps: 7/14 negative, mean +0.016%, worst -0.616%, 0 over their own CI half-width
+    DEGRADED (2):
+      - qpu_ssq: simulated throughput 0.223622 CI (0.222331, 0.224928) excludes derived gamma=0.225000
+      - gpu_ssq: simulated throughput 0.223622 CI (0.222339, 0.224920) excludes derived gamma=0.225000
+
+  CELL classical_dominant / equal-rate / seed 16180339
+    analytic 2.613335   measured 2.615578   delta +0.086%
+    objective half-width: conservative +/-0.022710 (0.868%), independent +/-0.008133 (0.311%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.0s
+    station gaps: 6/14 negative, mean +0.070%, worst +0.761%, 1 over their own CI half-width
+
+  CELL classical_dominant / tuned / seed 20260729
+    analytic 2.613335   measured 2.607234   delta -0.233%
+    objective half-width: conservative +/-0.019361 (0.743%), independent +/-0.005997 (0.230%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.6s
+    station gaps: 10/14 negative, mean -0.149%, worst -0.529%, 0 over their own CI half-width
+
+  FULL TABLE  (classical_dominant / tuned / seed 20260729)
+  stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start_iterations = 4   converged = True
+  station        gamma        S*      E[T]      zeta              E[T] 95% CI
+  cpu_init_ps   0.4500    0.8775    0.0587    1.0031   (0.058239, 0.059077)
+  fj_pp         0.4500    3.7498    0.4493    1.4826   (0.446130, 0.452461)
+  qpu_psq       0.2250    0.7036    0.1838    0.9935   (0.182745, 0.184954)
+  gpu_psq       0.2250    2.8157    0.1842    0.9959   (0.182942, 0.185468)
+  gpu_psg       0.2250    2.8173    0.1845    0.9982   (0.183417, 0.185627)
+  qpu_psg       0.2250    0.7044    0.1848    1.0000   (0.183638, 0.186010)
+  cpu_term_ps   0.4500    0.8769    0.0584    0.9974   (0.057728, 0.059018)
+  cpu_init_sp   0.4500    0.8782    0.0585    1.0004   (0.058113, 0.058798)
+  qpu_ssq       0.2250    0.7054    0.1841    0.9977   (0.182809, 0.185486)
+  gpu_ssq       0.2250    2.8184    0.1843    0.9976   (0.182163, 0.186505)
+  gpu_ssg       0.2250    2.8176    0.1849    1.0003   (0.183681, 0.186095)
+  qpu_ssg       0.2250    0.7042    0.1852    1.0016   (0.183030, 0.187337)
+  fj_sp         0.4500    3.7457    0.4481    1.4768   (0.445519, 0.450715)
+  cpu_term_sp   0.4500    0.8771    0.0584    0.9979   (0.057719, 0.059044)
+  objective (sum w*E[T], w = 1)      = 2.607234
+  mean job sojourn (visit-weighted)  = 0.934628   [diagnostic]
+  system response time = 0.932765 CI (0.923580, 0.941951)   [diagnostic]
+
+DIFFERENCE (classical_dominant / tuned / seed 20260729): simulated - analytic, at each pass's own S*
+  station          analytic    simulated        gap    gap %   > CI half-width?
+  cpu_init_ps      0.058448     0.058658   0.000210    0.36%                 no
+  fj_pp            0.450462     0.449296  -0.001166   -0.26%                 no
+  qpu_psq          0.184828     0.183849  -0.000978   -0.53%                 no
+  gpu_psq          0.184828     0.184205  -0.000622   -0.34%                 no
+  gpu_psg          0.184828     0.184522  -0.000305   -0.17%                 no
+  qpu_psg          0.184828     0.184824  -0.000003   -0.00%                 no
+  cpu_term_ps      0.058448     0.058373  -0.000075   -0.13%                 no
+  cpu_init_sp      0.058448     0.058455   0.000008    0.01%                 no
+  qpu_ssq          0.184828     0.184147  -0.000680   -0.37%                 no
+  gpu_ssq          0.184828     0.184334  -0.000494   -0.27%                 no
+  gpu_ssg          0.184828     0.184888   0.000060    0.03%                 no
+  qpu_ssg          0.184828     0.185183   0.000356    0.19%                 no
+  fj_sp            0.450462     0.448117  -0.002345   -0.52%                 no
+  cpu_term_sp      0.058448     0.058382  -0.000066   -0.11%                 no
+
+  CELL classical_dominant / tuned / seed 8675309
+    analytic 2.613335   measured 2.610949   delta -0.091%
+    objective half-width: conservative +/-0.021462 (0.822%), independent +/-0.007172 (0.275%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.5s
+    station gaps: 8/14 negative, mean -0.120%, worst -0.722%, 1 over their own CI half-width
+
+  CELL classical_dominant / tuned / seed 31415926
+    analytic 2.613335   measured 2.619017   delta +0.217%
+    objective half-width: conservative +/-0.024124 (0.921%), independent +/-0.007868 (0.300%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   14.8s
+    station gaps: 5/14 negative, mean +0.113%, worst +1.032%, 0 over their own CI half-width
+
+  CELL classical_dominant / tuned / seed 2718281
+    analytic 2.613335   measured 2.614330   delta +0.038%
+    objective half-width: conservative +/-0.020457 (0.783%), independent +/-0.006364 (0.243%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   13.8s
+    station gaps: 7/14 negative, mean +0.016%, worst -0.616%, 0 over their own CI half-width
+    DEGRADED (2):
+      - qpu_ssq: simulated throughput 0.223622 CI (0.222331, 0.224928) excludes derived gamma=0.225000
+      - gpu_ssq: simulated throughput 0.223622 CI (0.222339, 0.224920) excludes derived gamma=0.225000
+
+  CELL classical_dominant / tuned / seed 16180339
+    analytic 2.613335   measured 2.615578   delta +0.086%
+    objective half-width: conservative +/-0.022710 (0.868%), independent +/-0.008133 (0.311%), 0 station(s) without a CI
+    ray analytic 1.000000   simulated 1.000000
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.4s
+    station gaps: 6/14 negative, mean +0.070%, worst +0.761%, 1 over their own CI half-width
+
+
+=== C. THE HEADLINE: measured gain vs analytic gain, paired by seed ===
+
+  d_s = objective(invariant-r, seed s) - objective(policy, seed s), under common
+  random numbers. Interval is two-sided 95% Student-t on the paired differences
+  across seeds -- it measures the variability rather than assuming a correlation
+  structure, which is why it and not the propagated half-width is the primary
+  evidence.
+
+  workload             policy        analytic %  measured %     95% CI on measured %   n      verdict
+  balanced             equal-rate          0.00        0.00                exactly 0   5    identical
+                                                      0.000   seed 2718281   baseline 6.398315 -> 6.398315
+                                                      0.000   seed 8675309   baseline 6.393747 -> 6.393747
+                                                      0.000   seed 16180339  baseline 6.394957 -> 6.394957
+                                                      0.000   seed 20260729  baseline 6.373131 -> 6.373131
+                                                      0.000   seed 31415926  baseline 6.414104 -> 6.414104
+  balanced             tuned               2.37        2.54         (+2.163, +2.909)   5    CONFIRMED
+                                                      2.624   seed 2718281   baseline 6.398315 -> 6.230424
+                                                      2.463   seed 8675309   baseline 6.393747 -> 6.236245
+                                                      2.452   seed 16180339  baseline 6.394957 -> 6.238158
+                                                      2.158   seed 20260729  baseline 6.373131 -> 6.235586
+                                                      2.982   seed 31415926  baseline 6.414104 -> 6.222867
+  quantum_dominant     equal-rate         -5.47       -5.55         (-5.699, -5.393)   5    CONFIRMED
+                                                     -5.544   seed 2718281   baseline 4.524226 -> 4.775039
+                                                     -5.612   seed 8675309   baseline 4.506983 -> 4.759926
+                                                     -5.568   seed 16180339  baseline 4.529823 -> 4.782064
+                                                     -5.342   seed 20260729  baseline 4.518446 -> 4.759822
+                                                     -5.665   seed 31415926  baseline 4.519511 -> 4.775556
+  quantum_dominant     tuned               2.15        2.15         (+1.944, +2.357)   5    CONFIRMED
+                                                      2.295   seed 2718281   baseline 4.524226 -> 4.420374
+                                                      1.880   seed 8675309   baseline 4.506983 -> 4.422229
+                                                      2.200   seed 16180339  baseline 4.529823 -> 4.430180
+                                                      2.263   seed 20260729  baseline 4.518446 -> 4.416174
+                                                      2.114   seed 31415926  baseline 4.519511 -> 4.423955
+  classical_dominant   equal-rate         24.55       24.47       (+24.329, +24.607)   5    CONFIRMED
+                                                     24.538   seed 2718281   baseline 3.464455 -> 2.614330
+                                                     24.628   seed 8675309   baseline 3.464070 -> 2.610949
+                                                     24.425   seed 16180339  baseline 3.460911 -> 2.615578
+                                                     24.388   seed 20260729  baseline 3.448158 -> 2.607234
+                                                     24.361   seed 31415926  baseline 3.462505 -> 2.619017
+  classical_dominant   tuned              24.55       24.47       (+24.329, +24.607)   5    CONFIRMED
+                                                     24.538   seed 2718281   baseline 3.464455 -> 2.614330
+                                                     24.628   seed 8675309   baseline 3.464070 -> 2.610949
+                                                     24.425   seed 16180339  baseline 3.460911 -> 2.615578
+                                                     24.388   seed 20260729  baseline 3.448158 -> 2.607234
+                                                     24.361   seed 31415926  baseline 3.462505 -> 2.619017
+
+  CONFIRMED   the paired interval excludes zero on the side the analytic model
+              predicted. It does NOT assert the analytic MAGNITUDE -- read the
+              measured column against the analytic one for that.
+  SIGN FLIP   the interval excludes zero on the OTHER side. The policy ranking
+              the analytic model reports is wrong at this operating point.
+
+  For contrast, the CONSERVATIVE propagated half-width on a SINGLE measured
+  objective runs 0.743% to 1.151% over these 45 cells. A ~2% gain
+  is barely two of those, which is why the paired interval above and not the
+  propagated one is the primary evidence: pairing removes the shared sample path
+  instead of assuming a correlation structure across 14 stations.
+
+  inconclusive  the interval spans zero. Tighten `--precision` on this workload
+              (4x the samples per halving) or add seeds; do not read a sign off
+              the point estimate alone.
+
+  The per-seed rows are there to stop a mechanism being read off one seed. In all
+  three workloads the analytic gain sits INSIDE both the per-seed range and the
+  paired interval, so the offset between the analytic and measured MEAN gain is not
+  resolved at this stopping rule -- only its sign and rough size are.
+  identical   every paired difference is exactly zero, because the two policies
+              ARE the same ray here -- r = 1 collapses r* = r onto r* = 1
+              (findings 4). Not a resolution failure.
+
+
+=== D. THE TUNED RAY IS NOT NOISE-FREE: r* across seeds ===
+
+  r* descends from the station spend, which descends from a measured E[T], so a
+  simulated run's ray carries that run's sample path. Reported as an interval.
+
+  workload              analytic r*    mean r*        min        max     spread  rel spread   n
+  balanced                 1.447382   1.447268   1.447016   1.447419   4.03e-04    2.79e-04  10
+  quantum_dominant         2.316118   2.315949   2.315493   2.316506   1.01e-03    4.37e-04  10
+  classical_dominant       1.000000   1.000000   1.000000   1.000000   2.22e-16    2.22e-16  10
+
+  implementation.md measured ~6e-4 relative movement from +/-2% injected noise in
+  E[T]; this column is the same quantity at the stopping rule actually used.
+  n = seeds x 2 fork-joins. The analytic ray is bit-identical across both
+  stations, so every digit of spread here is the sample path.
+
+
+=== E. MODEL BIAS at the new operating points (spec section 7's statistic) ===
+
+  Spec section 7 measured the analytic-vs-simulated gap at the INCUMBENT ray only,
+  pooling ~0.15% mean with a ~1.1% worst row and a consistent negative lean. The
+  same statistic here, per policy, says whether the tuned ray's operating point is
+  better or worse served by the closed form -- which is the whole reason the two
+  ~2% gains were only suggestive.
+
+  policy         rows  negative   mean %   worst %  flagged  sign-test p
+  invariant-r     210  136/210    -0.126     1.165        9       0.0000
+  equal-rate      210  132/210    -0.110     1.165        6       0.0002
+  tuned           210  134/210    -0.132    -1.522        7       0.0001
+
+  The fork-join rows are the ones under test. Isolated:
+
+  workload             policy       station        ray   analytic   measured    gap %  over CI?
+  balanced             invariant-r  fj_pp       1.0000   1.171706   1.159494   -1.042        no
+  balanced             invariant-r  fj_sp       1.0000   1.171706   1.172258    0.047        no
+  balanced             equal-rate   fj_pp       1.0000   1.171706   1.159494   -1.042        no
+  balanced             equal-rate   fj_sp       1.0000   1.171706   1.172258    0.047        no
+  balanced             tuned        fj_pp       1.4474   1.108029   1.094956   -1.180        no
+  balanced             tuned        fj_sp       1.4474   1.108029   1.107805   -0.020        no
+  quantum_dominant     invariant-r  fj_pp       4.0000   0.822204   0.820986   -0.148        no
+  quantum_dominant     invariant-r  fj_sp       4.0000   0.822204   0.817525   -0.569        no
+  quantum_dominant     equal-rate   fj_pp       1.0000   0.921363   0.917553   -0.414        no
+  quantum_dominant     equal-rate   fj_sp       1.0000   0.921363   0.916630   -0.514        no
+  quantum_dominant     tuned        fj_pp       2.3164   0.796942   0.788275   -1.087        no
+  quantum_dominant     tuned        fj_sp       2.3155   0.796942   0.794607   -0.293        no
+  classical_dominant   invariant-r  fj_pp       4.0000   0.709381   0.704690   -0.661        no
+  classical_dominant   invariant-r  fj_sp       4.0000   0.709381   0.703719   -0.798        no
+  classical_dominant   equal-rate   fj_pp       1.0000   0.450462   0.449296   -0.259        no
+  classical_dominant   equal-rate   fj_sp       1.0000   0.450462   0.448117   -0.521        no
+  classical_dominant   tuned        fj_pp       1.0000   0.450462   0.449296   -0.259        no
+  classical_dominant   tuned        fj_sp       1.0000   0.450462   0.448117   -0.521        no
+
+  gamma conservation: 9 miss(es) over 540 checks (12 checked stations x 45 cells) = 1.7%, against the
+  5% a 95% interval implies -- fewer than chance. They arrive in tandem pairs that
+  share a stream, so the effective count is lower still. Not a defect; but do not
+  read a clean run as a guarantee either (spec 7 saw 1 miss in 144 checks).
+
+  (seed 20260729 only, to keep this block one screen. fj_pp and fj_sp
+  carry no throughput witness -- gamma conservation skips them, qsim-service#8.)
+  `sign-test p` is two-sided exact binomial and is OPTIMISTIC: the rows are not
+  independent (stations share one run; four are analytically identical) and
+  near-zero gaps count as signs, not ties. Read the direction, not the level.
+
+
+=== VERDICT ===
+
+  5 CONFIRMED, 1 identical
+
+45 simulated passes in 692s. Every figure above is reproducible from this file's own conditions block.

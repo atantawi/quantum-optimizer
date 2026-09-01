@@ -142,6 +142,15 @@ it mean the same thing before and after a run. See
 [`docs/forkjoin-s2-policy/findings.md`](docs/forkjoin-s2-policy/findings.md) and
 [`implementation.md`](docs/forkjoin-s2-policy/implementation.md).
 
+Those gains are **measured, not only derived.** A simulated cross-check against
+`qsim-service` — 3 workloads x 3 policies x 5 base seeds, paired under common random
+numbers — confirms every one of them, with each analytic gain landing inside its own
+measured 95% interval: tuned beats the default by 2.54% / 2.15% / 24.47% against 2.37% /
+2.15% / 24.55% predicted. The bias of the fork-join approximation at the tuned operating
+point turns out indistinguishable from its bias at the default (-0.132% against -0.126%
+mean over 210 station rows each), which was the open doubt. `docs/forkjoin-s2-policy/simcheck.py`
+and `simcheck-output.txt` hold the run.
+
 That form — a plain list of stations with hand-supplied `gamma` — remains fully supported.
 `examples/mixed_network.py` is the same three stations wired into a `Network` instead, so
 `gamma` is *derived* from the topology rather than supplied; it reaches the identical
