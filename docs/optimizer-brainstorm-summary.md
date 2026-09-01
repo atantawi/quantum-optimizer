@@ -115,8 +115,22 @@ at the station's own spend on every optimizer iteration — a fixed point nested
 eqs 21/22 — and reaches what a grid sweep of `r_star` finds in all three workloads,
 recovering the paper's `r* = 1` exactly in `classical_dominant`, where it is optimal.
 Stability still reads `S·mu > γ`, but `mu` is the *effectively* slower rate `µ̂₁·min(1, r*)`,
-which is what carries the implication above through `r* < 1`. Evidence and the local
-optimality condition: [`docs/forkjoin-s2-policy/findings.md`](forkjoin-s2-policy/findings.md).
+which is what carries the implication above through `r* < 1`.
+
+**Update (2026-09-01).** Those gains are **measured, not only derived.** A simulated pass
+against `qsim-service` — 3 workloads x 3 policies x 5 base seeds, paired under common random
+numbers — confirms all of them, with each analytic gain landing inside its own measured 95%
+interval: tuning beats the default ray by 2.54% / 2.15% / 24.47% against 2.37% / 2.15% /
+24.55% predicted. This matters because everything above rests on `t_ul`, and the open doubt
+was that the approximation might be worse where the tuned policy operates than at the default;
+measured, the two are indistinguishable (−0.132% against −0.126% mean over 210 station rows
+each). The default is still `r* = r`.
+
+Evidence and the local optimality condition:
+[`docs/forkjoin-s2-policy/implementation.md`](forkjoin-s2-policy/implementation.md) is the
+maintained document — it carries the implementation, the measured cross-check and the
+corrections; [`findings.md`](forkjoin-s2-policy/findings.md) is the original spike and is
+superseded in part.
 
 ### 3.3 FJ cost representation
 Decision: a FJ station stores **`c₁` and `c₂` separately**; the allocator forms

@@ -309,6 +309,25 @@ half-widths fall well below the gaps being measured — at 2% the two are compar
 heavier load (a higher λ, or a smaller budget multiple) that pushes utilizations up
 toward saturation, where non-Poisson burstiness has more room to matter.
 
+**Replicated at a larger sample, 2026-09-01 (issue #10).**
+[`docs/forkjoin-s2-policy/simcheck-output.txt`](../../forkjoin-s2-policy/simcheck-output.txt)
+runs this same statistic over **630 station rows** — 14 stations × 3 workloads × 5 seeds ×
+3 fork-join ray policies — at the identical stopping rule, and reproduces both headline
+figures: mean gap −0.126% at the ray this section measured, worst row 1.165%, against the
+~0.15% and ~1.1% recorded above. The negative lean replicates a fifth, sixth and seventh
+time (136 / 132 / 134 of 210 rows per policy). It also answers a question this section
+could not ask, since it predates `r_star`: the bias is **the same size at the tuned ray as
+at the default** (−0.132% against −0.126%), so the closed form is not worse where the tuned
+policy operates.
+
+**That does not discharge the two paragraphs above.** That run neither tightened `precision`
+nor raised the load — it used `precision 0.02` at the same absolute budget `C = 41.040000`,
+which is 6.00×–14.71× the minimum feasible budget depending on the policy, so if anything
+*more* slack than the 6.00×–7.48× above rather than less — so
+the arrival-coupling prediction remains untested, exactly as described. It is a bigger sample
+of the same measurement at the same operating point, plus two new rays. Issue #7 owns the
+parameter sweep that would change the operating point.
+
 ## 8. Output and execution
 
 Per workload: a 14-row table (`station · gamma · S* · E[T] · zeta`, plus a `95% CI`

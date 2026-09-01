@@ -27,6 +27,14 @@ further base seeds — 4 of 4 runs with a negative mean — though this seed is 
 of the four and the cross-seed central estimate is ~0.15% rather than the ~0.25% here. See
 §7 for the per-seed table and what each of those does and does not license.
 
+A larger sample of the same statistic now exists:
+[`../forkjoin-s2-policy/simcheck-output.txt`](../forkjoin-s2-policy/simcheck-output.txt) runs
+630 station rows at this identical stopping rule and reproduces both figures (−0.126% mean,
+1.165% worst row at this ray), with the negative lean replicating three more times. It is a
+bigger sample at the *same* operating point plus two new fork-join rays — it does not probe
+the arrival coupling §7 describes, which would still need a tighter `precision` or a heavier
+load.
+
 One line of this log is now stale by *wording only*: the caption under the analytic
 summary said a fork-join's `S` "counts on both sides", which stopped being unconditionally
 true when `ForkJoinStation` gained `r_star` (issue #10). The example prints the reworded
