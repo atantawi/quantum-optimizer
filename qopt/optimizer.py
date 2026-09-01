@@ -134,6 +134,26 @@ class Optimizer:
                 f"initial zeta values must be finite and strictly positive, got {zeta}"
             )
 
+        # Undo any policy parameter a previous run of these same objects left mutated. A
+        # no-op for every station without a free parameter, and for a fork-join on a fixed
+        # ray; for a tuned fork-join it restores the ray eq 21 is about to be priced at.
+        # Two things fix its position here, both learned from review:
+        #
+        # - AFTER every guard above, because validation must not mutate. A budget that
+        #   never passes preflight used to reset the stations anyway, discarding a previous
+        #   run's converged ray -- which is a reported output, not just loop state.
+        # - BEFORE the first `allocate`, because eq 21 prices each station at its CURRENT
+        #   ray. A ray left over from a more generous budget prices the station above the
+        #   floor `min_budget` just cleared, giving negative slack and an immediate
+        #   InstabilityError instead of a run. The guard above is safe to evaluate on a
+        #   station not yet reset only because `min_spend` reports the floor at the ray a
+        #   run starts from rather than at the current one.
+        #
+        # This also makes a run a pure function of (stations-as-constructed, budget), so
+        # `r_star` after a run is that run's answer rather than a warm start's.
+        for st in stations:
+            st.reset_policy()
+
         stochastic = self.analyzer.is_stochastic
         warm_start_iterations = 0
         if stochastic and self.warm_start:
@@ -176,6 +196,50 @@ class Optimizer:
                 S_new = [
                     (1.0 - theta) * s + theta * t for s, t in zip(S, S_target)
                 ]
+            # Let each station adapt any free internal policy parameter to the capacity
+            # it just received, repricing itself and handing back the capacity that buys
+            # the same spend. Spend-preserving, so the budget stays exhausted and eq 21
+            # does not have to be re-run; a no-op returning `s` itself for every station
+            # without a free parameter, which makes this bit-for-bit inert on the default
+            # path. A fork-join's r_star is the only such parameter today (issue #10).
+            #
+            # Placed before the residual so that the step reported for an iteration
+            # covers everything that moved in it. That ordering is tidiness, not
+            # correctness: r_star only reaches the stopping rule through `alloc_cost` and
+            # so through S, and a settled S already implies a settled r_star, one
+            # iteration later at worst. What DOES matter is that the inner solve be
+            # precise -- see forkjoin_policy._min_on_spend_line. A policy parameter
+            # carrying sqrt(epsilon) noise makes this term jitter above a 1e-9 tolerance
+            # for several iterations after the answer has been reached, and placing the
+            # retune here is what exposes that rather than hiding it.
+            #
+            # No damping is needed here -- but NOT because r_star is noise-free. It is a
+            # function of the station's spend, and on the simulated path that spend
+            # descends from a measured E[T], so noise does reach it (injecting +/-2% noise
+            # into E[T] moves the converged r_star by ~6e-4 relative). The reason is that
+            # the retune adds no noise of its OWN: it is an exact function of the S handed
+            # to it, and that S has already been damped, so damping here would attenuate
+            # one perturbation twice. Pinned by
+            # test_a_tuned_station_runs_the_noise_floor_path, whose r_star assertion fails
+            # if this retune is wrapped in the damping average: the converged ray is then
+            # no longer the local optimum for the spend the station was given.
+            #
+            # A retune very nearly cannot make the budget infeasible: it lands the station
+            # inside its own stability region, so floor_i < spend_i for every station and
+            # sum(floor) < sum(spend) == C. That much holds only because forkjoin_policy
+            # guards the ray it returns against the float cancellation that can otherwise
+            # place it just outside -- without that guard the statement was badly false,
+            # and the violation escaped as an InstabilityError raised from in here.
+            #
+            # It is still not exact at ulp scale, and the review that found this preferred
+            # a true note to a tidy one. `retune` returns spend/alloc_cost_new, which
+            # re-rounds: at a budget within a few ulps of the floor the rescale can land a
+            # capacity exactly ON the stability boundary, and the run then dies here rather
+            # than converging -- measured on ~2% of budgets in the first 24 ulps above a
+            # tuned station's floor. Loud, never silent, and `min_feasible_budget` is
+            # documented as a floor to scale away from rather than to sit on.
+            S_new = [st.retune(s) for st, s in zip(stations, S_new)]
+
             residual = max(abs(a - b) for a, b in zip(S_new, S))
             S = S_new
 
@@ -187,6 +251,15 @@ class Optimizer:
             # `allocate`'s output. Comparing either against the damped step would scale it
             # by 1/theta -- `tol=1e-9` would mean 2e-9 and `noise_kappa=1.0` would mean 2.0
             # at the stochastic default theta=0.5.
+            #
+            # One caveat since the retune moved above: a retune's rescale is NOT damped,
+            # so dividing by theta scales that part of the step up rather than restoring
+            # it. Measured at theta = 0.5 on a tuned pair at 4x the floor, the rescale
+            # dominates only on the FIRST iteration -- 1.3e-1 against a damped move of
+            # 2.0e-3 -- and falls to a few percent of the damped move from the second
+            # iteration on. The bias is conservative either way: it can only make the loop
+            # harder to stop, never easier, and in practice an ordinary station is the
+            # argmax of the max() below, so it does not reach `step` at all.
             #
             # Normalizing the step once, rather than scaling each term, keeps both knobs
             # meaning exactly what they say at every damping value, and keeps `tol`

@@ -14,6 +14,13 @@ from qopt.exceptions import (
     SimulationTransportError,
     TopologyError,
 )
+from qopt.forkjoin_policy import (
+    R_STAR_EQUAL_RATE,
+    R_STAR_FIXED,
+    R_STAR_INVARIANT_R,
+    R_STAR_TUNED,
+    optimal_ray,
+)
 from qopt.network import Network, Route
 from qopt.optimizer import Optimizer, Result
 from qopt.qsim.analyzer import SimulationAnalyzer
@@ -35,6 +42,11 @@ __all__ = [
     "SingleServerStation",
     "GG1Station",
     "ForkJoinStation",
+    "R_STAR_INVARIANT_R",
+    "R_STAR_EQUAL_RATE",
+    "R_STAR_TUNED",
+    "R_STAR_FIXED",
+    "optimal_ray",
     "allocate",
     "min_feasible_budget",
     "noise_floor",

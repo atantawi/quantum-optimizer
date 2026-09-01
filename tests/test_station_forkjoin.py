@@ -2,7 +2,18 @@ import pytest
 
 from qopt.exceptions import InstabilityError
 from qopt.forkjoin_approx import t_ul
-from qopt.station import ForkJoinStation, Station
+from qopt.forkjoin_policy import (
+    R_STAR_EQUAL_RATE,
+    R_STAR_INVARIANT_R,
+    R_STAR_TUNED,
+    optimal_ray,
+)
+from qopt.allocator import min_feasible_budget
+from qopt.station import (
+    ForkJoinStation,
+    GG1Station,
+    Station,
+)
 
 
 def test_alloc_cost_is_sum_of_both_servers():
@@ -144,3 +155,218 @@ def test_sim_node_emits_the_ray_it_runs():
 def test_r_star_validation(r_star):
     with pytest.raises(ValueError):
         ForkJoinStation(gamma=0.6, mu=1.0, r=2.0, c1=1.0, c2=1.0, r_star=r_star)
+
+
+# --------------------------------------------------------------------------------------
+# Named r_star policies and the retune hook (issue #10 item 3). `r_star` carries either a
+# fixed ray (a float) or one of three named policies.
+# --------------------------------------------------------------------------------------
+
+FJ = dict(gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0)
+
+
+def test_invariant_r_is_the_default_and_names_the_incumbent_policy():
+    named = ForkJoinStation(**FJ, r_star=R_STAR_INVARIANT_R)
+    assert (named.r_star, named.mu, named.r, named.alloc_cost) == (4.0, 1.0, 4.0, 5.0)
+    assert named.policy == R_STAR_INVARIANT_R
+    assert ForkJoinStation(**FJ).policy == R_STAR_INVARIANT_R
+
+
+def test_equal_rate_names_the_papers_policy():
+    st = ForkJoinStation(**FJ, r_star=R_STAR_EQUAL_RATE)
+    assert st.r_star == 1.0
+    assert st.policy == R_STAR_EQUAL_RATE
+    assert st.alloc_cost == pytest.approx(4.0 + 1.0 / 4.0)   # c1 + c2/r
+    assert st.server_capacities(2.0) == pytest.approx((2.0, 0.5))
+
+
+def test_a_float_r_star_is_a_fixed_ray():
+    st = ForkJoinStation(**FJ, r_star=2.32)
+    assert st.policy == "fixed"
+
+
+def test_a_tuned_station_starts_on_the_floor_minimizing_ray():
+    """`tuned` must start at r_star = 1, not at the incumbent r.
+
+    Not a preference. A station's stability floor over the family,
+    `gamma*(c1 + c2*r_star/r) / (mu*min(1, r_star))`, is minimized at exactly r_star = 1,
+    and the Optimizer evaluates `min_feasible_budget` ONCE, before any retune. Starting at
+    r would therefore advertise the incumbent's floor for a station that can reach any ray.
+    """
+    tuned = ForkJoinStation(**FJ, r_star=R_STAR_TUNED)
+    assert tuned.policy == R_STAR_TUNED
+    assert tuned.r_star == 1.0
+    paper = ForkJoinStation(**FJ, r_star=R_STAR_EQUAL_RATE)
+    assert (tuned.mu, tuned.r, tuned.alloc_cost) == \
+        (paper.mu, paper.r, paper.alloc_cost)
+
+
+def test_tuned_floor_is_the_minimum_over_every_ray():
+    """The floor a tuned station advertises must be no larger than any fixed ray's."""
+    tuned = min_feasible_budget([ForkJoinStation(**FJ, r_star=R_STAR_TUNED)])
+    for r_star in (0.25, 0.5, 1.0, 1.7, 2.32, 4.0, 9.0):
+        assert tuned <= min_feasible_budget([ForkJoinStation(**FJ, r_star=r_star)])
+    assert tuned == pytest.approx(
+        min_feasible_budget([ForkJoinStation(**FJ, r_star=1.0)]), rel=1e-15)
+
+
+# A tuned station whose optimum lies BELOW 1: the expensive server is server 2, priced
+# above its speed advantage (c2/c1 > r). Every other tuned fixture in the suite lands
+# above 1, where min(1, r_star) == 1.0 makes the re-anchoring of `mu` a no-op -- so
+# without this the branch that keeps `_check_stable` guarding the binding server, and the
+# failure it exists to prevent, are never exercised.
+FJ_LOW = dict(gamma=0.45, mu=1.0, r=4.0, c1=1.0, c2=20.0)
+
+
+def test_retune_below_one_re_anchors_mu_onto_the_newly_binding_server():
+    st = ForkJoinStation(**FJ_LOW, r_star=R_STAR_TUNED)
+    S_new = st.retune(3.0)
+    assert st.r_star < 1.0
+    # `mu` must follow the ray onto server 2, which the ray now leaves slower.
+    assert st.mu == pytest.approx(st.mu_base * st.r_star, rel=1e-12)
+    assert st.mu < st.mu_base
+    assert st.r == pytest.approx(1.0 / st.r_star, rel=1e-12)
+    # And the guard must now bind on that server: S*mu is the SMALLER of the two rates.
+    m_slow, m_fast = S_new * st.mu, S_new * st.mu * st.r
+    assert m_slow < m_fast
+    assert m_slow > st.gamma
+    st.check_stable(S_new)
+
+
+def test_a_tuned_station_can_cross_below_one_during_an_optimizer_run():
+    """The r_star < 1 branch has to be reachable through the public path, not just by
+    calling retune by hand."""
+    from qopt.allocator import min_feasible_budget as _floor
+    from qopt.optimizer import Optimizer
+
+    stations = [ForkJoinStation(**FJ_LOW, r_star=R_STAR_TUNED, name="fj"),
+                GG1Station.mm1(gamma=0.9, mu=1.0, c=1.0, name="q")]
+    result = Optimizer(stations, 4.0 * _floor(stations)).run()
+    assert result.converged
+    assert stations[0].r_star < 1.0
+    assert stations[0].mu < stations[0].mu_base
+
+
+@pytest.mark.parametrize("bad", ["", "auto", "tune", "invariant_r", "EQUAL-RATE"])
+def test_unknown_policy_name_is_rejected(bad):
+    with pytest.raises(ValueError, match="r_star"):
+        ForkJoinStation(**FJ, r_star=bad)
+
+
+def test_retune_is_a_no_op_on_every_policy_but_tuned():
+    for r_star in (None, R_STAR_INVARIANT_R, R_STAR_EQUAL_RATE, 2.32):
+        st = ForkJoinStation(**FJ, r_star=r_star)
+        before = (st.r_star, st.mu, st.r, st.alloc_cost)
+        assert st.retune(3.0) == 3.0
+        assert (st.r_star, st.mu, st.r, st.alloc_cost) == before
+
+
+def test_reset_policy_returns_a_tuned_station_to_its_starting_ray():
+    """`retune` mutates, so something has to undo it: a tuned station that has already run
+    sits on the ray that run ended on, and that ray advertises a HIGHER stability floor
+    than the policy's own minimum at r_star = 1. Restoring the starting ray is what keeps a
+    reused station's feasibility from depending on the budget it last saw.
+    """
+    st = ForkJoinStation(**FJ, r_star=R_STAR_TUNED)
+    start = (st.r_star, st.mu, st.r, st.alloc_cost)
+    st.retune(6.0)
+    assert st.r_star != 1.0                       # it did move off the starting ray
+    # The ray it now sits on would need more budget than the policy does. `min_spend`
+    # reports the policy's floor throughout, so the ray's own is spelled out here.
+    assert st.alloc_cost * (st.gamma / st.mu) > st.min_spend
+    st.reset_policy()
+    # Bit-for-bit, not approximately: re-anchoring recomputes `mu` by the same expression
+    # __init__ used, so a restored station must be indistinguishable from a fresh one.
+    assert (st.r_star, st.mu, st.r, st.alloc_cost) == start
+
+
+def test_alloc_cost_is_exactly_c1_plus_c2_on_the_default_ray():
+    """`alloc_cost` is written `c1 + c2 * (r_star / r_base)` so that the default ray divides
+    to exactly 1.0 and the cost is bit-for-bit `c1 + c2`, which is what makes the default
+    path byte-identical to the pre-policy code. The grouping is the whole mechanism:
+    `c1 + (c2 * r_star) / r_base` is a different number for some hardware.
+
+    These constants are not decoration -- they are a triple where the two forms disagree
+    (found by search; ~1 in 1e5 random triples does). Every fixture elsewhere uses
+    r in {1, 2, 4}, all powers of two, where the two forms agree and this cannot fail.
+    """
+    c1, c2, r = 6.125905660483073, 6.75323477245016, 11.340282869461499
+    st = ForkJoinStation(gamma=0.45, mu=1.0, r=r, c1=c1, c2=c2)
+    assert st.alloc_cost == c1 + c2                  # exact, not approx
+    assert c1 + (c2 * r) / r != c1 + c2              # the grouping really does matter here
+
+
+def test_min_spend_ignores_a_tuned_stations_current_ray():
+    """`min_spend` must answer for the POLICY, not for the ray the station happens to sit
+    on: it is the floor at the ray a run will start from, and a tuned run starts by
+    restoring that ray. Reading the mutable ray instead makes the exported
+    `min_feasible_budget` disagree with `Optimizer.run()` and depend on run history.
+    """
+    st = ForkJoinStation(**FJ, r_star=R_STAR_TUNED)
+    fresh = st.min_spend
+    st.retune(6.0)
+    assert st.r_star != 1.0
+    assert st.alloc_cost * (st.gamma / st.mu) > fresh  # the ray's own floor did move up
+    assert st.min_spend == fresh                     # the policy's did not
+    st.reset_policy()
+    assert st.min_spend == st.alloc_cost * (st.gamma / st.mu)
+
+
+def test_min_spend_is_the_plain_expression_on_every_policy_but_tuned():
+    """Nothing but `tuned` has a ray that moves, so for every other policy this must be
+    bit-for-bit the term eq 21 prices at the ray the station is on.
+
+    0.3 and 0.7 are in the list because a ray below 1 scales `mu` off a power of two, which
+    is where `alloc_cost * (gamma/mu)` and `(alloc_cost * gamma) / mu` part company.
+    """
+    for r_star in (None, R_STAR_INVARIANT_R, R_STAR_EQUAL_RATE, 0.3, 0.5, 0.7, 2.32, 4.0):
+        st = ForkJoinStation(**FJ, r_star=r_star)
+        assert st.min_spend == st.alloc_cost * (st.gamma / st.mu)
+
+
+def test_reset_policy_is_a_no_op_on_every_policy_but_tuned():
+    """Only `tuned` has a parameter that moves, so every other policy must be untouched --
+    including a fixed float ray, which a reset must not quietly snap to 1."""
+    for r_star in (None, R_STAR_INVARIANT_R, R_STAR_EQUAL_RATE, 2.32):
+        st = ForkJoinStation(**FJ, r_star=r_star)
+        before = (st.r_star, st.mu, st.r, st.alloc_cost)
+        st.reset_policy()
+        assert (st.r_star, st.mu, st.r, st.alloc_cost) == before
+
+
+def test_retune_moves_a_tuned_station_onto_the_locally_optimal_ray():
+    st = ForkJoinStation(**FJ, r_star=R_STAR_TUNED)
+    S = 3.0
+    spend = S * st.alloc_cost
+    S_new = st.retune(S)
+    assert st.r_star == pytest.approx(
+        optimal_ray(0.45, 1.0, 4.0, 4.0, 1.0, spend), rel=1e-12)
+    # The ray changed, so mu and r must be re-anchored on the newly binding server.
+    k = min(1.0, st.r_star)
+    assert st.mu == pytest.approx(st.mu_base * k, rel=1e-12)
+    assert st.r == pytest.approx(max(1.0, st.r_star) / k, rel=1e-12)
+    assert st.policy == R_STAR_TUNED          # retuning does not consume the policy
+
+
+def test_retune_preserves_the_stations_spend_exactly():
+    """Eq 21 hands out a capacity priced at the OLD alloc_cost. Retuning reprices the
+    station, so `retune` returns the capacity that buys the same spend at the new price --
+    that is what keeps the budget satisfied and keeps S meaning "server 1 runs at S*mu".
+    """
+    for S in (2.0, 3.0, 7.5):
+        st = ForkJoinStation(**FJ, r_star=R_STAR_TUNED)
+        spend = S * st.alloc_cost
+        assert st.retune(S) * st.alloc_cost == pytest.approx(spend, rel=1e-12)
+
+
+def test_retune_below_the_optimal_floor_raises():
+    st = ForkJoinStation(**FJ, r_star=R_STAR_TUNED)
+    with pytest.raises(InstabilityError):
+        st.retune(0.45 * (4.0 + 0.25) / st.alloc_cost)   # exactly the optimal floor
+
+
+def test_mu_base_is_the_constructed_server_one_rate():
+    """Tuning has to recompute `mu` from the hardware, and `mu` itself is already the
+    anchored (effective) rate -- so the constructed rate has to survive separately, the
+    way `r_base` does."""
+    assert ForkJoinStation(**FJ, r_star=0.5).mu_base == 1.0

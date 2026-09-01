@@ -3,9 +3,16 @@ import math
 import pytest
 
 from qopt.allocator import min_feasible_budget
+from qopt.exceptions import InfeasibleBudgetError
 from qopt.analyzer import AnalyticAnalyzer, Analyzer, Evaluation
 from qopt.network import Network, Route
 from qopt.optimizer import Optimizer, Result
+from qopt.forkjoin_policy import (
+    R_STAR_EQUAL_RATE,
+    R_STAR_INVARIANT_R,
+    R_STAR_TUNED,
+    optimal_ray,
+)
 from qopt.station import ForkJoinStation, GG1Station
 
 
@@ -425,3 +432,320 @@ def test_max_iter_exhaustion_still_warns_and_reports_max_iter():
     assert result.stop_reason == "max_iter"
     assert result.converged is False
     assert math.isfinite(result.residual)
+
+
+# --------------------------------------------------------------------------------------
+# Tuned r_star: the nested fixed point (issue #10 item 3).
+# --------------------------------------------------------------------------------------
+
+def _tuned_pair():
+    """A tuned fork-join priced like quantum_dominant, plus one ordinary queue."""
+    fj = ForkJoinStation(gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0,
+                         r_star=R_STAR_TUNED, name="fj")
+    return [fj, GG1Station.mm1(gamma=0.9, mu=1.0, c=1.0, name="q")]
+
+
+def test_tuned_station_reaches_a_self_consistent_fixed_point():
+    """All three equations must hold at once at the answer: eq 21 prices the station at
+    its own r_star, eq 22 takes zeta at the ray it runs, and r_star is the local optimum
+    for the spend eq 21 gave it. The last of those is what makes it a NESTED fixed point,
+    and it is what fails if the loop is allowed to converge before r_star settles.
+    """
+    stations = _tuned_pair()
+    fj = stations[0]
+    C = 4.0 * min_feasible_budget(stations)
+    res = Optimizer(stations, C).run()
+    assert res.converged
+    spend = res.capacities[0] * fj.alloc_cost
+    assert fj.r_star == pytest.approx(
+        optimal_ray(0.45, 1.0, 4.0, 4.0, 1.0, spend), rel=1e-9)
+    assert fj.r_star != 4.0          # it actually moved off the incumbent ray
+
+
+def test_tuning_spends_the_whole_budget_exactly():
+    """The budget identity has to survive a policy that reprices its own station.
+
+    This pins the invariant at the fixed point, where it holds for either of two reasons:
+    r_star has stopped moving, so eq 21's own allocation already exhausts C, AND `retune`
+    returns a spend-preserving capacity. It therefore catches a wrong rescale factor but
+    not a missing one -- the mechanism itself is pinned at station level, by
+    test_retune_preserves_the_stations_spend_exactly.
+    """
+    stations = _tuned_pair()
+    C = 4.0 * min_feasible_budget(stations)
+    res = Optimizer(stations, C).run()
+    spent = sum(st.alloc_cost * S for st, S in zip(stations, res.capacities))
+    assert spent == pytest.approx(C, rel=1e-12)
+
+
+def test_tuning_beats_both_incumbent_policies_at_the_same_budget():
+    def objective(r_star):
+        stations = _tuned_pair()
+        stations[0] = ForkJoinStation(gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0,
+                                      r_star=r_star, name="fj")
+        C = 4.0 * min_feasible_budget(_tuned_pair())
+        return Optimizer(stations, C).run().objective
+
+    tuned = objective(R_STAR_TUNED)
+    assert tuned < objective(R_STAR_INVARIANT_R)
+    assert tuned < objective(R_STAR_EQUAL_RATE)
+
+
+def test_tuning_does_not_degrade_convergence():
+    """A tuned run must not cost materially more iterations than a fixed ray.
+
+    What this actually guards is the INNER SOLVE's precision: replacing the bisection with
+    a golden-section minimizer of `t_ul` takes 9 iterations here against bisection's 6 and
+    the incumbent's 5, because r* then carries sqrt(epsilon) noise that keeps the outer
+    step above `tol`. That is a different mechanism from findings section 7's 9 iterations
+    under the inner-split embedding, which came from a mispriced zeta on a different
+    network -- the numbers coincide, the causes do not.
+    """
+    stations = _tuned_pair()
+    C = 4.0 * min_feasible_budget(stations)
+    tuned = Optimizer(stations, C).run()
+    incumbent = Optimizer(
+        [ForkJoinStation(gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0, name="fj"),
+         GG1Station.mm1(gamma=0.9, mu=1.0, c=1.0, name="q")], C).run()
+    assert tuned.converged and incumbent.converged
+    assert tuned.iterations <= incumbent.iterations + 2
+
+
+def test_tuning_survives_the_stochastic_path_with_damping_and_a_warm_start():
+    """r_star does carry simulation noise -- it is a function of the station's spend, and
+    on this path that spend descends from a measured E[T] (injecting +/-2% noise into E[T]
+    moves the converged r_star by ~6e-4 relative). It still needs no damping of its own,
+    but for a different reason: the retune adds no noise of its OWN, being an exact
+    function of an S that has already been damped, so damping here would attenuate one
+    perturbation twice. r_star also has to survive the analytic warm start, which shares
+    these station objects and therefore tunes them before the simulated phase begins.
+    """
+    stations = _tuned_pair()
+    fj = stations[0]
+    C = 4.0 * min_feasible_budget(stations)
+    fake = DeterministicFake()
+    res = Optimizer(stations, C, analyzer=fake).run()
+    assert res.converged
+    assert res.warm_start_iterations > 0        # the warm start ran, and tuned
+    assert fj.r_star == pytest.approx(
+        optimal_ray(0.45, 1.0, 4.0, 4.0, 1.0, res.capacities[0] * fj.alloc_cost),
+        rel=1e-9)
+    spent = sum(st.alloc_cost * S for st, S in zip(stations, res.capacities))
+    assert spent == pytest.approx(C, rel=1e-12)
+
+
+def test_a_descending_budget_sweep_may_reuse_tuned_stations():
+    """A tuned station that has already run must not refuse a budget it can serve.
+
+    `retune` mutates the ray, and the ray it lands on at a generous budget needs MORE
+    budget to stay stable than the policy's own minimum at r_star = 1. A station reused at
+    a lower budget must be served against the policy's floor, not that ray's -- which takes
+    both halves of the fix: `min_spend` reports the policy floor to the feasibility check,
+    and `reset_policy` puts the station back on the ray eq 21 is then priced at.
+    """
+    stations = _tuned_pair()
+    floor = min_feasible_budget(stations)
+    Optimizer(stations, 20.0 * floor).run()
+    stale = sum(s.alloc_cost * (s.gamma / s.mu) for s in stations)  # the ended-on rays
+    assert stale > floor          # the high-budget ray really does need more
+    C = 0.5 * (floor + stale)     # feasible for the policy, not for the ray it ended on
+    reused = Optimizer(stations, C).run()
+    fresh = Optimizer(_tuned_pair(), C).run()
+    assert reused.converged
+    assert reused.capacities == fresh.capacities        # bit-for-bit
+    assert reused.objective == fresh.objective
+
+
+# The single tuned station of the descending-sweep report, kept separate from
+# `_tuned_pair` so the two floors are the station's own and can be pinned as numbers.
+FJ_SWEEP = dict(gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0)
+
+
+def test_the_descending_sweep_figures_on_record():
+    """Pins the measured figures docs/forkjoin-s2-policy/implementation.md cites for this,
+    so that document stays executable rather than transcribed."""
+    st = ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")
+    floor = min_feasible_budget([st])
+    assert floor == pytest.approx(1.9125, rel=1e-12)
+    Optimizer([st], 20.0 * floor).run()
+    assert st.r_star == pytest.approx(2.6925527241298357, rel=1e-9)
+    # The floor of the ray it ended on. `min_feasible_budget` deliberately no longer
+    # reports this -- see test_the_exported_floor_agrees_with_run... below.
+    assert st.alloc_cost * (st.gamma / st.mu) == pytest.approx(
+        2.102912181464607, rel=1e-9)
+
+    C = 2.008125          # above the policy's floor, below the ray it ended on
+    reused = Optimizer([st], C).run()
+    control = [ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")]
+    fresh = Optimizer(control, C).run()
+    assert reused.converged
+    assert reused.capacities == fresh.capacities
+    assert reused.objective == fresh.objective
+
+
+def test_the_reset_must_precede_the_first_allocation():
+    """A policy-aware floor is not a substitute for restoring the ray -- the two guard
+    different steps, and this pins why both are needed.
+
+    `min_spend` lets the feasibility check clear a budget the policy can serve. But eq 21
+    prices each station at its CURRENT ray, so allocating before the reset on a ray left
+    over from a generous run gives NEGATIVE slack -- `-0.09521` at the budget used here --
+    and `allocate` refuses outright. The run would fail to start rather than serve a budget
+    the check had just cleared. Pinning this keeps the reset from drifting below the first
+    `allocate`, and keeps it from being "simplified" away as redundant now that the floor
+    is policy-aware.
+    """
+    from qopt.allocator import allocate
+    from qopt.exceptions import InfeasibleBudgetError
+
+    st = ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")
+    policy_floor = min_feasible_budget([st])
+    Optimizer([st], 20.0 * policy_floor).run()          # leaves the ray at ~2.69
+    ray_floor = st.alloc_cost * (st.gamma / st.mu)
+    C = 0.5 * (policy_floor + ray_floor)
+    assert policy_floor < C < ray_floor                 # the check passes, the ray cannot
+    assert C - ray_floor == pytest.approx(-0.09520609073230357, rel=1e-9)
+
+    with pytest.raises(InfeasibleBudgetError):
+        allocate([st], C, [st.default_zeta])
+
+    # And the real path, which resets between the two, serves that same budget.
+    assert Optimizer([st], C).run().converged
+
+
+def test_the_exported_floor_agrees_with_run_on_a_reused_tuned_station():
+    """`min_feasible_budget` is public, and the README derives budgets from it, so it must
+    not report a floor the Optimizer would accept a smaller budget than.
+
+    Previously it read the mutable ray: after a generous run it reported that ray's floor
+    (2.10291 here) while `run()` still served every budget above 1.9125, because `run()`
+    restores the ray first. Budgets derived from the helper were inflated by run history.
+    """
+    st = ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")
+    fresh = min_feasible_budget([st])
+    Optimizer([st], 20.0 * fresh).run()
+    assert st.r_star == pytest.approx(2.6925527241298357, rel=1e-9)
+    assert min_feasible_budget([st]) == fresh            # bit-for-bit, not merely close
+
+    # And the reported floor is tight in both directions, which is what makes it usable:
+    # just above it converges, at it is rejected.
+    assert Optimizer([st], 1.0000001 * fresh).run().converged
+    with pytest.raises(InfeasibleBudgetError):
+        Optimizer([st], fresh).run()
+
+
+def test_a_run_rejected_at_preflight_leaves_the_tuned_ray_alone():
+    """Validation must not mutate. A budget that never passes preflight used to reset the
+    station anyway, discarding a previous run's converged ray -- which is a reported
+    output, read by `r_star` and by per-unit capacity attribution.
+
+    Now possible because the feasibility check reads the policy's floor rather than the
+    ray's, so the reset no longer has to run before it.
+    """
+    st = ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")
+    floor = min_feasible_budget([st])
+    Optimizer([st], 20.0 * floor).run()
+    answer = (st.r_star, st.mu, st.r, st.alloc_cost)
+    assert st.r_star != 1.0
+
+    with pytest.raises(InfeasibleBudgetError):
+        Optimizer([st], 0.5 * floor).run()
+    assert (st.r_star, st.mu, st.r, st.alloc_cost) == answer
+
+    with pytest.raises(ValueError):
+        Optimizer([st], float("nan")).run()
+    assert (st.r_star, st.mu, st.r, st.alloc_cost) == answer
+
+    with pytest.raises(ValueError):
+        Optimizer([st], 4.0 * floor, initial_zeta=[-1.0]).run()
+    assert (st.r_star, st.mu, st.r, st.alloc_cost) == answer
+
+    # A run that DOES pass preflight still resets, so its answer is not warm-started off
+    # the ray preserved above.
+    reused = Optimizer([st], 4.0 * floor).run()
+    control = [ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")]
+    fresh = Optimizer(control, 4.0 * floor).run()
+    assert reused.capacities == fresh.capacities
+    assert st.r_star == control[0].r_star
+
+
+def test_a_tuned_station_runs_the_noise_floor_path():
+    """The only other stochastic tuned test declares `half_width=None`, so `ci is None`,
+    `_noise_floor` short-circuits, and `allocator.noise_floor` is never called with a tuned
+    station at all -- even though it runs `allocate` 2n times, which now has a precondition
+    that can raise. This exercises that path and the `noise-floor` stopping rule.
+    """
+    stations = _tuned_pair()
+    fj = stations[0]
+    C = 4.0 * min_feasible_budget(stations)
+    # `warm_start=False` on purpose: the analytic pre-solve lands exactly on the answer
+    # here, so with it the loop takes ONE step, stops on `tol`, and never gets far enough
+    # for the noise floor to bind -- which is how this whole path stayed uncovered.
+    res = Optimizer(stations, C, analyzer=DeterministicFake(half_width=0.001),
+                    noise_kappa=1.0, warm_start=False).run()
+    assert res.converged
+    assert res.noise_floor == pytest.approx(0.0032843, rel=1e-3)
+    assert res.stop_reason == "noise-floor"
+    assert res.iterations > 1              # it actually iterated, unlike the other one
+    # The ray is still the local optimum for the spend it ended on, and the budget is still
+    # exactly spent -- the two invariants the analytic tests assert, on the noisy path.
+    spend = res.capacities[0] * fj.alloc_cost
+    assert fj.r_star == pytest.approx(
+        optimal_ray(0.45, 1.0, 4.0, 4.0, 1.0, spend), rel=1e-9)
+    assert sum(st.alloc_cost * S for st, S in zip(stations, res.capacities)) == \
+        pytest.approx(C, rel=1e-12)
+
+
+def test_every_station_is_reset_not_just_the_first():
+    """The reset is a loop over all stations, and nothing pinned that.
+
+    Every other reuse fixture happens to put the tuned fork-join at index 0, so
+    `stations[0].reset_policy()` passed the whole suite. This puts it LAST behind two
+    ordinary stations, where only a real loop reaches it.
+    """
+    def trio():
+        return [GG1Station.mm1(gamma=0.9, mu=1.0, c=1.0, name="q1"),
+                GG1Station.mm1(gamma=0.6, mu=1.0, c=2.0, name="q2"),
+                ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")]
+    stations = trio()
+    floor = min_feasible_budget(stations)
+    Optimizer(stations, 20.0 * floor).run()
+    assert stations[-1].r_star != 1.0                  # it is off the starting ray
+    reused = Optimizer(stations, 4.0 * floor).run()
+    fresh = Optimizer(trio(), 4.0 * floor).run()
+    assert reused.capacities == fresh.capacities       # bit-for-bit
+    assert reused.iterations == fresh.iterations
+
+
+def test_reusing_tuned_stations_reproduces_a_fresh_run_exactly():
+    """A run is a pure function of (stations-as-constructed, budget), tuning included.
+
+    Without the reset the second run warm-starts from the first's answer, which is a
+    different iterate sequence -- measured: 5 iterations against 6, and capacities agreeing
+    only to ~1e-13. Iterations are asserted too because the capacities alone converge to
+    nearly the same place either way, so they are the weaker witness of the two.
+    """
+    stations = _tuned_pair()
+    C = 4.0 * min_feasible_budget(stations)
+    first = Optimizer(stations, C).run()
+    second = Optimizer(stations, C).run()
+    assert second.capacities == first.capacities       # bit-for-bit
+    assert second.iterations == first.iterations
+
+
+def test_tuned_and_fixed_at_the_tuned_ray_reach_the_same_answer():
+    """The fixed point's defining property, stated as an equivalence: freezing r_star at
+    the value tuning converged to must reproduce the same allocation. If it did not, the
+    tuned run would have stopped somewhere that is not a fixed point of eq 21 at its own
+    prices."""
+    stations = _tuned_pair()
+    C = 4.0 * min_feasible_budget(stations)
+    tuned = Optimizer(stations, C).run()
+    frozen_stations = [
+        ForkJoinStation(gamma=0.45, mu=1.0, r=4.0, c1=4.0, c2=1.0,
+                        r_star=stations[0].r_star, name="fj"),
+        GG1Station.mm1(gamma=0.9, mu=1.0, c=1.0, name="q"),
+    ]
+    frozen = Optimizer(frozen_stations, C).run()
+    assert frozen.capacities == pytest.approx(tuned.capacities, rel=1e-8)
+    assert frozen.objective == pytest.approx(tuned.objective, rel=1e-9)

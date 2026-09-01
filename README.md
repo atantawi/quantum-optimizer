@@ -118,10 +118,29 @@ print(result.capacities, result.objective, result.converged)
 ```
 
 `ForkJoinStation` also takes an optional `r_star`, which picks the ray its two effective
-rates lie on (`m₂ = r_star·m₁`) and prices it `c₁ + c₂·r_star/r`. It defaults to `r`, giving
-both servers the same capacity `S` at cost `c₁ + c₂`; `r_star = 1` equalizes the two
-effective rates at cost `c₁ + c₂/r`, which is the paper's rule. Neither dominates — see
-[`docs/forkjoin-s2-policy/findings.md`](docs/forkjoin-s2-policy/findings.md).
+rates lie on (`m₂ = r_star·m₁`) and prices it `c₁ + c₂·r_star/r`, where `r` throughout this
+section is the ratio passed at CONSTRUCTION — the attribute `ForkJoinStation.r` is the
+*effective* ratio, which `r_star < 1` swaps, and `alloc_cost` reads `r_base` for exactly
+that reason. Pass a float for a fixed ray, or one of three named policies:
+
+| `r_star` | ray | cost | |
+|---|---|---|---|
+| `R_STAR_INVARIANT_R` | `r_star = r` | `c₁ + c₂` | the default: both servers get capacity `S` |
+| `R_STAR_EQUAL_RATE` | `r_star = 1` | `c₁ + c₂/r` | equal effective rates — the paper's rule |
+| `R_STAR_TUNED` | solved | `c₁ + c₂·r_star/r` | the local optimality condition at the station's own spend; starts at `r_star = 1`, the ray that minimizes the station's stability floor |
+
+Neither incumbent dominates the other: the paper's rule wins `classical_dominant` by
+24.55% and loses `quantum_dominant` by 5.47%. `R_STAR_TUNED` re-solves `r_star` on every
+optimizer iteration — a fixed point nested inside eq 21/22 — and reaches what a grid sweep
+of `r_star` finds, in all three workloads. It does that by *mutating* the station, so
+`r_star` after a run is that run's chosen ray; the `Optimizer` restores the starting ray
+once every run has cleared its guards, which keeps a run a pure function of the stations as
+constructed and the budget, however many times the same objects are reused, and leaves a
+previous answer intact when a run is rejected. `min_feasible_budget` is likewise answered
+for the *policy* rather than for the ray a station currently sits on, so budgets scaled off
+it mean the same thing before and after a run. See
+[`docs/forkjoin-s2-policy/findings.md`](docs/forkjoin-s2-policy/findings.md) and
+[`implementation.md`](docs/forkjoin-s2-policy/implementation.md).
 
 That form — a plain list of stations with hand-supplied `gamma` — remains fully supported.
 `examples/mixed_network.py` is the same three stations wired into a `Network` instead, so

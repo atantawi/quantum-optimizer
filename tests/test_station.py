@@ -73,3 +73,33 @@ def test_construction_validation(kwargs):
 def test_invalid_cov_rejected(cov_a, cov_s):
     with pytest.raises(ValueError):
         GG1Station(gamma=0.5, mu=1.0, c=1.0, cov_a=cov_a, cov_s=cov_s)
+
+
+def test_retune_is_a_no_op_for_a_station_with_no_free_policy_parameter():
+    """The hook exists on the base class so the Optimizer can call it unconditionally.
+    A single-server station has nothing to reprice, so it must return S untouched and
+    leave its own coefficients alone."""
+    st = GG1Station.mm1(gamma=0.6, mu=1.0, c=2.0, name="q")
+    before = (st.mu, st.alloc_cost)
+    for S in (1.0, 2.5, 1e6):
+        assert st.retune(S) is S
+    assert (st.mu, st.alloc_cost) == before
+
+
+def test_min_spend_is_the_stations_own_term_in_the_feasibility_floor():
+    """The default is the term `min_feasible_budget` has always summed, and it must stay
+    bit-for-bit the expression eq 21 prices -- `alloc_cost * (gamma/mu)`, grouped that way
+    on purpose (see Station.min_spend). Pinned budgets elsewhere are derived from it."""
+    st = GG1Station.mm1(gamma=0.6, mu=1.0, c=2.0, name="q")
+    assert st.min_spend == st.alloc_cost * (st.gamma / st.mu)
+    assert st.min_spend == 1.2
+
+
+def test_reset_policy_is_a_no_op_for_a_station_with_no_free_policy_parameter():
+    """The other half of the same hook pair: the Optimizer restores every station's policy
+    parameter before it checks feasibility, so this must also be callable unconditionally
+    and leave a single-server station exactly as it was."""
+    st = GG1Station.mm1(gamma=0.6, mu=1.0, c=2.0, name="q")
+    before = (st.mu, st.alloc_cost)
+    assert st.reset_policy() is None
+    assert (st.mu, st.alloc_cost) == before
