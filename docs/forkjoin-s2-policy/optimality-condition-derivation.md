@@ -340,7 +340,7 @@ tuned policy reaches or beats what a $0.02$-grid sweep of $r^*$ finds in all thr
 workloads ([`implementation.md`](implementation.md)), and the resulting allocations were then
 measured against a discrete-event simulation of the whole network: the predicted gains over
 the incumbent ray survive, with each analytic gain landing inside its own measured $95\%$
-interval, and the bias of $t_{\mathrm{UL}}$ at the tuned ray turns out
+interval, and the bias of $T$ at the tuned ray turns out
 indistinguishable from its bias at the incumbent ray
 ([`simcheck-output.txt`](simcheck-output.txt)). That last point is what licenses using this
 condition at a ray the approximation was never validated at — and it is a measurement, not a

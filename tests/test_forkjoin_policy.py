@@ -388,12 +388,17 @@ def test_the_written_derivation_differentiates_t_ul(lam, m1, m2):
     """...and it is the derivative of `t_ul`, not merely a formula the code agrees with.
 
     A central difference, so an error in BOTH the note and `_dt_dm1` -- which the test above
-    cannot see, since they would agree with each other -- still fails here. Tolerance is set
-    by the difference itself: 1e-7 steps on a smooth function leave ~1e-5 relative error.
+    cannot see, since they would agree with each other -- still fails here.
+
+    The tolerance is 2e-5 against a worst observed error of 4.9e-6 over these points, i.e. 4x
+    headroom rather than the 20x a round 1e-4 would give. Everything here is deterministic --
+    fixed points, no sampling -- so there is no flakiness to buy headroom against, and a loose
+    bound would let a real error of a few times the truncation error pass unnoticed. If a
+    platform's float behaviour ever pushes this over, tighten the step rather than the bound.
     """
     for k, args in ((1, (1, 0)), (2, (0, 1))):
         step = 1e-7 * max(1.0, m1 if k == 1 else m2)
         up = t_ul(lam, m1 + step * args[0], m2 + step * args[1])
         down = t_ul(lam, m1 - step * args[0], m2 - step * args[1])
         assert _derivation_dt_dmk(lam, m1, m2, k) == pytest.approx(
-            (up - down) / (2.0 * step), rel=1e-4)
+            (up - down) / (2.0 * step), rel=2e-5)
