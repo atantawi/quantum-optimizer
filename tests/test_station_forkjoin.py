@@ -273,7 +273,7 @@ def test_reset_policy_returns_a_tuned_station_to_its_starting_ray():
     assert st.r_star != 1.0                       # it did move off the starting ray
     # The ray it now sits on would need more budget than the policy does. `min_spend`
     # reports the policy's floor throughout, so the ray's own is spelled out here.
-    assert st.alloc_cost * st.gamma / st.mu > st.min_spend
+    assert st.alloc_cost * (st.gamma / st.mu) > st.min_spend
     st.reset_policy()
     # Bit-for-bit, not approximately: re-anchoring recomputes `mu` by the same expression
     # __init__ used, so a restored station must be indistinguishable from a fresh one.
@@ -290,18 +290,22 @@ def test_min_spend_ignores_a_tuned_stations_current_ray():
     fresh = st.min_spend
     st.retune(6.0)
     assert st.r_star != 1.0
-    assert st.alloc_cost * st.gamma / st.mu > fresh   # the ray's own floor did move up
+    assert st.alloc_cost * (st.gamma / st.mu) > fresh  # the ray's own floor did move up
     assert st.min_spend == fresh                     # the policy's did not
     st.reset_policy()
-    assert st.min_spend == st.alloc_cost * st.gamma / st.mu
+    assert st.min_spend == st.alloc_cost * (st.gamma / st.mu)
 
 
 def test_min_spend_is_the_plain_expression_on_every_policy_but_tuned():
     """Nothing but `tuned` has a ray that moves, so for every other policy this must be
-    bit-for-bit the term `min_feasible_budget` summed before the hook existed."""
-    for r_star in (None, R_STAR_INVARIANT_R, R_STAR_EQUAL_RATE, 0.5, 2.32, 4.0):
+    bit-for-bit the term eq 21 prices at the ray the station is on.
+
+    0.3 and 0.7 are in the list because a ray below 1 scales `mu` off a power of two, which
+    is where `alloc_cost * (gamma/mu)` and `(alloc_cost * gamma) / mu` part company.
+    """
+    for r_star in (None, R_STAR_INVARIANT_R, R_STAR_EQUAL_RATE, 0.3, 0.5, 0.7, 2.32, 4.0):
         st = ForkJoinStation(**FJ, r_star=r_star)
-        assert st.min_spend == st.alloc_cost * st.gamma / st.mu
+        assert st.min_spend == st.alloc_cost * (st.gamma / st.mu)
 
 
 def test_reset_policy_is_a_no_op_on_every_policy_but_tuned():

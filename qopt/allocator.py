@@ -2,6 +2,8 @@
 
 import math
 
+from qopt.exceptions import InfeasibleBudgetError
+
 
 def min_feasible_budget(stations):
     """Minimum budget to keep every station stable: sum_j alloc_cost_j * gamma_j / mu_j.
@@ -15,6 +17,12 @@ def min_feasible_budget(stations):
     which the README's normal usage scales budgets from -- disagreed with `Optimizer.run()`
     on a reused tuned station, and its answer depended on run history. The default
     `min_spend` is the plain expression, so nothing else moves.
+
+    The two coincide for every station on its starting ray, which is every station
+    `Optimizer.run()` ever allocates for, since it restores that ray first. They diverge
+    only for a tuned fork-join still carrying a finished run's ray, and there `allocate`
+    refuses rather than allocating unstably -- so `C > min_feasible_budget(stations)` can
+    never silently produce an unstable capacity, whichever way the two are composed.
     """
     return sum(st.min_spend for st in stations)
 
@@ -25,11 +33,25 @@ def allocate(stations, C, zeta_vec):
         S_i = gamma_i/mu_i
             + (C - sum_j c_j gamma_j/mu_j) * sqrt(w_i zeta_i/(c_i mu_i)) / sum_j sqrt(w_j zeta_j c_j/mu_j)
 
-    where c_i = station.alloc_cost, w_i = station.weight. Assumes C is feasible and every
-    zeta_i > 0 (enforced by the Optimizer). Returns a list aligned to `stations`.
+    where c_i = station.alloc_cost, w_i = station.weight. Every zeta_i must be > 0, which
+    the Optimizer enforces. Returns a list aligned to `stations`.
+
+    Raises InfeasibleBudgetError unless C exceeds the stations' floor AT THE RAYS THEY ARE
+    CURRENTLY ON, which is what this function prices. Checked rather than assumed because
+    eq 21 has no stability test of its own: a non-positive slack term SUBTRACTS from the
+    base term gamma/mu, so every returned capacity silently lands below its stability
+    boundary. That floor is normally `min_feasible_budget(stations)` exactly; it is higher
+    only for a tuned fork-join left on a finished run's ray, and the message reports the
+    number actually required so the two are never confused.
     """
     base = [st.gamma / st.mu for st in stations]
-    slack = C - sum(st.alloc_cost * b for st, b in zip(stations, base))
+    floor = sum(st.alloc_cost * b for st, b in zip(stations, base))
+    slack = C - floor
+    if not slack > 0.0:      # `not >` rather than `<=`, so a NaN budget is rejected too
+        raise InfeasibleBudgetError(
+            f"budget {C} <= {floor}, the minimum these stations need at the rays they are "
+            f"currently priced on"
+        )
     denom = sum(
         math.sqrt(st.weight * z * st.alloc_cost / st.mu)
         for st, z in zip(stations, zeta_vec)

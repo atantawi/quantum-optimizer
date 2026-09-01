@@ -28,12 +28,32 @@ def optimal_ray(gamma, mu_base, r, c1, c2, spend):
         spend: the station's share of the budget, `S * alloc_cost`.
 
     Returns `m2*/m1*` in effective rates, which is exactly the `r_star` to run on. Raises
-    InstabilityError if `spend` cannot keep both servers stable on any ray.
+    ValueError on an argument outside its domain, and InstabilityError if a well-formed
+    `spend` cannot keep both servers stable on any ray.
     """
+    _check_positive(gamma=gamma, mu_base=mu_base, c1=c1, c2=c2, spend=spend)
+    if not math.isfinite(r) or r < 1:
+        raise ValueError(f"r must be a finite number >= 1, got {r}")
     b1 = c1 / mu_base
     b2 = c2 / (r * mu_base)
     m1, m2 = _min_on_spend_line(gamma, b1, b2, spend)
     return m2 / m1
+
+
+def _check_positive(**named):
+    """Reject any argument that is not a finite number > 0, naming it as the caller sees it.
+
+    `optimal_ray` is exported from the package root, so its arguments get the treatment
+    `ForkJoinStation` gives the constructor arguments they mirror. Unvalidated they failed
+    incoherently rather than not at all: `spend = inf` returned nan, a zero rate or cost
+    raised a raw ZeroDivisionError from inside the bisection, and `gamma = nan` surfaced as
+    an InstabilityError quoting a nan floor -- an arithmetic accident reported as a
+    modelling result. `isfinite` is tested first because NaN passes every ordering
+    comparison, so `nan <= 0` is False.
+    """
+    for name, value in named.items():
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be a finite number > 0, got {value}")
 
 
 def _dt_dm1(lam, m1, m2):

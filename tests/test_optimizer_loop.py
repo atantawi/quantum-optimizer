@@ -546,7 +546,7 @@ def test_a_descending_budget_sweep_may_reuse_tuned_stations():
     stations = _tuned_pair()
     floor = min_feasible_budget(stations)
     Optimizer(stations, 20.0 * floor).run()
-    stale = sum(s.alloc_cost * s.gamma / s.mu for s in stations)   # the ended-on rays
+    stale = sum(s.alloc_cost * (s.gamma / s.mu) for s in stations)  # the ended-on rays
     assert stale > floor          # the high-budget ray really does need more
     C = 0.5 * (floor + stale)     # feasible for the policy, not for the ray it ended on
     reused = Optimizer(stations, C).run()
@@ -571,7 +571,8 @@ def test_the_descending_sweep_figures_on_record():
     assert st.r_star == pytest.approx(2.6925527241298357, rel=1e-9)
     # The floor of the ray it ended on. `min_feasible_budget` deliberately no longer
     # reports this -- see test_the_exported_floor_agrees_with_run... below.
-    assert st.alloc_cost * st.gamma / st.mu == pytest.approx(2.102912181464607, rel=1e-9)
+    assert st.alloc_cost * (st.gamma / st.mu) == pytest.approx(
+        2.102912181464607, rel=1e-9)
 
     C = 2.008125          # above the policy's floor, below the ray it ended on
     reused = Optimizer([st], C).run()
@@ -588,28 +589,25 @@ def test_the_reset_must_precede_the_first_allocation():
 
     `min_spend` lets the feasibility check clear a budget the policy can serve. But eq 21
     prices each station at its CURRENT ray, so allocating before the reset on a ray left
-    over from a generous run gives NEGATIVE slack: the run would die on an InstabilityError
-    from inside the loop instead of running at all, which is worse than the rejection the
-    policy-aware floor just removed. Pinning the arithmetic keeps the reset from drifting
-    below the first `allocate`, and keeps it from being "simplified" away as redundant now
-    that the floor is policy-aware.
+    over from a generous run gives NEGATIVE slack -- `-0.09521` at the budget used here --
+    and `allocate` refuses outright. The run would fail to start rather than serve a budget
+    the check had just cleared. Pinning this keeps the reset from drifting below the first
+    `allocate`, and keeps it from being "simplified" away as redundant now that the floor
+    is policy-aware.
     """
     from qopt.allocator import allocate
-    from qopt.exceptions import InstabilityError
+    from qopt.exceptions import InfeasibleBudgetError
 
     st = ForkJoinStation(**FJ_SWEEP, r_star=R_STAR_TUNED, name="fj")
     policy_floor = min_feasible_budget([st])
     Optimizer([st], 20.0 * policy_floor).run()          # leaves the ray at ~2.69
-    ray_floor = st.alloc_cost * st.gamma / st.mu
+    ray_floor = st.alloc_cost * (st.gamma / st.mu)
     C = 0.5 * (policy_floor + ray_floor)
     assert policy_floor < C < ray_floor                 # the check passes, the ray cannot
+    assert C - ray_floor == pytest.approx(-0.09520609073230357, rel=1e-9)
 
-    slack = C - st.alloc_cost * st.gamma / st.mu
-    assert slack == pytest.approx(-0.09520609073230357, rel=1e-9)
-    S = allocate([st], C, [st.default_zeta])
-    assert S[0] * st.mu == pytest.approx(0.4296269472367134, rel=1e-9)
-    with pytest.raises(InstabilityError):
-        st.check_stable(S[0])
+    with pytest.raises(InfeasibleBudgetError):
+        allocate([st], C, [st.default_zeta])
 
     # And the real path, which resets between the two, serves that same budget.
     assert Optimizer([st], C).run().converged

@@ -2,7 +2,7 @@
 
 Companion to [`findings.md`](findings.md), whose §10 ("If this were to be implemented") was
 explicitly undecided. This records the decisions taken, the numbers the implementation
-produces, and the five places measurement contradicted the plan. Issue #10; PRs #12 and #13.
+produces, and the six places measurement contradicted the plan. Issue #10; PRs #12 and #13.
 
 Every figure here is reproducible from the committed test suite — the reference constants
 live in `tests/test_example_qcsc.py` (`FINDINGS_SECTION_7`, `FINDINGS_BEST_RAY`, `TUNED`) and
@@ -26,8 +26,8 @@ tuned fork-join, which the `Optimizer` calls once per iteration; it reprices the
 returns the capacity that buys the *same spend*, so the budget stays exhausted and `S` keeps
 meaning "server 1's capacity". Its counterpart `Station.reset_policy()` restores the
 constructed ray, and `Station.min_spend` reports the floor at that ray rather than at the
-current one — see the fifth correction below for why both are correctness requirements
-rather than hygiene, and why neither works without the other.
+current one — see the fifth and sixth corrections below for why both are correctness
+requirements rather than hygiene, and why neither works without the other.
 
 **The nesting is one-sided.** At a fixed spend the inner optimum is determined — one scalar
 solve, no inner loop. The fixed point closes through the outer loop, because the spend comes
@@ -60,7 +60,7 @@ optimality condition evaluated at the converged spend": those were computed at t
 at a different spend (7.96 against 7.49). They agree with the tuned rays to 1.2e-3 and 1.5e-3.
 That is corroboration, not a specification, so the tests compare against the sweep grid.
 
-## Five corrections to the plan
+## Six corrections to the plan
 
 **§10 item 3 named the right rule, but the probe's method cannot deliver it.** Minimizing
 `t_ul` along the spend line pins `r*` only to `√ε` (~1e-8 relative), because a quadratic
@@ -130,9 +130,35 @@ It also removes the caveat the `retune` docstring used to carry: a run is now a 
 (stations-as-constructed, budget), and reusing tuned station objects reproduces a fresh run
 **bit-for-bit**, iteration count included.
 
+**Splitting the floor in two put a hole in the composition of two exported functions.**
+`min_feasible_budget` answers for the policy; `allocate` prices the current ray. They are both
+root-exported, and the helper's documented guarantee is that any budget above it allocates
+stably — so a tuned station left on a finished run's ray broke it: `allocate([st], 2.0, ...)`
+returned `S = 0.42798` against `γ = 0.45`, an unstable capacity, silently, because eq 21 has no
+stability test of its own and a non-positive slack term *subtracts* from the base `γ/μ`.
+
+`allocate` now checks its own precondition and raises `InfeasibleBudgetError` naming the floor
+it actually prices. Documenting the case as out-of-contract was not enough: the guarantee is
+public and the two functions have always composed.
+
+Making that check exact surfaced a **pre-existing** ulp bug, latent since before this PR.
+Eq 21 needs `base = γ/μ` for the capacity formula and prices the floor as `Σ c·base`, i.e.
+`c·(γ/μ)`; the helper summed `c·γ/μ`, i.e. `(c·γ)/μ`. Those are adjacent floats whenever `μ` is
+not a power of two — `(0.7·0.1)/0.3` against `0.7·(0.1/0.3)` — and the helper came out *lower*,
+so a budget in the one-ulp gap passed the Optimizer's guard and then met a non-positive slack.
+Before the check that returned capacities below the stability boundary in silence. `min_spend`
+now carries eq 21's grouping deliberately, and a test asserts the two agree bit-for-bit by
+allocating at `nextafter(floor, inf)`.
+
+**Also hardened, though not a correction to the plan:** `optimal_ray` is root-exported and had
+no input validation, so `spend = inf` returned `nan`, a zero rate or cost raised a raw
+`ZeroDivisionError` from inside the bisection, and `γ = nan` surfaced as an `InstabilityError`
+quoting a `nan` floor — an arithmetic accident reported as a modelling result. Its arguments now
+get the same treatment `ForkJoinStation` gives the constructor arguments they mirror.
+
 ## Validation
 
-- Suite 361 passed / 10 skipped.
+- Suite 391 passed / 10 skipped.
 - 348 runs over budget multiples from `1.000001×` the floor, eight hardware configurations and
   three damping values, warnings promoted to errors: all converged, budget exact at every
   answer, every station stable, and **45 runs in the `r* < 1` regime**.
@@ -141,8 +167,16 @@ It also removes the caveat the `retune` docstring used to carry: a run is now a 
   reproduced the control **bit-for-bit**, and the exported floor never moved (162 of them in
   the `r* < 1` regime). Interleaved with them, 1296 deliberately rejected runs — below the
   floor, at it, and non-finite — none of which disturbed the answer the preceding run had
-  reached. The sweep fails on the pre-reset code at the second budget it tries, and on the
-  round-1 code at the first rejected run.
+  reached, and 864 sub-floor `allocate` calls, every one refused rather than served. The
+  loop's own allocations kept a slack margin of at least `9.3e-7` of `C` at every converged
+  point, so the new precondition never fires on a legitimate path. The sweep fails on the
+  pre-reset code at the second budget it tries, and on the round-1 code at the first
+  rejected run.
+- Each of the five guards this took is mutation-checked independently: policy-aware floor,
+  reset placement (above `allocate`, below the preflight guards), `allocate`'s precondition,
+  and eq 21's grouping in `min_spend`. The grouping needed a *single-server* fixture to be
+  pinned at all — the fork-join cases go through the override, so reverting the base-class
+  expression alone left the suite green.
 - Iteration counts track the incumbent's at every damping — 120 against 119 at `θ = 0.1`, 20
   against 19 at `θ = 0.5`.
 - `r*` over a budget sweep (125 multiples of each workload's own floor, `1.000001×` to 40×)

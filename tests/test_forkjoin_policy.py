@@ -189,3 +189,55 @@ def test_a_price_ratio_that_collapses_the_bracket_raises_rather_than_dividing_by
         except InstabilityError:
             continue
         assert m1 > gamma and m2 > gamma, (gamma, m1, m2)
+
+
+# --------------------------------------------------------------------------------------
+# Input validation. `optimal_ray` is exported from the package root, so its arguments get
+# the same treatment `ForkJoinStation` gives the constructor arguments they mirror --
+# without it, `spend = inf` returned nan, a zero rate or cost raised a raw
+# ZeroDivisionError from inside the bisection, and `gamma = nan` surfaced as an
+# InstabilityError quoting a nan floor.
+# --------------------------------------------------------------------------------------
+
+GOOD = dict(gamma=0.45, mu_base=1.0, r=4.0, c1=4.0, c2=1.0, spend=10.0)
+
+NAN, INF = float("nan"), float("inf")
+
+
+@pytest.mark.parametrize("arg,bad", [
+    ("gamma", 0.0), ("gamma", -1.0), ("gamma", NAN), ("gamma", INF),
+    ("mu_base", 0.0), ("mu_base", -1.0), ("mu_base", NAN), ("mu_base", INF),
+    ("r", 0.999), ("r", 0.0), ("r", -1.0), ("r", NAN), ("r", INF),
+    ("c1", 0.0), ("c1", -1.0), ("c1", NAN), ("c1", INF),
+    ("c2", 0.0), ("c2", -1.0), ("c2", NAN), ("c2", INF),
+    ("spend", 0.0), ("spend", -1.0), ("spend", NAN), ("spend", INF),
+])
+def test_optimal_ray_rejects_invalid_inputs(arg, bad):
+    kwargs = dict(GOOD, **{arg: bad})
+    with pytest.raises(ValueError, match=arg):
+        optimal_ray(**kwargs)
+
+
+def test_optimal_ray_accepts_the_boundary_values_it_documents():
+    """r == 1 is legal -- identical hardware, which `ForkJoinStation` also accepts -- and so
+    is a spend that only just clears the stability floor. Validation must not narrow the
+    domain the solver actually handles.
+
+    At r == 1 the two servers are identical but not equally PRICED here (beta_1 = 4 against
+    beta_2 = 1), so the answer is a ray above 1, not the symmetric one -- which is the point
+    of admitting r == 1 rather than assuming it degenerates.
+    """
+    assert optimal_ray(**dict(GOOD, r=1.0)) == pytest.approx(1.480955619083298, rel=1e-9)
+    b1, b2 = GOOD["c1"] / GOOD["mu_base"], GOOD["c2"] / (GOOD["r"] * GOOD["mu_base"])
+    floor = GOOD["gamma"] * (b1 + b2)
+    # At the floor the ray tends to 1 (findings section 4), reached here to 1.4e-12.
+    assert optimal_ray(**dict(GOOD, spend=floor * (1.0 + 1e-12))) == pytest.approx(
+        1.0, rel=1e-11)
+
+
+def test_optimal_ray_still_raises_instability_below_the_floor():
+    """A spend that is valid but too small stays an InstabilityError, not a ValueError:
+    the inputs are well formed, the station simply cannot be stabilized for that money."""
+    b1, b2 = GOOD["c1"] / GOOD["mu_base"], GOOD["c2"] / (GOOD["r"] * GOOD["mu_base"])
+    with pytest.raises(InstabilityError):
+        optimal_ray(**dict(GOOD, spend=GOOD["gamma"] * (b1 + b2)))

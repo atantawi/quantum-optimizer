@@ -132,8 +132,15 @@ class Station(ABC):
         from -- and it is the STARTING value that decides which budgets the Optimizer can
         serve. Overridden by `ForkJoinStation` for exactly that reason; for every other
         station this is the plain expression, unchanged.
+
+        The parenthesization is load-bearing: eq 21 needs `base = gamma/mu` for the capacity
+        formula and prices the floor as `alloc_cost * base`, so writing this `(a*g)/m`
+        instead of `a*(g/m)` puts the two one ulp apart whenever `mu` is not a power of two
+        -- and a budget in that gap passes the Optimizer's guard only to meet a non-positive
+        slack in `allocate`. Pinned by
+        test_the_reported_floor_is_bit_for_bit_the_one_allocate_prices.
         """
-        return self.alloc_cost * self.gamma / self.mu
+        return self.alloc_cost * (self.gamma / self.mu)
 
     def zeta_from(self, T, S):
         """Invert the functional form (eq 22) for an externally supplied E[T].
@@ -399,10 +406,11 @@ class ForkJoinStation(Station):
         Repeats `alloc_cost`'s and `_anchor`'s expressions rather than calling them, which
         is deliberate: written this way it is bit-for-bit the base-class expression when
         `r_star` is the ray the station is already on, so `min_spend` below cannot perturb
-        any budget derived from the floor.
+        any budget derived from the floor. That includes the grouping -- see
+        `Station.min_spend` for why `a*(g/m)`, not `(a*g)/m`, is the spelling eq 21 needs.
         """
         alloc = self.c1 + self.c2 * (r_star / self.r_base)
-        return alloc * self.gamma / (self.mu_base * min(1.0, r_star))
+        return alloc * (self.gamma / (self.mu_base * min(1.0, r_star)))
 
     @property
     def min_spend(self):
@@ -418,10 +426,11 @@ class ForkJoinStation(Station):
         `_INITIAL_R_STAR`), so this is simultaneously the minimum over every reachable ray
         -- which is what makes it the honest answer to "what budget does a run need".
 
-        It answers that question and no other. Scaling a budget off it and handing it to
-        `allocate` DIRECTLY, on a station still carrying a previous run's ray, is outside
-        the contract -- `allocate` prices the current ray and documents that feasibility is
-        the Optimizer's to enforce, and the Optimizer enforces it by resetting first.
+        The two floors coincide except for a tuned station still carrying a finished run's
+        ray. `allocate`, which prices the current ray, refuses a budget below the floor it
+        prices, so composing the two can never allocate unstably -- it fails loudly and
+        names the number it needed. `Optimizer.run()` never meets that case at all, having
+        restored the ray before it allocates.
         """
         return self._spend_floor_on(self._initial_r_star)
 

@@ -88,9 +88,10 @@ def test_retune_is_a_no_op_for_a_station_with_no_free_policy_parameter():
 
 def test_min_spend_is_the_stations_own_term_in_the_feasibility_floor():
     """The default is the term `min_feasible_budget` has always summed, and it must stay
-    bit-for-bit that expression -- pinned budgets elsewhere are derived from it."""
+    bit-for-bit the expression eq 21 prices -- `alloc_cost * (gamma/mu)`, grouped that way
+    on purpose (see Station.min_spend). Pinned budgets elsewhere are derived from it."""
     st = GG1Station.mm1(gamma=0.6, mu=1.0, c=2.0, name="q")
-    assert st.min_spend == st.alloc_cost * st.gamma / st.mu
+    assert st.min_spend == st.alloc_cost * (st.gamma / st.mu)
     assert st.min_spend == 1.2
 
 
