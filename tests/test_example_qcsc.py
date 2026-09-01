@@ -470,6 +470,17 @@ FINDINGS_SECTION_7 = {
 # to, and that embedding is the one section 10 item 4 says not to use -- it converged at a
 # different spend (7.96 against 7.49), so its rays are not this computation's target. They
 # agree to 1.2e-3 and 1.5e-3, which is corroboration, not a specification.
+# What THIS implementation converges to, at full precision. Pinned separately from the
+# published figures above because the assertions against those are inequalities -- "no worse
+# than the sweep found", "within the sweep's own grid" -- which by construction cannot
+# notice the tuned result drifting to a slightly different, still-better point. These are
+# the regression pin on the headline result of issue #10 item 3.
+TUNED = {
+    "balanced":           (6.2494291783037355, 1.447382318551769),
+    "quantum_dominant":   (4.431691350142377,  2.316117567446687),
+    "classical_dominant": (2.6133350927675547, 1.0000000000000002),
+}
+
 FINDINGS_BEST_RAY = {
     "balanced": 1.440, "quantum_dominant": 2.320, "classical_dominant": 1.000,
 }
@@ -496,6 +507,18 @@ def test_named_policies_reproduce_the_recorded_objectives(workload):
         pytest.approx(EXPECTED_OBJECTIVE[workload], rel=1e-12)
     assert _qcsc_run(workload, R_STAR_EQUAL_RATE)[1].objective == \
         pytest.approx(FINDINGS_SECTION_7[workload]["equal"], abs=PUBLISHED_DP)
+
+
+@pytest.mark.parametrize("workload", sorted(TUNED))
+def test_tuned_objective_and_ray_are_pinned(workload):
+    """Exact regression pin. The other tuned assertions are inequalities against published
+    figures, so they cannot catch this result moving to a different still-better point."""
+    from qopt import R_STAR_TUNED
+
+    want_objective, want_ray = TUNED[workload]
+    _, result, rays = _qcsc_run(workload, R_STAR_TUNED)
+    assert result.objective == pytest.approx(want_objective, rel=1e-12)
+    assert rays == pytest.approx([want_ray, want_ray], rel=1e-9)
 
 
 @pytest.mark.parametrize("workload", sorted(FINDINGS_SECTION_7))
