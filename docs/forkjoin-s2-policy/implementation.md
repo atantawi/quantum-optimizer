@@ -281,8 +281,12 @@ it measures the variability instead of assuming a correlation structure.
 | classical_dominant | equal-rate | 24.55% | 24.47% | (+24.329, +24.607) | confirmed |
 | classical_dominant | **tuned** | **24.55%** | **24.47%** | (+24.329, +24.607) | **confirmed** |
 
-**Every one of the five non-trivial comparisons is confirmed, and every analytic gain lands
-inside its own measured interval.** So this is stronger than findings §9 asked for: it
+**Every confirmed row is confirmed, and every analytic gain lands inside its own measured
+interval.** Counted honestly there are **four distinct comparisons**, not five: in
+`classical_dominant` the tuned ray solves to exactly `r* = 1`, so its `equal-rate` and `tuned`
+rows are one measurement printed twice — the same collapse the `balanced` row is annotated for.
+The output now lists both bit-identical pairs explicitly. So this is stronger than findings §9
+asked for: it
 establishes not just that the policy *ranking* survives measurement, but that the closed form
 gets the *magnitude* of each gain right to within the interval. The two ~2% gains that findings
 §9 called "suggestive, not established" are now established. Nothing came out inconclusive, so
@@ -352,22 +356,52 @@ workloads × 5 seeds):
 | equal-rate | 210 | 132 | −0.110% | 1.165% | 6 |
 | tuned | 210 | 134 | −0.132% | −1.522% | 7 |
 
-The tuned column is −0.132% against the incumbent's −0.126% — indistinguishable — and its
+The tuned column is **−0.132% against the incumbent's −0.126%** — indistinguishable — and its
 worst row is −1.522% against 1.165%, modestly worse and in `balanced`, exactly where moving
-off `m₁ = m₂` predicts it. Both figures sit on top of spec §7's independently measured ~0.15%
-mean and ~1.1% worst row, at a *different* set of operating points, which is itself a
-replication of that baseline.
+off `m₁ = m₂` predicts it. That contrast is the load-bearing result of this table, and it is
+sound: the three policies ran at the *same five seeds*, so it is a paired comparison, which is
+the only thing the shared sample paths permit.
 
-**Spec §7's negative lean replicates a fifth, sixth and seventh time.** 136 / 132 / 134 of 210
-rows negative. The exact binomial p is tiny, and it is reported in the output as a *direction*
-only, carrying spec §7's two caveats unchanged: the rows are not independent (stations share
-one run, and four are analytically identical), and near-zero gaps count as signs rather than
-ties.
+### A claim withdrawn: this does NOT replicate spec §7's bias measurement
 
-γ conservation: 9 misses across 540 checks (12 checked stations × 45 cells), i.e. 1.7% against
-the 5% a 95% interval implies — fewer than chance, and they arrive in tandem pairs that share a
-stream, so the effective count is lower still. `fj_pp` and `fj_sp` carry no throughput witness
-at all (qsim-service#8), so 2 of 14 stations are never checked.
+The first write-up of this run said spec §7's negative lean "replicates a fifth, sixth and
+seventh time" on the strength of 136 / 132 / 134 of 210 rows being negative. **That is wrong,
+and the arithmetic says so.** `SEEDS` contains spec §7's own four replication seeds, the
+`invariant-r` cells run its ray at its budget under its stopping rule, and the service is
+deterministic given a seed — so those cells reproduce its rows *bit-for-bit*. The probe now
+prints the split:
+
+| bucket | rows | negative | mean gap | sign-test p |
+|---|---|---|---|---|
+| `invariant-r` at spec §7's seeds — **reproduces it** | 168 | 115 | −0.149% | 0.0000 |
+| `invariant-r` at a seed spec §7 never ran — **new** | 42 | 21 | −0.032% | 1.0000 |
+| the two new rays, all seeds — **new** | 420 | 266 | −0.121% | 0.0000 |
+
+115 / 168 at −0.149% is **exactly** spec §7's published pooled figure. That makes those rows a
+*pipeline witness* — the same role the objectives 6.373131 / 4.518446 / 3.448158 already play
+above — and not a second sample. This script's own docstring says "a repeat confirms the
+pipeline and is NOT a second sample"; the first write-up broke its own rule.
+
+What is genuinely new, and what it says:
+
+- **One new seed, and it shows no lean at all**: 21 of 42 rows negative, mean −0.032%,
+  sign-test p = 1.0000. That *weakens* the cross-seed generality of the lean rather than
+  strengthening it — consistent with spec §7's own note that one of its four seeds was not
+  significant alone and that the effect sits at the edge of what `precision 0.02` resolves.
+- **420 rows on the two rays spec §7 could not measure**, which do lean: 266 negative, mean
+  −0.121%. Real, and at operating points that had never been measured — but at the *same five
+  seeds*, so these are new rays rather than independent draws, and their errors are correlated
+  with the reproduced rows through the shared sample paths.
+
+So the defensible statement is narrow and is the one that matters: **the bias at the tuned ray
+is the same size as at the default ray**, measured pairwise at identical seeds. Whether the
+lean itself generalizes across seeds is not advanced by this run.
+
+γ conservation: 9 misses over 1080 checks (12 checked stations × 90 evaluations — two per
+cell, since `sim_calls = 2`), i.e. 0.83% against the 5% a 95% interval implies. Every one of
+the 9 is a conservation miss rather than some other quality flag, and no station in the whole
+grid came back without a CI. `fj_pp` and `fj_sp` carry no throughput witness at all
+(qsim-service#8), so 2 of 14 stations are never checked.
 
 ### What this still does not license
 

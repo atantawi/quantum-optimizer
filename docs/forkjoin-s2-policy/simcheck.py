@@ -88,6 +88,21 @@ Four of the five therefore have a published analytic-vs-simulated baseline to co
 bias statistics against. 16180339 is added only to get a fifth degree of freedom.
 """
 
+SPEC7_SEEDS = (20260729, 8675309, 31415926, 2718281)
+"""The four seeds spec section 7 already published, at the DEFAULT ray.
+
+These are in SEEDS deliberately, but they are NOT new evidence at `invariant-r`: same ray,
+same budget, same stopping rule, and the service is deterministic given a seed, so those
+cells reproduce spec section 7's rows to the last bit. That makes them a PIPELINE WITNESS --
+proof this harness is running the same measurement -- and nothing more. Only seeds outside
+this set carry new information about the model bias at the default ray. Every other policy is
+new at every seed, because spec section 7 predates `r_star`.
+
+This distinction cost a wrong claim: the first write-up read the pooled 136/210 negative rows
+as replicating spec section 7 "a fifth, sixth and seventh time", when 115/168 of them ARE its
+published pool and the single new seed is 21/42, exactly chance.
+"""
+
 COMMITTED_SEED = 20260729
 """The seed docs/qcsc-example/live-run.log was captured at.
 
@@ -97,6 +112,7 @@ one cell that is directly comparable to the committed run is shown in full.
 
 # Regression anchors. The analytic column must land on the numbers PR #13 recorded, or the
 # simulator time this probe is about to spend is being spent on a different computation.
+# Checked in `main` BEFORE the first POST, off analytic passes that cost nothing.
 # From tests/test_example_qcsc.py: EXPECTED_OBJECTIVE, FINDINGS_SECTION_7, TUNED.
 ANALYTIC_ANCHOR = {
     #                      invariant-r  equal-rate    tuned                 tuned ray
@@ -108,12 +124,30 @@ PUBLISHED_DP = 5e-7
 """Half a unit in the last place of the 6-decimal figures published in findings."""
 
 T_975 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
-         6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262}
+         6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
+         11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131,
+         16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086,
+         21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064, 25: 2.060,
+         26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042}
 """Two-sided 95% Student-t quantiles by degrees of freedom.
 
 Hardcoded because qopt takes no runtime dependencies (`statistics` has no t
-distribution), and because n here is always small enough to enumerate.
+distribution).
+
+Tabulated to df 30 rather than to the 4 this probe's default seed count needs, because the
+fallback matters: `t` approaches 1.96 from ABOVE, so using 1.96 at small df makes the
+interval too NARROW, and this interval is what the headline verdict is read off. Above df 30
+`_t_975` falls back to 1.96, which is still ~3.9% low at df 31 and only drops under 2% around
+df 60 -- so a run with more than 31 paired observations reports a slightly optimistic
+interval. Extend the table rather than widen the caveat if that ever matters.
 """
+
+
+def _t_975(df):
+    """Two-sided 95% t quantile, erring wide rather than narrow off the end of the table."""
+    if df in T_975:
+        return T_975[df]
+    return 1.96 if df > max(T_975) else T_975[min(T_975)]
 
 
 # --------------------------------------------------------------------------------------
@@ -256,7 +290,7 @@ def paired_interval(differences):
     if n < 2:
         return mean, None, n
     sem = statistics.stdev(differences) / math.sqrt(n)
-    return mean, T_975.get(n - 1, 1.96) * sem, n
+    return mean, _t_975(n - 1) * sem, n
 
 
 def gap_stats(analytic, simulated):
@@ -277,6 +311,7 @@ def gap_stats(analytic, simulated):
         "mean_pct": statistics.fmean(pcts),
         "worst_pct": max(pcts, key=abs),
         "flagged": sum(1 for _, f in rows if f),
+        "no_ci": sum(1 for _, f in rows if f is None),
     }
 
 
@@ -290,7 +325,9 @@ def sign_test_p(negative, n):
     """
     k = min(negative, n - negative)
     tail = sum(math.comb(n, i) for i in range(0, k + 1))
-    return min(1.0, 2.0 * tail / (2.0 ** n))
+    # Integers throughout: `2.0 * tail` and `2.0 ** n` both overflow float above n ~ 1024,
+    # which would kill the run in its final report after every pass had been paid for.
+    return min(1.0, (2 * tail) / (2 ** n))
 
 
 # --------------------------------------------------------------------------------------
@@ -320,14 +357,40 @@ def verify_service(client):
     print("  and `alpha` must come back as the significance level, not its complement (#13).")
     print(f"\n  {'minSamples':>11s} {'samplesAnalyzed':>16s} {'alpha':>7s} "
           f"{'precision':>10s} {'completed':>10s}")
-    for floor in (1000, 100000, 400000):
+    floors = (1000, 100000, 400000)
+    analyzed, alphas = [], []
+    for floor in floors:
         stopping = dict(client.stopping, minSamples=floor)
         response = client.post_simulate(
             build_request(net, [1.0], seed=COMMITTED_SEED, stopping=stopping))
         entry = [m for m in response["measures"]
                  if m["type"] == "response-time" and m["station"] == "mm1"][0]
+        analyzed.append(entry["samplesAnalyzed"])
+        alphas.append(entry["alpha"])
         print(f"  {floor:11d} {entry['samplesAnalyzed']:16d} {entry['alpha']:7.2f} "
               f"{entry['precision']:10.5f} {str(response.get('completed')):>10s}")
+
+    # A GATE, not a report. Printing this and continuing is exactly the failure the two fixes
+    # were about: the numbers look plausible either way, and a bad build lands a confident
+    # report in the committed output.
+    problems = []
+    if not all(b > a for a, b in zip(analyzed, analyzed[1:])):
+        problems.append(f"samplesAnalyzed does not rise with minSamples ({analyzed}) -- the "
+                        f"sample floor is not reaching the engine (qsim-service #11)")
+    for floor, seen in zip(floors, analyzed):
+        if seen < floor:
+            problems.append(f"minSamples={floor} returned only {seen} samples")
+    want = client.stopping["alpha"]
+    if any(abs(a - want) > 1e-12 for a in alphas):
+        problems.append(f"alpha came back {alphas}, requested {want} -- the service may be "
+                        f"writing the complement (qsim-service #13)")
+    if problems:
+        print("\n  PROVENANCE GATE FAILED. This build corrupts results silently, so nothing")
+        print("  measured against it is usable. No grid was run.")
+        for line in problems:
+            print(f"    - {line}")
+        raise SystemExit(1)
+    print("\n  provenance gate: minSamples binds and alpha round-trips.")
     print("\n  One `[Error] ... Attribute 'minSamples' is not allowed ...` line per /simulate")
     print("  on the service's stderr is EXPECTED and non-fatal: JMT's bundled schema never")
     print("  declared the attribute, but SimLoader reads it anyway.")
@@ -391,7 +454,7 @@ def print_cell_detail(cell, net_s, full):
           f"simulated {cell.rays['simulated'][0]:.6f}")
     print(f"    stop_reason = {r.stop_reason}   iterations = {r.iterations}   "
           f"sim_calls = {r.sim_calls}   warm_start = {r.warm_start_iterations}   "
-          f"converged = {r.converged}   {cell.elapsed:.1f}s")
+          f"converged = {r.converged}")
     print(f"    station gaps: {stats['negative']}/{stats['n']} negative, "
           f"mean {stats['mean_pct']:+.3f}%, worst {stats['worst_pct']:+.3f}%, "
           f"{stats['flagged']} over their own CI half-width")
@@ -415,6 +478,7 @@ def print_headline(cells, workloads, policies):
     print(f"\n  {'workload':20s} {'policy':12s} {'analytic %':>11s} {'measured %':>11s} "
           f"{'95% CI on measured %':>24s} {'n':>3s} {'verdict':>12s}")
     verdicts = {}
+    inside, outside = set(), set()
     for workload in workloads:
         base_by_seed = {c.seed: c for c in cells
                         if c.workload == workload and c.policy == BASELINE}
@@ -448,6 +512,11 @@ def print_headline(cells, workloads, policies):
                 else:
                     verdict = "inconclusive"
             verdicts[(workload, policy)] = verdict
+            if half is not None and pcts and any(p != 0.0 for p in pcts):
+                label = f"{workload}/{policy}"
+                target = (inside if mean - half <= analytic_pct <= mean + half
+                          else outside)
+                target.add(label)
             print(f"  {workload:20s} {policy:12s} {analytic_pct:11.2f} {mean:11.2f} "
                   f"{ci:>24s} {n:3d} {verdict:>12s}")
             # Per seed, because the MEAN's offset from the analytic gain is smaller than the
@@ -462,7 +531,11 @@ def print_headline(cells, workloads, policies):
     print("              measured column against the analytic one for that.")
     print("  SIGN FLIP   the interval excludes zero on the OTHER side. The policy ranking")
     print("              the analytic model reports is wrong at this operating point.")
-    widths = [100.0 * objective_half_widths(c.simulated)[0] / c.measured for c in cells]
+    widths = [100.0 * objective_half_widths(c.simulated)[0] / c.measured for c in cells
+              if objective_half_widths(c.simulated)[0] is not None]
+    if not widths:
+        print("\n  No per-station CIs came back, so there is no propagated half-width to show.")
+        return verdicts
     print(f"\n  For contrast, the CONSERVATIVE propagated half-width on a SINGLE measured")
     print(f"  objective runs {min(widths):.3f}% to {max(widths):.3f}% over these "
           f"{len(widths)} cells. A ~2% gain")
@@ -472,10 +545,18 @@ def print_headline(cells, workloads, policies):
     print("\n  inconclusive  the interval spans zero. Tighten `--precision` on this workload")
     print("              (4x the samples per halving) or add seeds; do not read a sign off")
     print("              the point estimate alone.")
-    print("\n  The per-seed rows are there to stop a mechanism being read off one seed. In all")
-    print("  three workloads the analytic gain sits INSIDE both the per-seed range and the")
-    print("  paired interval, so the offset between the analytic and measured MEAN gain is not")
-    print("  resolved at this stopping rule -- only its sign and rough size are.")
+    print("\n  The per-seed rows are there to stop a mechanism being read off one seed.")
+    if inside:
+        joined = ", ".join(sorted(inside))
+        print(f"  The analytic gain sits INSIDE both the per-seed range and the paired interval")
+        print(f"  for: {joined}. For those, the offset between the analytic and the measured")
+        print("  MEAN gain is NOT resolved at this stopping rule -- only its sign and rough")
+        print("  size are, and no mechanism should be claimed for it.")
+    if outside:
+        joined = ", ".join(sorted(outside))
+        print(f"  The analytic gain falls OUTSIDE the paired interval for: {joined}. There the")
+        print("  measured mean gain differs from the prediction by more than the seed-to-seed")
+        print("  scatter, which IS a resolved discrepancy and needs explaining.")
     print("  identical   every paired difference is exactly zero, because the two policies")
     print("              ARE the same ray here -- r = 1 collapses r* = r onto r* = 1")
     print("              (findings 4). Not a resolution failure.")
@@ -518,21 +599,71 @@ def print_bias(cells, workloads, policies):
     print("  ~2% gains were only suggestive.")
     print(f"\n  {'policy':12s} {'rows':>6s} {'negative':>9s} {'mean %':>8s} {'worst %':>9s} "
           f"{'flagged':>8s} {'sign-test p':>12s}")
+
+    def block(rows):
+        pcts = [pct for pct, _ in rows]
+        negative = sum(1 for pct in pcts if pct < 0.0)
+        return (len(rows), negative, statistics.fmean(pcts), max(pcts, key=abs),
+                sum(1 for _, f in rows if f), sign_test_p(negative, len(rows)))
+
     for policy, _ in policies:
-        rows = []
-        for cell in cells:
-            if cell.policy != policy:
-                continue
-            stats = gap_stats(cell.analytic, cell.simulated)
-            rows.extend(stats["rows"])
+        rows = [r for cell in cells if cell.policy == policy
+                for r in gap_stats(cell.analytic, cell.simulated)["rows"]]
         if not rows:
             continue
-        pcts = [p for p, _ in rows]
-        negative = sum(1 for p in pcts if p < 0.0)
-        print(f"  {policy:12s} {len(rows):6d} {negative:4d}/{len(rows):<4d} "
-              f"{statistics.fmean(pcts):8.3f} {max(pcts, key=abs):9.3f} "
-              f"{sum(1 for _, f in rows if f):8d} {sign_test_p(negative, len(rows)):12.4f}")
-    print("\n  The fork-join rows are the ones under test. Isolated:")
+        n, negative, mean, worst, flagged, pval = block(rows)
+        print(f"  {policy:12s} {n:6d} {negative:4d}/{n:<4d} {mean:8.3f} {worst:9.3f} "
+              f"{flagged:8d} {pval:12.4f}")
+
+    # WHICH OF THOSE ROWS ARE NEW. The `invariant-r` cells at spec section 7's own seeds are
+    # the same ray, budget and stopping rule it published, against a service that is
+    # deterministic given a seed -- so they reproduce its rows bit-for-bit. That is a pipeline
+    # witness, NOT a replication, and reading it as one is a mistake this block exists to stop.
+    print("\n  Which of those rows are NEW EVIDENCE, and which reproduce spec section 7:")
+    print(f"\n  {'bucket':44s} {'rows':>6s} {'negative':>9s} {'mean %':>8s} "
+          f"{'sign-test p':>12s}")
+    buckets = {
+        f"invariant-r at spec 7's seeds (REPRODUCES it)": [
+            c for c in cells if c.policy == BASELINE and c.seed in SPEC7_SEEDS],
+        f"invariant-r at seeds spec 7 never ran (NEW)": [
+            c for c in cells if c.policy == BASELINE and c.seed not in SPEC7_SEEDS],
+        f"the two new rays, all seeds (NEW -- spec 7 predates r_star)": [
+            c for c in cells if c.policy != BASELINE],
+    }
+    for label, group in buckets.items():
+        rows = [r for c in group for r in gap_stats(c.analytic, c.simulated)["rows"]]
+        if not rows:
+            continue
+        n, negative, mean, _, _, pval = block(rows)
+        print(f"  {label:44s} {n:6d} {negative:4d}/{n:<4d} {mean:8.3f} {pval:12.4f}")
+    reproduced = len([r for c in buckets[f"invariant-r at spec 7's seeds (REPRODUCES it)"]
+                      for r in gap_stats(c.analytic, c.simulated)["rows"]])
+    print(f"\n  So of the {sum(len(gap_stats(c.analytic, c.simulated)['rows']) for c in cells)}"
+          f" rows in the table above, {reproduced} are spec section 7's published sample, not a")
+    print("  new draw from it. Do NOT describe the pooled figures as replicating it -- the")
+    print("  first write-up of this run did, and the arithmetic says otherwise. What IS new is")
+    print("  the two rays (which spec 7 could not measure) and the seeds it never ran.")
+
+    # And which cells are bit-identical to another policy, so the table's rows are not read as
+    # independent confirmations. balanced has r = 1, so equal-rate IS invariant-r there;
+    # classical_dominant's tuned ray solves to exactly 1, so tuned IS equal-rate there.
+    print("\n  Bit-identical policy pairs (one measurement appearing twice, not two):")
+    found = False
+    for workload in workloads:
+        for i, (a, _) in enumerate(policies):
+            for b, _ in policies[i + 1:]:
+                left = {c.seed: c.simulated.sojourn_times for c in cells
+                        if c.workload == workload and c.policy == a}
+                right = {c.seed: c.simulated.sojourn_times for c in cells
+                         if c.workload == workload and c.policy == b}
+                if left and left == right:
+                    print(f"    {workload}: {a} == {b}")
+                    found = True
+    if not found:
+        print("    none")
+    detail_seed = COMMITTED_SEED if COMMITTED_SEED in {c.seed for c in cells} \
+        else min(c.seed for c in cells)
+    print(f"\n  The fork-join rows are the ones under test. Isolated, at seed {detail_seed}:")
     print(f"\n  {'workload':20s} {'policy':12s} {'station':8s} {'ray':>9s} "
           f"{'analytic':>10s} {'measured':>10s} {'gap %':>8s} {'over CI?':>9s}")
     for workload in workloads:
@@ -540,27 +671,41 @@ def print_bias(cells, workloads, policies):
             for cell in cells:
                 if cell.workload != workload or cell.policy != policy:
                     continue
-                if cell.seed != COMMITTED_SEED:
+                if cell.seed != detail_seed:
                     continue
                 stats = gap_stats(cell.analytic, cell.simulated)
                 for i, name in enumerate(["fj_pp", "fj_sp"]):
                     idx = FJ_INDEX[name]
                     pct, flagged = stats["rows"][idx]
+                    mark = "no CI" if flagged is None else ("yes" if flagged else "no")
                     print(f"  {workload:20s} {policy:12s} {name:8s} "
                           f"{cell.rays['simulated'][i]:9.4f} "
                           f"{cell.analytic.sojourn_times[idx]:10.6f} "
                           f"{cell.simulated.sojourn_times[idx]:10.6f} {pct:8.3f} "
-                          f"{('yes' if flagged else 'no'):>9s}")
+                          f"{mark:>9s}")
+    # `Result.degraded` is the whole quality audit -- weak measures, a station with no CI,
+    # completed=false -- so filter to conservation misses by their own message rather than
+    # taking len(). And it accumulates once per evaluate(), which is `sim_calls` times per
+    # cell, so the denominator is per-evaluation, not per-cell.
     checked = sum(1 for st in cells[0].net_s.stations if st.sim_conservation_checked)
-    misses = sum(len(c.simulated.degraded) for c in cells)
-    total = checked * len(cells)
+    misses = sum(1 for c in cells for entry in c.simulated.degraded
+                 if "excludes derived gamma" in entry)
+    other = sum(len(c.simulated.degraded) for c in cells) - misses
+    total = checked * sum(c.simulated.sim_calls for c in cells)
+    rate = 100.0 * misses / total if total else float("nan")
     print(f"\n  gamma conservation: {misses} miss(es) over {total} checks "
-          f"({checked} checked stations x {len(cells)} cells) = "
-          f"{100.0 * misses / total:.1f}%, against the")
-    print("  5% a 95% interval implies -- fewer than chance. They arrive in tandem pairs that")
-    print("  share a stream, so the effective count is lower still. Not a defect; but do not")
-    print("  read a clean run as a guarantee either (spec 7 saw 1 miss in 144 checks).")
-    print(f"\n  (seed {COMMITTED_SEED} only, to keep this block one screen. fj_pp and fj_sp")
+          f"({checked} checked stations x {sum(c.simulated.sim_calls for c in cells)} "
+          f"evaluations) = {rate:.2f}%.")
+    verdict = ("fewer than chance" if rate < 5.0 else
+               "MORE than the 5% chance rate -- investigate before trusting this run")
+    print(f"  Against the 5% a 95% interval implies: {verdict}.")
+    print("  Misses arrive in tandem pairs that share a stream, so the effective count is")
+    print("  lower still. Do not read a clean run as a guarantee either (spec 7 saw 1 miss in")
+    print("  144 checks at one seed and none at another).")
+    if other:
+        print(f"  {other} further degraded entr(ies) are NOT conservation misses (weak measure,")
+        print("  missing CI, or a cap firing) and are listed per cell in section B.")
+    print(f"\n  (one seed only, to keep this block one screen. fj_pp and fj_sp")
     print("  carry no throughput witness -- gamma conservation skips them, qsim-service#8.)")
     print("  `sign-test p` is two-sided exact binomial and is OPTIMISTIC: the rows are not")
     print("  independent (stations share one run; four are analytically identical) and")
@@ -604,7 +749,17 @@ def parse_args(argv):
     if BASELINE not in wanted:
         p.error(f"the {BASELINE!r} baseline must be included -- every gain is against it")
     args.policies = [(name, known[name]) for name, _ in POLICIES if name in wanted]
-    args.seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
+    try:
+        args.seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
+    except ValueError as exc:
+        p.error(f"--seeds must be integers: {exc}")
+    if not args.seeds:
+        p.error("--seeds is empty; at least one base seed is needed")
+    if len(set(args.seeds)) != len(args.seeds):
+        # A repeated seed is the SAME sample path, so stdev over the pair is 0, the interval
+        # collapses to zero width and the row prints CONFIRMED off one measurement.
+        p.error(f"--seeds contains duplicates {args.seeds}; the service is deterministic given "
+                f"a seed, so a repeat is the same sample path and would collapse the interval")
     args.stopping = {
         "alpha": qn.STOPPING["alpha"],
         "precision": args.precision,
@@ -624,13 +779,48 @@ def main(argv=None):
         return 1
 
     budget = qn.shared_budget()
-    print_conditions(args, budget, url)
+
+    # Nothing is printed until the service has answered, so a run against a service that is
+    # down leaves NO partial output rather than a header that looks like the start of a good
+    # run. `preflight=True` makes the constructor itself do the health check.
+    client = QsimClient(url, stopping=args.stopping, preflight=True)
 
     net0 = qn.build_qcsc_network("balanced")
     FJ_INDEX.update({st.name: i for i, st in enumerate(net0.stations)
                      if st.name.startswith("fj")})
 
-    client = QsimClient(url, stopping=args.stopping, preflight=True)
+    # FJ_INDEX is read for every workload, so the three topologies must agree on the station
+    # order. They do -- the workloads differ only in service rates -- and this pins it.
+    for workload in args.workloads:
+        order = [st.name for st in qn.build_qcsc_network(workload).stations]
+        assert all(order[i] == name for name, i in FJ_INDEX.items()), \
+            f"station order differs in {workload!r}; FJ_INDEX would read the wrong rows"
+
+    # FINDING: gate the analytic column BEFORE spending any simulator time, not after. The
+    # analytic passes are free (no POSTs), so run them first: if the predictions have drifted
+    # from PR #13's recorded numbers, every comparison would be against a different
+    # computation and the 12 minutes of simulation would be wasted.
+    print_conditions(args, budget, url)
+    preflight = {}
+    for workload in args.workloads:
+        for policy, r_star in args.policies:
+            net = qn.build_qcsc_network(workload, r_star=r_star)
+            result = Optimizer(net, budget=budget).run()
+            preflight[(workload, policy)] = Cell(
+                workload, policy, None, result, result,
+                {"analytic": [st.r_star for st in net.stations
+                              if st.name.startswith("fj")]}, 0.0, net, net)
+    failures = check_analytic_anchors(preflight)
+    if failures:
+        print("\n\nGATE FAILED -- the analytic column has drifted from PR #13's recorded")
+        print("numbers, so every comparison below would be against a different computation.")
+        print("No simulator time was spent.")
+        for line in failures:
+            print(f"  - {line}")
+        return 1
+    print(f"\n  analytic gate: all {len(preflight)} cells match PR #13's recorded objectives "
+          f"and rays.")
+
     verify_service(client)
 
     cells = []
@@ -648,14 +838,6 @@ def main(argv=None):
                 print(f"\n[{done}/{total}] {workload} / {policy} / seed {seed}  "
                       f"({cell.elapsed:.1f}s, {time.time() - t_start:.0f}s elapsed)",
                       file=sys.stderr, flush=True)
-
-    failures = check_analytic_anchors(cells_by_key)
-    if failures:
-        print("\n\nGATE FAILED -- the analytic column has drifted from PR #13's recorded")
-        print("numbers, so every comparison below would be against a different computation:")
-        for line in failures:
-            print(f"  - {line}")
-        return 1
 
     print_analytic_grid(cells_by_key, budget, args.workloads, args.policies)
 
@@ -680,8 +862,13 @@ def main(argv=None):
     if tally.get("SIGN FLIP"):
         print("\n  A SIGN FLIP means the analytic model ranks these policies the wrong way at")
         print("  this operating point. That is a finding about t_ul, not about the run.")
-    print(f"\n{total} simulated passes in {time.time() - t_start:.0f}s. "
-          f"Every figure above is reproducible from this file's own conditions block.")
+    # Deliberately no wall clock on stdout: this file is committed as evidence, and a
+    # re-run should diff BYTE-IDENTICAL against it so that a real change stands out. Timing
+    # is on stderr with the progress lines.
+    print(f"\n{total} simulated passes. Every figure above is reproducible from this file's")
+    print("own conditions block, and a re-run at these seeds reproduces it byte-for-byte.")
+    print(f"\n  elapsed: see stderr", file=sys.stderr)
+    print(f"{total} passes in {time.time() - t_start:.0f}s", file=sys.stderr)
     return 0
 
 

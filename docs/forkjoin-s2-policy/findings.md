@@ -5,10 +5,14 @@
 **Reproduce:** `python docs/forkjoin-s2-policy/probe.py`, output committed alongside as
 [`probe-output.txt`](probe-output.txt). Every number below comes from that file.
 **Superseded in part, 2026-09-01:** this is kept as the original spike record and is not
-rewritten, so two things in it are stale as *status* rather than as reasoning. §9's "no
-simulated cross-check was run" was true then and is not now — it ran, and confirmed all
-three gains; and §9's claim that every best ray is closer to homogeneity than `r = 4` is
-false for `balanced`, whose hardware is `r = 1`. Both are settled in
+rewritten, so two things in it are out of date. §9's "no simulated cross-check was run" was
+true then and is not now — it ran, and confirmed all three gains with each analytic gain
+inside its own measured interval. And §9's first bullet infers from "every best ray is closer
+to homogeneity than r = 4" that the new policy moves *toward* where `t_ul` is most
+trustworthy, making qopt's `r = 4` the least-validated operating point. **That inference does
+not hold for `balanced`,** whose fork-join hardware is `r = 1`: its incumbent is *already* at
+m₁ = m₂ where `t_ul` is exact, so the best ray 1.44 moves *away* from there and the "than
+r = 4" comparison does not apply to it at all. Both are settled in
 [`implementation.md`](implementation.md), which is the maintained document.
 
 ## 1. The question

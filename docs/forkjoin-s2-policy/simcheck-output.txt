@@ -10,6 +10,8 @@ baseline  invariant-r (qopt's incumbent ray r* = r); every gain is against it
 A re-run at these seeds reproduces bit-identically -- the service is deterministic given a
 seed -- so a repeat confirms the pipeline and is NOT a second sample. Vary the seeds for that.
 
+  analytic gate: all 9 cells match PR #13's recorded objectives and rays.
+
 
 === 0. SERVICE PROVENANCE, measured (qsim-service #11 and #13) ===
 
@@ -21,6 +23,8 @@ seed -- so a repeat confirms the pipeline and is NOT a second sample. Vary the s
          1000            87040    0.05    0.02000       True
        100000           174080    0.05    0.02000       True
        400000           696320    0.05    0.02000       True
+
+  provenance gate: minSamples binds and alpha round-trips.
 
   One `[Error] ... Attribute 'minSamples' is not allowed ...` line per /simulate
   on the service's stderr is EXPECTED and non-fatal: JMT's bundled schema never
@@ -51,7 +55,7 @@ seed -- so a repeat confirms the pipeline and is NOT a second sample. Vary the s
     analytic 6.401440   measured 6.373131   delta -0.442%
     objective half-width: conservative +/-0.063582 (0.998%), independent +/-0.022333 (0.350%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.5s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 11/14 negative, mean -0.307%, worst -1.094%, 1 over their own CI half-width
 
   FULL TABLE  (balanced / invariant-r / seed 20260729)
@@ -96,35 +100,35 @@ DIFFERENCE (balanced / invariant-r / seed 20260729): simulated - analytic, at ea
     analytic 6.401440   measured 6.393747   delta -0.120%
     objective half-width: conservative +/-0.071624 (1.120%), independent +/-0.026166 (0.409%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.5s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 9/14 negative, mean -0.071%, worst +0.573%, 0 over their own CI half-width
 
   CELL balanced / invariant-r / seed 31415926
     analytic 6.401440   measured 6.414104   delta +0.198%
     objective half-width: conservative +/-0.064493 (1.005%), independent +/-0.025363 (0.395%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.3s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 8/14 negative, mean -0.061%, worst +1.165%, 0 over their own CI half-width
 
   CELL balanced / invariant-r / seed 2718281
     analytic 6.401440   measured 6.398315   delta -0.049%
     objective half-width: conservative +/-0.055734 (0.871%), independent +/-0.019973 (0.312%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   15.5s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 10/14 negative, mean -0.184%, worst -1.044%, 1 over their own CI half-width
 
   CELL balanced / invariant-r / seed 16180339
     analytic 6.401440   measured 6.394957   delta -0.101%
     objective half-width: conservative +/-0.058914 (0.921%), independent +/-0.022420 (0.351%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.2s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 7/14 negative, mean -0.062%, worst -0.737%, 1 over their own CI half-width
 
   CELL balanced / equal-rate / seed 20260729
     analytic 6.401440   measured 6.373131   delta -0.442%
     objective half-width: conservative +/-0.063582 (0.998%), independent +/-0.022333 (0.350%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.1s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 11/14 negative, mean -0.307%, worst -1.094%, 1 over their own CI half-width
 
   FULL TABLE  (balanced / equal-rate / seed 20260729)
@@ -169,35 +173,35 @@ DIFFERENCE (balanced / equal-rate / seed 20260729): simulated - analytic, at eac
     analytic 6.401440   measured 6.393747   delta -0.120%
     objective half-width: conservative +/-0.071624 (1.120%), independent +/-0.026166 (0.409%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.0s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 9/14 negative, mean -0.071%, worst +0.573%, 0 over their own CI half-width
 
   CELL balanced / equal-rate / seed 31415926
     analytic 6.401440   measured 6.414104   delta +0.198%
     objective half-width: conservative +/-0.064493 (1.005%), independent +/-0.025363 (0.395%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   15.8s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 8/14 negative, mean -0.061%, worst +1.165%, 0 over their own CI half-width
 
   CELL balanced / equal-rate / seed 2718281
     analytic 6.401440   measured 6.398315   delta -0.049%
     objective half-width: conservative +/-0.055734 (0.871%), independent +/-0.019973 (0.312%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   15.5s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 10/14 negative, mean -0.184%, worst -1.044%, 1 over their own CI half-width
 
   CELL balanced / equal-rate / seed 16180339
     analytic 6.401440   measured 6.394957   delta -0.101%
     objective half-width: conservative +/-0.058914 (0.921%), independent +/-0.022420 (0.351%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.5s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 7/14 negative, mean -0.062%, worst -0.737%, 1 over their own CI half-width
 
   CELL balanced / tuned / seed 20260729
     analytic 6.249429   measured 6.235586   delta -0.222%
     objective half-width: conservative +/-0.071770 (1.151%), independent +/-0.026794 (0.430%), 0 station(s) without a CI
     ray analytic 1.447382   simulated 1.447378
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   13.4s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True
     station gaps: 10/14 negative, mean -0.135%, worst -1.180%, 0 over their own CI half-width
 
   FULL TABLE  (balanced / tuned / seed 20260729)
@@ -242,7 +246,7 @@ DIFFERENCE (balanced / tuned / seed 20260729): simulated - analytic, at each pas
     analytic 6.249429   measured 6.236245   delta -0.211%
     objective half-width: conservative +/-0.067603 (1.084%), independent +/-0.024272 (0.389%), 0 station(s) without a CI
     ray analytic 1.447382   simulated 1.447216
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   17.0s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True
     station gaps: 12/14 negative, mean -0.334%, worst -1.522%, 2 over their own CI half-width
     DEGRADED (1):
       - cpu_term_sp: simulated throughput 0.454929 CI (0.450017, 0.459950) excludes derived gamma=0.450000
@@ -251,28 +255,28 @@ DIFFERENCE (balanced / tuned / seed 20260729): simulated - analytic, at each pas
     analytic 6.249429   measured 6.222867   delta -0.425%
     objective half-width: conservative +/-0.062915 (1.011%), independent +/-0.021990 (0.353%), 0 station(s) without a CI
     ray analytic 1.447382   simulated 1.447338
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   17.2s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True
     station gaps: 11/14 negative, mean -0.398%, worst -0.976%, 2 over their own CI half-width
 
   CELL balanced / tuned / seed 2718281
     analytic 6.249429   measured 6.230424   delta -0.304%
     objective half-width: conservative +/-0.065018 (1.044%), independent +/-0.023592 (0.379%), 0 station(s) without a CI
     ray analytic 1.447382   simulated 1.447238
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   16.1s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True
     station gaps: 10/14 negative, mean -0.222%, worst -0.942%, 0 over their own CI half-width
 
   CELL balanced / tuned / seed 16180339
     analytic 6.249429   measured 6.238158   delta -0.180%
     objective half-width: conservative +/-0.068164 (1.093%), independent +/-0.025965 (0.416%), 0 station(s) without a CI
     ray analytic 1.447382   simulated 1.447016
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   14.8s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True
     station gaps: 9/14 negative, mean -0.123%, worst -0.784%, 1 over their own CI half-width
 
   CELL quantum_dominant / invariant-r / seed 20260729
     analytic 4.528844   measured 4.518446   delta -0.230%
     objective half-width: conservative +/-0.046931 (1.039%), independent +/-0.017598 (0.389%), 0 station(s) without a CI
     ray analytic 4.000000   simulated 4.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   14.7s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 10/14 negative, mean -0.166%, worst -0.844%, 1 over their own CI half-width
 
   FULL TABLE  (quantum_dominant / invariant-r / seed 20260729)
@@ -317,35 +321,35 @@ DIFFERENCE (quantum_dominant / invariant-r / seed 20260729): simulated - analyti
     analytic 4.528844   measured 4.506983   delta -0.483%
     objective half-width: conservative +/-0.043198 (0.958%), independent +/-0.016006 (0.355%), 0 station(s) without a CI
     ray analytic 4.000000   simulated 4.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   14.1s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 9/14 negative, mean -0.245%, worst -0.924%, 1 over their own CI half-width
 
   CELL quantum_dominant / invariant-r / seed 31415926
     analytic 4.528844   measured 4.519511   delta -0.206%
     objective half-width: conservative +/-0.047579 (1.053%), independent +/-0.018077 (0.400%), 0 station(s) without a CI
     ray analytic 4.000000   simulated 4.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.1s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 11/14 negative, mean -0.168%, worst -0.854%, 1 over their own CI half-width
 
   CELL quantum_dominant / invariant-r / seed 2718281
     analytic 4.528844   measured 4.524226   delta -0.102%
     objective half-width: conservative +/-0.041098 (0.908%), independent +/-0.015735 (0.348%), 0 station(s) without a CI
     ray analytic 4.000000   simulated 4.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   14.4s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 11/14 negative, mean -0.144%, worst +0.636%, 0 over their own CI half-width
 
   CELL quantum_dominant / invariant-r / seed 16180339
     analytic 4.528844   measured 4.529823   delta +0.022%
     objective half-width: conservative +/-0.047745 (1.054%), independent +/-0.017135 (0.378%), 0 station(s) without a CI
     ray analytic 4.000000   simulated 4.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   14.6s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 8/14 negative, mean -0.054%, worst -0.757%, 1 over their own CI half-width
 
   CELL quantum_dominant / equal-rate / seed 20260729
     analytic 4.776428   measured 4.759822   delta -0.348%
     objective half-width: conservative +/-0.042702 (0.897%), independent +/-0.015600 (0.328%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   16.2s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 11/14 negative, mean -0.278%, worst -0.567%, 0 over their own CI half-width
 
   FULL TABLE  (quantum_dominant / equal-rate / seed 20260729)
@@ -390,7 +394,7 @@ DIFFERENCE (quantum_dominant / equal-rate / seed 20260729): simulated - analytic
     analytic 4.776428   measured 4.759926   delta -0.345%
     objective half-width: conservative +/-0.044086 (0.926%), independent +/-0.015223 (0.320%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.4s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 12/14 negative, mean -0.333%, worst -1.012%, 1 over their own CI half-width
     DEGRADED (2):
       - gpu_psg: simulated throughput 0.226306 CI (0.225031, 0.227595) excludes derived gamma=0.225000
@@ -400,28 +404,28 @@ DIFFERENCE (quantum_dominant / equal-rate / seed 20260729): simulated - analytic
     analytic 4.776428   measured 4.775556   delta -0.018%
     objective half-width: conservative +/-0.035901 (0.752%), independent +/-0.012170 (0.255%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   14.8s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 9/14 negative, mean -0.085%, worst -0.643%, 0 over their own CI half-width
 
   CELL quantum_dominant / equal-rate / seed 2718281
     analytic 4.776428   measured 4.775039   delta -0.029%
     objective half-width: conservative +/-0.038019 (0.796%), independent +/-0.013464 (0.282%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.1s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 10/14 negative, mean -0.141%, worst -0.599%, 0 over their own CI half-width
 
   CELL quantum_dominant / equal-rate / seed 16180339
     analytic 4.776428   measured 4.782064   delta +0.118%
     objective half-width: conservative +/-0.039235 (0.820%), independent +/-0.013720 (0.287%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   14.3s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 9/14 negative, mean -0.053%, worst -0.816%, 0 over their own CI half-width
 
   CELL quantum_dominant / tuned / seed 20260729
     analytic 4.431691   measured 4.416174   delta -0.350%
     objective half-width: conservative +/-0.047269 (1.070%), independent +/-0.017025 (0.386%), 0 station(s) without a CI
     ray analytic 2.316118   simulated 2.316444
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   14.7s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True
     station gaps: 11/14 negative, mean -0.227%, worst -1.087%, 0 over their own CI half-width
 
   FULL TABLE  (quantum_dominant / tuned / seed 20260729)
@@ -466,21 +470,21 @@ DIFFERENCE (quantum_dominant / tuned / seed 20260729): simulated - analytic, at 
     analytic 4.431691   measured 4.422229   delta -0.214%
     objective half-width: conservative +/-0.049650 (1.123%), independent +/-0.019422 (0.439%), 0 station(s) without a CI
     ray analytic 2.316118   simulated 2.315637
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   14.6s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True
     station gaps: 9/14 negative, mean -0.107%, worst -0.702%, 0 over their own CI half-width
 
   CELL quantum_dominant / tuned / seed 31415926
     analytic 4.431691   measured 4.423955   delta -0.175%
     objective half-width: conservative +/-0.041803 (0.945%), independent +/-0.016115 (0.364%), 0 station(s) without a CI
     ray analytic 2.316118   simulated 2.316506
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   15.5s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True
     station gaps: 9/14 negative, mean -0.086%, worst -0.672%, 0 over their own CI half-width
 
   CELL quantum_dominant / tuned / seed 2718281
     analytic 4.431691   measured 4.420374   delta -0.255%
     objective half-width: conservative +/-0.043174 (0.977%), independent +/-0.016722 (0.378%), 0 station(s) without a CI
     ray analytic 2.316118   simulated 2.315748
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   15.9s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True
     station gaps: 10/14 negative, mean -0.227%, worst -0.659%, 0 over their own CI half-width
     DEGRADED (1):
       - qpu_psq: simulated throughput 0.226610 CI (0.225119, 0.228121) excludes derived gamma=0.225000
@@ -489,14 +493,14 @@ DIFFERENCE (quantum_dominant / tuned / seed 20260729): simulated - analytic, at 
     analytic 4.431691   measured 4.430180   delta -0.034%
     objective half-width: conservative +/-0.044635 (1.008%), independent +/-0.016698 (0.377%), 0 station(s) without a CI
     ray analytic 2.316118   simulated 2.315611
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True   14.0s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 6   converged = True
     station gaps: 7/14 negative, mean -0.055%, worst -0.726%, 0 over their own CI half-width
 
   CELL classical_dominant / invariant-r / seed 20260729
     analytic 3.463677   measured 3.448158   delta -0.448%
     objective half-width: conservative +/-0.034496 (1.000%), independent +/-0.013048 (0.378%), 0 station(s) without a CI
     ray analytic 4.000000   simulated 4.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   15.1s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 10/14 negative, mean -0.251%, worst -0.835%, 0 over their own CI half-width
 
   FULL TABLE  (classical_dominant / invariant-r / seed 20260729)
@@ -541,7 +545,7 @@ DIFFERENCE (classical_dominant / invariant-r / seed 20260729): simulated - analy
     analytic 3.463677   measured 3.464070   delta +0.011%
     objective half-width: conservative +/-0.029694 (0.857%), independent +/-0.010638 (0.307%), 0 station(s) without a CI
     ray analytic 4.000000   simulated 4.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   14.5s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 11/14 negative, mean -0.132%, worst -0.439%, 0 over their own CI half-width
     DEGRADED (1):
       - cpu_term_sp: simulated throughput 0.447179 CI (0.444527, 0.449863) excludes derived gamma=0.450000
@@ -550,28 +554,28 @@ DIFFERENCE (classical_dominant / invariant-r / seed 20260729): simulated - analy
     analytic 3.463677   measured 3.462505   delta -0.034%
     objective half-width: conservative +/-0.031484 (0.909%), independent +/-0.010474 (0.302%), 0 station(s) without a CI
     ray analytic 4.000000   simulated 4.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   15.4s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 6/14 negative, mean +0.002%, worst +0.646%, 1 over their own CI half-width
 
   CELL classical_dominant / invariant-r / seed 2718281
     analytic 3.463677   measured 3.464455   delta +0.022%
     objective half-width: conservative +/-0.030869 (0.891%), independent +/-0.011681 (0.337%), 0 station(s) without a CI
     ray analytic 4.000000   simulated 4.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   17.0s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 9/14 negative, mean -0.066%, worst -0.997%, 0 over their own CI half-width
 
   CELL classical_dominant / invariant-r / seed 16180339
     analytic 3.463677   measured 3.460911   delta -0.080%
     objective half-width: conservative +/-0.035344 (1.021%), independent +/-0.014143 (0.409%), 0 station(s) without a CI
     ray analytic 4.000000   simulated 4.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True   16.0s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 5   converged = True
     station gaps: 6/14 negative, mean +0.020%, worst +0.765%, 1 over their own CI half-width
 
   CELL classical_dominant / equal-rate / seed 20260729
     analytic 2.613335   measured 2.607234   delta -0.233%
     objective half-width: conservative +/-0.019361 (0.743%), independent +/-0.005997 (0.230%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   16.3s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 10/14 negative, mean -0.149%, worst -0.529%, 0 over their own CI half-width
 
   FULL TABLE  (classical_dominant / equal-rate / seed 20260729)
@@ -616,21 +620,21 @@ DIFFERENCE (classical_dominant / equal-rate / seed 20260729): simulated - analyt
     analytic 2.613335   measured 2.610949   delta -0.091%
     objective half-width: conservative +/-0.021462 (0.822%), independent +/-0.007172 (0.275%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.4s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 8/14 negative, mean -0.120%, worst -0.722%, 1 over their own CI half-width
 
   CELL classical_dominant / equal-rate / seed 31415926
     analytic 2.613335   measured 2.619017   delta +0.217%
     objective half-width: conservative +/-0.024124 (0.921%), independent +/-0.007868 (0.300%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   14.7s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 5/14 negative, mean +0.113%, worst +1.032%, 0 over their own CI half-width
 
   CELL classical_dominant / equal-rate / seed 2718281
     analytic 2.613335   measured 2.614330   delta +0.038%
     objective half-width: conservative +/-0.020457 (0.783%), independent +/-0.006364 (0.243%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   13.9s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 7/14 negative, mean +0.016%, worst -0.616%, 0 over their own CI half-width
     DEGRADED (2):
       - qpu_ssq: simulated throughput 0.223622 CI (0.222331, 0.224928) excludes derived gamma=0.225000
@@ -640,14 +644,14 @@ DIFFERENCE (classical_dominant / equal-rate / seed 20260729): simulated - analyt
     analytic 2.613335   measured 2.615578   delta +0.086%
     objective half-width: conservative +/-0.022710 (0.868%), independent +/-0.008133 (0.311%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.0s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 6/14 negative, mean +0.070%, worst +0.761%, 1 over their own CI half-width
 
   CELL classical_dominant / tuned / seed 20260729
     analytic 2.613335   measured 2.607234   delta -0.233%
     objective half-width: conservative +/-0.019361 (0.743%), independent +/-0.005997 (0.230%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.6s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 10/14 negative, mean -0.149%, worst -0.529%, 0 over their own CI half-width
 
   FULL TABLE  (classical_dominant / tuned / seed 20260729)
@@ -692,21 +696,21 @@ DIFFERENCE (classical_dominant / tuned / seed 20260729): simulated - analytic, a
     analytic 2.613335   measured 2.610949   delta -0.091%
     objective half-width: conservative +/-0.021462 (0.822%), independent +/-0.007172 (0.275%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.5s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 8/14 negative, mean -0.120%, worst -0.722%, 1 over their own CI half-width
 
   CELL classical_dominant / tuned / seed 31415926
     analytic 2.613335   measured 2.619017   delta +0.217%
     objective half-width: conservative +/-0.024124 (0.921%), independent +/-0.007868 (0.300%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   14.8s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 5/14 negative, mean +0.113%, worst +1.032%, 0 over their own CI half-width
 
   CELL classical_dominant / tuned / seed 2718281
     analytic 2.613335   measured 2.614330   delta +0.038%
     objective half-width: conservative +/-0.020457 (0.783%), independent +/-0.006364 (0.243%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   13.8s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 7/14 negative, mean +0.016%, worst -0.616%, 0 over their own CI half-width
     DEGRADED (2):
       - qpu_ssq: simulated throughput 0.223622 CI (0.222331, 0.224928) excludes derived gamma=0.225000
@@ -716,7 +720,7 @@ DIFFERENCE (classical_dominant / tuned / seed 20260729): simulated - analytic, a
     analytic 2.613335   measured 2.615578   delta +0.086%
     objective half-width: conservative +/-0.022710 (0.868%), independent +/-0.008133 (0.311%), 0 station(s) without a CI
     ray analytic 1.000000   simulated 1.000000
-    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True   15.4s
+    stop_reason = noise-floor   iterations = 1   sim_calls = 2   warm_start = 4   converged = True
     station gaps: 6/14 negative, mean +0.070%, worst +0.761%, 1 over their own CI half-width
 
 
@@ -782,10 +786,11 @@ DIFFERENCE (classical_dominant / tuned / seed 20260729): simulated - analytic, a
               (4x the samples per halving) or add seeds; do not read a sign off
               the point estimate alone.
 
-  The per-seed rows are there to stop a mechanism being read off one seed. In all
-  three workloads the analytic gain sits INSIDE both the per-seed range and the
-  paired interval, so the offset between the analytic and measured MEAN gain is not
-  resolved at this stopping rule -- only its sign and rough size are.
+  The per-seed rows are there to stop a mechanism being read off one seed.
+  The analytic gain sits INSIDE both the per-seed range and the paired interval
+  for: balanced/tuned, classical_dominant/equal-rate, classical_dominant/tuned, quantum_dominant/equal-rate, quantum_dominant/tuned. For those, the offset between the analytic and the measured
+  MEAN gain is NOT resolved at this stopping rule -- only its sign and rough
+  size are, and no mechanism should be claimed for it.
   identical   every paired difference is exactly zero, because the two policies
               ARE the same ray here -- r = 1 collapses r* = r onto r* = 1
               (findings 4). Not a resolution failure.
@@ -820,7 +825,23 @@ DIFFERENCE (classical_dominant / tuned / seed 20260729): simulated - analytic, a
   equal-rate      210  132/210    -0.110     1.165        6       0.0002
   tuned           210  134/210    -0.132    -1.522        7       0.0001
 
-  The fork-join rows are the ones under test. Isolated:
+  Which of those rows are NEW EVIDENCE, and which reproduce spec section 7:
+
+  bucket                                         rows  negative   mean %  sign-test p
+  invariant-r at spec 7's seeds (REPRODUCES it)    168  115/168    -0.149       0.0000
+  invariant-r at seeds spec 7 never ran (NEW)      42   21/42     -0.032       1.0000
+  the two new rays, all seeds (NEW -- spec 7 predates r_star)    420  266/420    -0.121       0.0000
+
+  So of the 630 rows in the table above, 168 are spec section 7's published sample, not a
+  new draw from it. Do NOT describe the pooled figures as replicating it -- the
+  first write-up of this run did, and the arithmetic says otherwise. What IS new is
+  the two rays (which spec 7 could not measure) and the seeds it never ran.
+
+  Bit-identical policy pairs (one measurement appearing twice, not two):
+    balanced: invariant-r == equal-rate
+    classical_dominant: equal-rate == tuned
+
+  The fork-join rows are the ones under test. Isolated, at seed 20260729:
 
   workload             policy       station        ray   analytic   measured    gap %  over CI?
   balanced             invariant-r  fj_pp       1.0000   1.171706   1.159494   -1.042        no
@@ -842,12 +863,13 @@ DIFFERENCE (classical_dominant / tuned / seed 20260729): simulated - analytic, a
   classical_dominant   tuned        fj_pp       1.0000   0.450462   0.449296   -0.259        no
   classical_dominant   tuned        fj_sp       1.0000   0.450462   0.448117   -0.521        no
 
-  gamma conservation: 9 miss(es) over 540 checks (12 checked stations x 45 cells) = 1.7%, against the
-  5% a 95% interval implies -- fewer than chance. They arrive in tandem pairs that
-  share a stream, so the effective count is lower still. Not a defect; but do not
-  read a clean run as a guarantee either (spec 7 saw 1 miss in 144 checks).
+  gamma conservation: 9 miss(es) over 1080 checks (12 checked stations x 90 evaluations) = 0.83%.
+  Against the 5% a 95% interval implies: fewer than chance.
+  Misses arrive in tandem pairs that share a stream, so the effective count is
+  lower still. Do not read a clean run as a guarantee either (spec 7 saw 1 miss in
+  144 checks at one seed and none at another).
 
-  (seed 20260729 only, to keep this block one screen. fj_pp and fj_sp
+  (one seed only, to keep this block one screen. fj_pp and fj_sp
   carry no throughput witness -- gamma conservation skips them, qsim-service#8.)
   `sign-test p` is two-sided exact binomial and is OPTIMISTIC: the rows are not
   independent (stations share one run; four are analytically identical) and
@@ -858,4 +880,5 @@ DIFFERENCE (classical_dominant / tuned / seed 20260729): simulated - analytic, a
 
   5 CONFIRMED, 1 identical
 
-45 simulated passes in 692s. Every figure above is reproducible from this file's own conditions block.
+45 simulated passes. Every figure above is reproducible from this file's
+own conditions block, and a re-run at these seeds reproduces it byte-for-byte.

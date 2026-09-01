@@ -40,8 +40,8 @@ QOPT_QSIM_URL=http://localhost:8080 python docs/forkjoin-s2-policy/simcheck.py \
 
 ## Reading `simcheck-output.txt`
 
-Conditions are in its own header block, and §0 **measures** the service's provenance rather
-than trusting a tag — a `qsim-service` build predating its #11 and #13 returns
+Conditions are in its own header block, and §0 **measures and then gates on** the service's
+provenance rather than trusting a tag — a `qsim-service` build predating its #11 and #13 returns
 plausible-looking garbage with `success: true` throughout, and an image tag does not tell you
 which commit it was built from. See [`../qcsc-example/README.md`](../qcsc-example/README.md) for the
 version floor.
@@ -51,7 +51,8 @@ version floor.
 returns every digit unchanged — measured, not assumed. That confirms the pipeline and tells you
 nothing new about the statistics. Vary `--seeds` for an independent sample.
 
-Two things the output prints specifically to stop a misreading:
+Three things the output prints specifically to stop a misreading, each because a first reading
+of this run got it wrong:
 
 - **Per-seed gains under every row**, because the offset between the analytic and the measured
   *mean* gain is smaller than the seed-to-seed scatter. Reading a direction off one seed gets
@@ -60,6 +61,13 @@ Two things the output prints specifically to stop a misreading:
   objective, neither of which is the primary interval. The paired spread across seeds is,
   because it measures the variability instead of assuming a correlation structure across 14
   stations that share one simulation run.
+- **Which station rows are new evidence and which merely reproduce spec §7**, plus which policy
+  cells are bit-identical to another. The default seed list contains all four of spec §7's
+  replication seeds, and at the default ray those cells reproduce its rows bit-for-bit — the
+  service is deterministic given a seed — so the pooled bias figures are **not** a replication
+  of it. The first write-up said they were. Likewise `balanced`'s `equal-rate` is `invariant-r`
+  (hardware `r = 1`) and `classical_dominant`'s `tuned` is `equal-rate` (the ray solves to 1),
+  so two of the six policy rows are one measurement printed twice.
 
 The `--precision`, `--seeds`, `--workloads` and `--policies` flags exist so a single
 inconclusive cell can be re-run tighter without editing the probe. Report a tightened run
