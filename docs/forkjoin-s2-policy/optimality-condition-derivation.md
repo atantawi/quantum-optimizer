@@ -1,3 +1,18 @@
+---
+documentclass: article
+fontsize: 10pt
+papersize: letter
+geometry:
+  - margin=0.8in
+mainfont: STIXGeneral
+mathfont: STIX Two Math
+monofont: Menlo
+colorlinks: true
+linkcolor: blue
+urlcolor: blue
+toccolor: black
+---
+
 # Deriving the local optimality condition for $S_2$
 
 This note fills in the derivation behind the one-line condition in
@@ -6,8 +21,8 @@ This note fills in the derivation behind the one-line condition in
 $$
 \frac{\left|\partial T/\partial m_1\right|}
      {\left|\partial T/\partial m_2\right|}
-= \frac{\beta_1}{\beta_2}
-= \frac{c_1}{c_2}r.
+{}= \frac{\beta_1}{\beta_2}
+{}= \frac{c_1}{c_2}r.
 $$
 
 The condition is the usual equal-marginal-value rule for splitting a fixed amount of
@@ -115,7 +130,7 @@ response time. Therefore the coefficient of $dm_1$ must be zero:
 
 $$
 \frac{\partial T}{\partial m_1}
-=\frac{\beta_1}{\beta_2}
+{}=\frac{\beta_1}{\beta_2}
  \frac{\partial T}{\partial m_2}.
 $$
 
@@ -126,7 +141,7 @@ $$
 \boxed{
 \frac{\left|\partial T/\partial m_1\right|}
      {\left|\partial T/\partial m_2\right|}
-=\frac{\beta_1}{\beta_2}
+{}=\frac{\beta_1}{\beta_2}
 }
 $$
 
@@ -136,8 +151,8 @@ $$
 \boxed{
 \frac{\left|\partial T/\partial m_1\right|}
      {\left|\partial T/\partial m_2\right|}
-=\frac{c_1/\widehat\mu_1}{c_2/(r\widehat\mu_1)}
-=\frac{c_1}{c_2}r.
+{}=\frac{c_1/\widehat\mu_1}{c_2/(r\widehat\mu_1)}
+{}=\frac{c_1}{c_2}r.
 }
 $$
 
@@ -145,7 +160,7 @@ Equivalently,
 
 $$
 \frac{\left|\partial T/\partial m_1\right|}{\beta_1}
-=
+{}=
 \frac{\left|\partial T/\partial m_2\right|}{\beta_2}.
 $$
 
@@ -158,7 +173,7 @@ The same result follows from a Lagrangian,
 
 $$
 \mathcal L
-=T(m_1,m_2)
+{}=T(m_1,m_2)
 +\nu(\beta_1m_1+\beta_2m_2-B),
 $$
 
@@ -196,7 +211,7 @@ $$
 }{
  \left|T_2\bigl(m_1(r^*),m_2(r^*)\bigr)\right|
 }
-=\frac{\beta_1}{\beta_2},
+{}=\frac{\beta_1}{\beta_2},
 $$
 
 where $T_k=\partial T/\partial m_k$. This generally has to be solved numerically; the
@@ -206,8 +221,8 @@ Finally,
 
 $$
 \frac{m_2}{m_1}
-=\frac{r\widehat\mu_1S_2}{\widehat\mu_1S_1}
-=r\frac{S_2}{S_1},
+{}=\frac{r\widehat\mu_1S_2}{\widehat\mu_1S_1}
+{}=r\frac{S_2}{S_1},
 $$
 
 so the optimal capacity relationship is
@@ -238,7 +253,7 @@ $$
 
 $$
 T_{\mathrm{UB}}
-=\frac{1}{m_1-\lambda}
+{}=\frac{1}{m_1-\lambda}
  +\frac{1}{m_2-\lambda}
  -\frac{1}{m_1+m_2-2\lambda},
 $$
@@ -247,14 +262,14 @@ and
 
 $$
 T_{\mathrm{bot}}
-=\frac{1}{\min(m_1,m_2)-\lambda}.
+{}=\frac{1}{\min(m_1,m_2)-\lambda}.
 $$
 
 Away from $m_1=m_2$, its partial derivative with respect to $m_k$ is
 
 $$
 \frac{\partial T}{\partial m_k}
-=
+{}=
 \frac{\partial\alpha}{\partial m_k}
   (T_{\mathrm{bot}}-T_{\mathrm{UB}})
 +(1-\alpha)\frac{\partial T_{\mathrm{UB}}}{\partial m_k}
@@ -265,12 +280,12 @@ where, for $j\ne k$,
 
 $$
 \frac{\partial\alpha}{\partial m_k}
-=-\frac{\lambda}{8m_k^2},
+{}=-\frac{\lambda}{8m_k^2},
 $$
 
 $$
 \frac{\partial T_{\mathrm{UB}}}{\partial m_k}
-=-\frac{1}{(m_k-\lambda)^2}
+{}=-\frac{1}{(m_k-\lambda)^2}
  +\frac{1}{(m_1+m_2-2\lambda)^2},
 $$
 
@@ -278,7 +293,7 @@ and
 
 $$
 \frac{\partial T_{\mathrm{bot}}}{\partial m_k}
-=
+{}=
 \begin{cases}
 -\dfrac{1}{(m_k-\lambda)^2}, & m_k<m_j,\\[6pt]
 0, & m_k>m_j.
@@ -308,7 +323,7 @@ two-sided partial derivatives do not exist. Parameterizing the spend line by $m_
 
 $$
 f'(m_1)
-=T_1-\frac{\beta_1}{\beta_2}T_2.
+{}=T_1-\frac{\beta_1}{\beta_2}T_2.
 $$
 
 The correct condition at the kink is the one-sided condition

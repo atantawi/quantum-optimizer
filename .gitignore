@@ -21,3 +21,7 @@ htmlcov/
 *.swp
 .idea/
 .vscode/
+
+# Generated documentation
+docs/forkjoin-s2-policy/findings.pdf
+docs/forkjoin-s2-policy/optimality-condition-derivation.pdf
