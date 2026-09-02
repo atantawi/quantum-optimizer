@@ -1,3 +1,19 @@
+---
+documentclass: extarticle
+fontsize: 9pt
+papersize: letter
+geometry:
+  - landscape
+  - margin=0.6in
+mainfont: STIXGeneral
+mathfont: STIX Two Math
+monofont: Menlo
+colorlinks: true
+linkcolor: blue
+urlcolor: blue
+toccolor: black
+---
+
 # Choosing S₂ for a fork-join station — findings
 
 **Date:** 2026-08-31
@@ -215,16 +231,16 @@ same-money:
 - **`r*` family** — a fixed ray with `alloc_cost = c₁ + c₂·r*/r`, swept over
   r\* ∈ [0.20, 6.00].
 
-    workload            policy       floor        obj      d%  it  cnv  fj_pp r*  fj_sp r*
-    balanced            qopt         6.840   6.401440    0.00   5 True    1.0000    1.0000
-    balanced            paper        6.840   6.401440    0.00   5 True    1.0000    1.0000
-    balanced            optimal      6.840   6.248828    2.38   4 True    1.4457    1.4457
-    quantum_dominant    qopt         6.503   4.528844    0.00   5 True    4.0000    4.0000
-    quantum_dominant    paper        5.828   4.776428   -5.47   4 True    1.0000    1.0000
-    quantum_dominant    optimal      6.503   4.432330    2.13   6 True    2.3195    2.3195
-    classical_dominant  qopt         5.490   3.463677    0.00   5 True    4.0000    4.0000
-    classical_dominant  paper        2.790   2.613335   24.55   4 True    1.0000    1.0000
-    classical_dominant  optimal      5.490   2.620524   24.34   9 True    1.0000    1.0000
+        workload            policy       floor        obj      d%  it  cnv  fj_pp r*  fj_sp r*
+        balanced            qopt         6.840   6.401440    0.00   5 True    1.0000    1.0000
+        balanced            paper        6.840   6.401440    0.00   5 True    1.0000    1.0000
+        balanced            optimal      6.840   6.248828    2.38   4 True    1.4457    1.4457
+        quantum_dominant    qopt         6.503   4.528844    0.00   5 True    4.0000    4.0000
+        quantum_dominant    paper        5.828   4.776428   -5.47   4 True    1.0000    1.0000
+        quantum_dominant    optimal      6.503   4.432330    2.13   6 True    2.3195    2.3195
+        classical_dominant  qopt         5.490   3.463677    0.00   5 True    4.0000    4.0000
+        classical_dominant  paper        2.790   2.613335   24.55   4 True    1.0000    1.0000
+        classical_dominant  optimal      5.490   2.620524   24.34   9 True    1.0000    1.0000
 
 **Neither incumbent dominates.** The paper beats qopt by 24.55% in `classical_dominant`
 and loses to it by 5.47% in `quantum_dominant`. Both original objections are validated:

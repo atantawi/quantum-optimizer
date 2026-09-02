@@ -82,3 +82,26 @@ The `--precision`, `--seeds`, `--workloads` and `--policies` flags exist so a si
 inconclusive cell can be re-run tighter without editing the probe. Report a tightened run
 separately: halving `precision` costs roughly 4× the samples and is not comparable to the
 0.02 grid.
+
+## Generate the PDFs
+
+The Markdown files contain their own page layout and font settings. `findings.md` uses
+landscape letter pages for its wide tables; `optimality-condition-derivation.md` uses portrait.
+On macOS, install Pandoc and a TeX distribution if they are not already available, then run
+these commands from the repository root:
+
+```sh
+pandoc docs/forkjoin-s2-policy/findings.md \
+  --from=gfm+tex_math_dollars --pdf-engine=xelatex --toc \
+  --include-in-header=docs/forkjoin-s2-policy/pdf-header.tex \
+  -o docs/forkjoin-s2-policy/findings.pdf
+
+pandoc docs/forkjoin-s2-policy/optimality-condition-derivation.md \
+  --from=gfm+tex_math_dollars --pdf-engine=xelatex --toc \
+  --include-in-header=docs/forkjoin-s2-policy/pdf-header.tex \
+  -o docs/forkjoin-s2-policy/optimality-condition-derivation.pdf
+```
+
+The configured fonts (`STIXGeneral`, `STIX Two Math`, and `Menlo`) ship with macOS. XeLaTeX
+embeds them in the generated PDFs, so recipients do not need those fonts installed. The PDFs
+are reproducible build outputs and are intentionally ignored by Git.
