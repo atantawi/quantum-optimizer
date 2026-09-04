@@ -21,6 +21,15 @@ Theory, not measurement: it would read the same had neither probe been run. Its 
 pinned against the implementation by
 `tests/test_forkjoin_policy.py::test_the_written_derivation_matches_the_implemented_derivative`.
 
+[`optimal-s2-proposal-review.md`](optimal-s2-proposal-review.md) reviews an **alternative
+`S₂` procedure** proposed in [`Optimal-S2.docx`](Optimal-S2.docx), which solves
+`F(B) = mu_2 dT/dB + chi c_2 = 0` for `S₂` given the station budget `C = c_FJ` and a Lagrange
+multiplier `chi`. Conclusion: it is the *dual* of the condition already implemented — same
+stationarity system, same `dT/dB` expression, but with the multiplier kept instead of
+eliminated — and `C` cancels out of it entirely. Equivalent when fed `chi = nu`, the shadow
+price `qopt`'s eliminated equation computes; wrong by about a percent when fed the only
+multiplier eq 21 carries. Nothing in `qopt/` changed as a result.
+
 [`findings.md`](findings.md) is the **original spike record, superseded in part** and
 deliberately not rewritten — so that what was known when the design decisions were taken stays
 readable. Its header lists what has since changed. Two things in it are stale as *status*
@@ -28,7 +37,7 @@ rather than as reasoning: §9's "no simulated cross-check was run", and §9's cl
 best ray is closer to homogeneity than `r = 4` (false for `balanced`, whose hardware is
 `r = 1`).
 
-## The two probes
+## The three probes
 
 Neither changes anything in `qopt/`, and both import `examples/qcsc_network.py` rather than
 restating its topology, so rates, costs and budget cannot drift from the example.
@@ -36,6 +45,7 @@ restating its topology, so rates, costs and budget cannot drift from the example
 | | what it does | output |
 |---|---|---|
 | [`probe.py`](probe.py) | **Analytic.** Answers findings' questions: is there a locally optimal `S₂`, is the objective unimodal in `r*`, what the price elasticity and the stability floors are, and the decisive network-level comparison of the two incumbents against the family. Never touches the simulator. | [`probe-output.txt`](probe-output.txt) |
+| [`optimal-s2-check.py`](optimal-s2-check.py) | **Analytic.** Checks the `Optimal-S2.docx` proposal against the condition `qopt` solves: six gates over its `T`, its `dT/dB`, its equivalence at `chi = nu`, the cancellation of `C`, the emptiness of its constraint, and the kink it cannot represent. Exits non-zero on any failure. | [`optimal-s2-check-output.txt`](optimal-s2-check-output.txt) |
 | [`simcheck.py`](simcheck.py) | **Simulated.** The cross-check findings §9 named as the outstanding evidence: does the analytic gain survive measurement? 3 workloads × 3 policies × 5 base seeds against `qsim-service`, paired by seed. | [`simcheck-output.txt`](simcheck-output.txt) |
 
 Regenerate:
@@ -86,7 +96,8 @@ separately: halving `precision` costs roughly 4× the samples and is not compara
 ## Generate the PDFs
 
 The Markdown files contain their own page layout and font settings. `findings.md` uses
-landscape letter pages for its wide tables; `optimality-condition-derivation.md` uses portrait.
+landscape letter pages for its wide tables; `optimality-condition-derivation.md` and
+`optimal-s2-proposal-review.md` use portrait.
 On macOS, install Pandoc and a TeX distribution if they are not already available, then run
 these commands from the repository root:
 
@@ -100,6 +111,11 @@ pandoc docs/forkjoin-s2-policy/optimality-condition-derivation.md \
   --from=gfm+tex_math_dollars --pdf-engine=xelatex --toc \
   --include-in-header=docs/forkjoin-s2-policy/pdf-header.tex \
   -o docs/forkjoin-s2-policy/optimality-condition-derivation.pdf
+
+pandoc docs/forkjoin-s2-policy/optimal-s2-proposal-review.md \
+  --from=gfm+tex_math_dollars --pdf-engine=xelatex --toc \
+  --include-in-header=docs/forkjoin-s2-policy/pdf-header.tex \
+  -o docs/forkjoin-s2-policy/optimal-s2-proposal-review.pdf
 ```
 
 The configured fonts (`STIXGeneral`, `STIX Two Math`, and `Menlo`) ship with macOS. XeLaTeX
