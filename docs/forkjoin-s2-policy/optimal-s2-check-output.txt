@@ -1,0 +1,168 @@
+Optimal-S2.docx vs qopt's tuned r_star
+gates: G1 T, G2 dT/dB, G3 equivalence at chi=nu, G4 C cancels, G5 constraint is an identity, G8 the kink
+
+======================================================================================
+G1 (GATE) the docx's T against t_ul, on each bottleneck branch
+======================================================================================
+  The docx sets T_bot = 1/(A-g), which is t_ul's max(...) only when A <= B --
+  i.e. only when server 1 is the (effectively) slower one. Closed form of the
+  discrepancy where server 2 binds:  g*(B^2 - A^2) / (8*A*B*(A-g)*(B-g)).
+
+    A        B      branch    T_docx        t_ul          difference    predicted
+  ----------------------------------------------------------------------------------
+   0.70     1.40   A<=B     4.19286497   4.19286497  +0.000000e+00 +3.552632e-01
+   1.00     1.00   A<=B     2.62500000   2.62500000  +0.000000e+00 +0.000000e+00
+   1.40     0.70   B<A      3.83760182   4.19286497  -3.552632e-01 -3.552632e-01
+   2.00     0.60   B<A      5.98278384   6.71665481  -7.338710e-01 -7.338710e-01
+   0.60     3.00   A<=B     6.68600218   6.68600218  +0.000000e+00 +7.058824e-01
+
+  max |T_docx - t_ul| where A <= B : 0.000e+00   (want 0)
+  max relative error where B < A   : 10.926%   (want > 0: it is a different function)
+  VERDICT: PASS - the docx's T is t_ul exactly where server 1 binds, and a different function where server 2 binds
+
+======================================================================================
+G2 (GATE) the docx's dT/dB against qopt's implemented dT/dm2
+======================================================================================
+  qopt's partial is _dt_dm1(g, m2, m1) -- t_ul is symmetric in its two rates.
+  A 5-point finite difference of t_ul witnesses both independently.
+
+    A        B     docx dT/dB    qopt dT/dm2   rel.diff   5pt FD        FD rel
+  ----------------------------------------------------------------------------------
+   0.70     1.40    -0.35744294    -0.35744294  0.00e+00   -0.35744294  2.80e-11
+   0.60     3.00    -0.01460769    -0.01460769  2.38e-16   -0.01460769  3.22e-09
+   1.00     2.50    -0.08200646    -0.08200646  0.00e+00   -0.08200646  5.46e-11
+   0.50     0.90    -0.75864198    -0.75864198  0.00e+00   -0.75864198  9.43e-11
+   3.00    12.00    -0.00240227    -0.00240227  0.00e+00   -0.00240227  7.86e-12
+
+  max rel.diff docx vs qopt : 2.375e-16  (want ~0: the same expression)
+  max rel.diff docx vs 5pt FD: 3.222e-09  (want small: both are dT/dm2)
+  VERDICT: PASS - the docx's dT/dB is qopt's dT/dm2, to floating point
+
+======================================================================================
+G3 (GATE) F(B) = 0 at chi = nu reproduces qopt's ray
+======================================================================================
+  F(B)=0 is exactly qopt's SECOND stationarity equation, dT/dm2 = -chi*beta_2.
+  qopt solves the RATIO of that and its m1 twin, which eliminates chi. So the
+  two must agree when, and only when, chi is the station's own shadow price
+  nu = |dT/dm1|/beta_1 = |dT/dm2|/beta_2.
+
+  case                          r* (ours)   r* (docx)   rel.diff   F at ours    branch
+  ----------------------------------------------------------------------------------
+  beta1 > beta2  (r*>1)         1.5566809   1.5566809   4.17e-16  +5.3291e-15   A<=B ok
+  beta1 > beta2  (r*>1)         1.1230837   1.1230837   6.75e-16  -5.1514e-14   A<=B ok
+  beta1 = beta2  (r*=1, kink)   1.0000000   1.0000000   0.00e+00  +0.0000e+00   A<=B ok
+  beta2 > beta1  (r*<1)         0.8904056   0.8684744   2.46e-02  +1.0298e+01   B<A BAD
+
+  max rel.diff in r*, where the docx's branch holds: 6.753e-16
+  VERDICT: PASS - on its own branch the docx procedure reproduces qopt's ray exactly, GIVEN chi = nu
+
+======================================================================================
+G4 (GATE) the budget C cannot reach the answer
+======================================================================================
+  The docx takes C = c_FJ from the optimization loop, but C enters L only as an
+  additive constant, so it cancels from dL/dS_2 and appears nowhere in F. The
+  root is therefore bit-for-bit independent of C over any range at all.
+
+  (F's signature has no C argument to vary -- that IS the finding.)
+  root at the one chi supplied: B = 1.063992175701365
+
+  And the constraint the docx imposes has no content either: with S_1 and C
+  both taken from step 1, S_2 = (C - c_1 S_1)/c_2 is already determined, so
+  min over S_2 has zero degrees of freedom. G5 measures that.
+  VERDICT: PASS - C is not an argument of F: the budget from step 1 cannot influence S_2
+
+======================================================================================
+G5 (GATE) at qopt's converged solutions the constraint is an identity
+======================================================================================
+  spend = S_1*(c_1 + c_2 r*/r) = c_1 S_1 + c_2 S_2 holds for EVERY r*, so
+  using the constraint to pin chi instead cannot move the ray: any r* is
+  self-consistent. Measured at all three QCSC fixed points.
+
+  The two are the same NUMBER but not the same float expression --
+  (S*alloc_cost - c_1*S)/c_2 subtracts and divides where S*(r*/r) multiplies --
+  so agreement is to within an ulp, not bit-for-bit. The ulp column is the
+  measurement; do not restate it as exact equality.
+
+  shared budget C = 41.040000
+
+  workload            stn      r*        S_2 from constraint  S_2 = (r*/r)S_1    ulps
+  ------------------------------------------------------------------------------------
+  balanced            fj_pp   1.447382    2.243490325031482  2.243490325031482       0
+  balanced            fj_sp   1.447382    2.243490325031482  2.243490325031482       0
+  quantum_dominant    fj_pp   2.316118    1.054550303277554  1.054550303277553       5
+  quantum_dominant    fj_sp   2.316118    1.054550303277554  1.054550303277553       5
+  classical_dominant  fj_pp   1.000000    0.936646480805362  0.936646480805362       2
+  classical_dominant  fj_sp   1.000000    0.936646480805362  0.936646480805362       2
+
+  worst disagreement: 5 ulp  (threshold 8 -- the constraint path
+  subtracts then divides, so a few ulp is what 'the same number' looks like;
+  anything larger would mean the two expressions disagree for a REASON)
+  VERDICT: PASS - the equality constraint reproduces qopt's S_2 to within 5 ulp, so it adds no information and leaves nothing to optimize
+
+======================================================================================
+G6 how wrong is the ray when chi is wrong
+======================================================================================
+  chi is the only input that reaches the answer, so this is the whole error
+  budget of the procedure. Spend is what a wrong chi breaks: the station no
+  longer costs the share eq 21 gave it.
+
+  beta1 > beta2  (r*>1), gamma=0.45 mu=1.0 r=4.0 c1=4.0 c2=1.0 spend=3.0
+  qopt: r* = 1.5566809  nu = 4.2707328  T = 4.6707277
+
+    chi/nu        B         r*      spend    budget err       T    T err
+  --------------------------------------------------------------------------
+     0.50   1.251446  1.830937   3.046864      +1.56%  4.528336  -3.05%
+     0.80   1.119495  1.637884   3.013876      +0.46%  4.617691  -1.14%
+     1.00   1.063992  1.556681   3.000000      +0.00%  4.670728  +0.00%
+     1.25   1.012652  1.481567   2.987165      -0.43%  4.732051  +1.31%
+     2.00   0.916857  1.341413   2.963216      -1.23%  4.894203  +4.78%
+
+======================================================================================
+G7 the only multiplier the loop has is not the one F needs
+======================================================================================
+  eq 21 carries no explicit chi, but implies one. Its stationarity gives
+  S_i = gamma_i/mu_i + sqrt(w_i zeta_i/(nu c_i mu_i)), hence
+      nu_net = w*zeta*mu / (alloc_cost*(S*mu - gamma)^2),
+  equal across stations at eq 21's solution -- which is the check that it has
+  been recovered correctly. But nu_net prices the ZETA-LINEARIZED surrogate
+  w*zeta/(S*mu - gamma), which matches T in value at the fixed point and not
+  in derivative. So it is not the station's nu.
+
+  workload            spread(nu_net)   nu_net   nu_station   ratio     r* err   spend err
+  --------------------------------------------------------------------------------------
+  balanced                  4.60e-11 0.184909     0.177331 0.959019    -1.36%     -0.36%
+  quantum_dominant          2.06e-11 0.126923     0.123612 0.973910    -0.90%     -0.11%
+  classical_dominant        7.22e-13 0.068322     0.069096 1.011325    -1.12%     -0.56%
+
+======================================================================================
+G8 (GATE) the kink r* = 1, which a smooth F = 0 cannot represent
+======================================================================================
+  t_ul's T_bot kinks at m1 = m2, where the correct condition is one-sided
+  (derivation section 6). classical_dominant's answer IS that kink. The docx's
+  F pairs the two rates' one-sided derivatives from opposite branches, so its
+  root steps past the kink into the region where its own T is wrong.
+
+  classical_dominant fj_pp: beta_1 = 1, beta_2 = 1, spend = 7.493172
+
+    ray r*        m1         m2       T at the SAME spend
+  ----------------------------------------------------------
+  qopt   1.0000000   3.746586   3.746586   0.450461892
+  docx   0.9845819   3.775693   3.717479   0.450588643
+  grid   1.0000088   3.746569   3.746602   0.450461937   <- 200000-point scan of the spend line
+
+  qopt's r* = 1.0000000000000002, i.e. the kink to within 1 ulp.
+  (Exactly 1.0 at the station level, where the prices are exactly symmetric;
+  here m1 and m2 are recovered from a network spend by subtraction.)
+  VERDICT: PASS - qopt returns the kink (r* = 1 to 1 ulp) and the docx root overshoots to 0.984582, worse by +0.0281% at equal spend
+
+======================================================================================
+SUMMARY
+======================================================================================
+  G1: PASS
+  G2: PASS
+  G3: PASS
+  G4: PASS
+  G5: PASS
+  G8: PASS
+
+  6/6 gates pass
