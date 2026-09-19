@@ -1,0 +1,148 @@
+
+====================================================================================
+1. phi closed forms, checked against central differences
+====================================================================================
+phi = |dT/dS| * x / (mu * T).  phi == 1 means eq 22's level calibration already
+carries the right slope; anything else is the factor eq 21 misprices the station by.
+
+station                               rho=0.95                    rho=0.67                    rho=0.25
+M/M/1               phi= 1.000000 (fd rel 8.4e-10)  phi= 1.000000 (fd rel 1.7e-09)  phi= 1.000000 (fd rel 1.9e-10)
+M/D/1               phi= 0.954762 (fd rel 1.3e-09)  phi= 0.833759 (fd rel 1.9e-09)  phi= 0.892857 (fd rel 2.5e-10)
+G/G/1 cov=2         phi= 1.037013 (fd rel 1.6e-09)  phi= 1.220365 (fd rel 2.3e-09)  phi= 1.321429 (fd rel 2.2e-10)
+G/G/1 cov=5         phi= 1.047899 (fd rel 1.3e-09)  phi= 1.310679 (fd rel 2.2e-09)  phi= 1.642857 (fd rel 3.7e-10)
+fork-join p=16      phi= 0.999581 (fd rel 6.7e-09)  phi= 0.990545 (fd rel 8.5e-11)  phi= 0.987673 (fd rel 4.0e-10)
+fork-join r*=1      phi= 0.995701 (fd rel 6.5e-09)  phi= 0.980485 (fd rel 1.2e-09)  phi= 0.984043 (fd rel 2.2e-10)
+
+The fork-join is the MILDEST case. M/D/1 reaches 0.83 and cov=5 goes well above 1, so this
+is an eq-22 issue across every station whose zeta depends on S -- not a fork-join issue.
+
+where `_dt_dm1`'s kink branch would have been used instead (findings section 5):
+station             spend/floor   radial (correct)    via _dt_dm1       rel
+FJ beta1==beta2            1.05          67.915232      56.157442     17.3%
+FJ beta1==beta2             1.5         0.68587106     0.60356653     12.0%
+FJ beta1==beta2               4         0.01982596    0.018968621      4.3%
+
+====================================================================================
+2. the radial derivative equals the envelope one only on the optimal ray
+====================================================================================
+eq 21 works in S-space; the coupled optimum is stated in spend-space. They agree
+because at an optimal ray grad T is parallel to beta, so EVERY direction with the same
+spend increment gives the same first-order change in T -- including the radial one that
+`dT/dS` at a frozen ray takes. Off the optimal ray that equality fails, which is why this
+is a property of the fixed point and not an identity.
+
+on the optimal ray:
+ spend/floor          r*           radial/c           envelope       rel
+       1.001   1.0013788       -1372854.176       -1372854.131   3.3e-08
+        1.01   1.0136999       -13728.65054       -13728.65056   1.5e-09
+         1.1   1.1288516       -137.3642629       -137.3642628   8.8e-10
+         1.5   1.5076704       -5.519736649        -5.51973665   1.6e-10
+           2   1.7973260       -1.385646283       -1.385646283   6.0e-11
+           4   2.2744128      -0.1550144992      -0.1550144993   1.2e-10
+          10   2.5849457     -0.01730047965     -0.01730047965   5.3e-11
+         100   2.7801330   -0.0001433825985   -0.0001433825984   8.8e-11
+
+off the optimal ray (true optimum at this spend is 2.274413):
+  r*=1.0   radial=   -0.18659727 envelope=    -0.1550145 rel=  20.37%
+  r*=2.0   radial=   -0.15418665 envelope=    -0.1550145 rel=   0.53%
+  r*=4.0   radial=   -0.17409964 envelope=    -0.1550145 rel=  12.31%
+
+====================================================================================
+3. slope-calibrated zeta lands on the global exact optimum
+====================================================================================
+(1)  as shipped: eq 21 + eq 22 level calibration
+(1s) proposal: eq 21 + zeta = phi*T*x
+(3)  reference: the coupled optimum over ALL stations, water-filled on true marginals and
+     independently audited by pairwise local descent on the exact objective.
+
+--- 2 fork-join + 2 M/M/1  (phi moves only on the FJ pair) ---
+ C/floor       (1) level      (1s) slope       (3) exact     (1s)-(3)    (1)-(3)   it  it_s
+    1.01   845.653557502   845.326602738   845.326602738    0.000000%    0.0387%    6     7
+    1.05   169.433928883   169.374048331   169.374048336   -0.000000%    0.0354%    7     7
+     1.2    42.584355698    42.572541019    42.572541019   -0.000000%    0.0278%    7     8
+     1.5    17.147817304    17.144312750    17.144312750    0.000000%    0.0204%    8     8
+       2     8.624738064     8.623541689     8.623541689   -0.000000%    0.0139%    8     8
+       5     2.176046247     2.175978022     2.175978022    0.000000%    0.0031%    7     7
+      20     0.459984473     0.459983404     0.459983404    0.000000%    0.0002%    6     6
+
+--- 1 fork-join + M/D/1 + G/G/1(cov 2) + M/M/1 ---
+ C/floor       (1) level      (1s) slope       (3) exact     (1s)-(3)    (1)-(3)   it  it_s
+    1.01   672.781044226   672.409070110   672.409070151   -0.000000%    0.0553%    6     7
+    1.05   132.897962166   132.736738624   132.736738632   -0.000000%    0.1215%    7     7
+     1.2    32.456697879    32.343754976    32.343754976    0.000000%    0.3492%    9     7
+     1.5    12.821589655    12.755896143    12.755896143   -0.000000%    0.5150%   11    10
+       2     6.396010744     6.364185455     6.364185455   -0.000000%    0.5001%   11    11
+       5     1.600929447     1.598169104     1.598169104    0.000000%    0.1727%   10    11
+      20     0.336149757     0.336090106     0.336090106   -0.000000%    0.0177%    8    10
+
+(1s) matches the independently-computed optimum to machine precision at every row.
+
+====================================================================================
+4. phi > 0 and bounded -- eq 21 needs a strictly positive zeta
+====================================================================================
+station                   phi range over spend/floor in [1+1e-6, 1e8]
+G/G/1 cov=0.0                                    [0.000001, 1.000000]
+G/G/1 cov=0.5                                    [0.700000, 1.000000]
+G/G/1 cov=1.0                                    [1.000000, 1.000000]
+G/G/1 cov=2.0                                    [1.000000, 1.300000]
+G/G/1 cov=5.0                                    [1.000000, 1.635294]
+G/G/1 cov=10.0                                   [1.000001, 1.817431]
+FJ r=1.0 r*=0.05                                 [0.999403, 1.000000]
+FJ r=1.0 r*=1.0                                  [0.978261, 1.000000]
+FJ r=1.0 r*=3.0                                  [0.976909, 1.000000]
+FJ r=1.0 r*=50.0                                 [0.999904, 1.000000]
+FJ r=2.0 r*=0.05                                 [0.999403, 1.000000]
+FJ r=2.0 r*=1.0                                  [0.978261, 1.000000]
+FJ r=2.0 r*=3.0                                  [0.976909, 1.000000]
+FJ r=2.0 r*=50.0                                 [0.999904, 1.000000]
+FJ r=20.0 r*=0.05                                [0.999403, 1.000000]
+FJ r=20.0 r*=1.0                                 [0.978261, 1.000000]
+FJ r=20.0 r*=3.0                                 [0.976909, 1.000000]
+FJ r=20.0 r*=50.0                                [0.999904, 1.000000]
+
+phi over everything above: [0.000001, 1.817431] -- strictly positive.
+The FJ rows repeat across r because `_anchor` derives BOTH effective rates from
+r_star alone (mu = mu_base*min(1,r_star), r = max(1,r_star)/min(1,r_star)); the constructed
+r_base reaches `alloc_cost` but never the queueing model, so phi cannot depend on it.
+phi -> 0 at the stability boundary for cov=0 is correct, not a defect: a D/D/1
+station has E[T] = 1/m with no queueing term at all, so extra capacity buys it very
+little and eq 21 should indeed hand it close to the minimum.
+
+====================================================================================
+5. convergence is unaffected
+====================================================================================
+   C/floor  it level  it slope    (1)-(3)%     (1s)-(3)%
+    1.0001         5         6     0.0407%    0.0000000%
+     1.001         6         6     0.0439%    0.0000000%
+      1.01         7         7     0.0908%    0.0000000%
+      1.05         8         7     0.4067%   -0.0000000%
+       1.2        12        10     1.1804%    0.0000000%
+       1.5        15        13     1.5836%   -0.0000000%
+         2        16        16     1.5909%    0.0000000%
+         3        17        18     1.3098%   -0.0000000%
+         5        17        18     0.9163%    0.0000000%
+        10        15        18     0.5167%   -0.0000000%
+        50        11        13     0.0819%    0.0000000%
+       500         8         9     0.0016%    0.0000000%
+     10000         6         6     0.0000%   -0.0000000%
+
+0 failures or off-optimum rows out of 13.
+
+====================================================================================
+6. robustness: how wrong may phi be before it stops helping?
+====================================================================================
+zeta = [1 + f*(phi-1)]*T*x.  f=0 is the shipped level calibration, f=1 the proposal,
+f=2 an error as large as doing nothing but in the opposite direction. This is the question
+that decides whether an ANALYTIC phi is safe on the simulated path, where the true slope is
+not measurable (findings section 6).
+
+ C/floor       f=0.0      f=0.25       f=0.5      f=0.75       f=1.0       f=1.5       f=2.0
+    1.05    0.40672%    0.22540%    0.09874%    0.02434%   -0.00000%    0.09368%    0.36631%
+     1.2    1.18036%    0.61908%    0.25771%    0.06060%    0.00000%    0.20629%    0.75316%
+     1.5    1.58358%    0.80277%    0.32516%    0.07479%   -0.00000%    0.24359%    0.87422%
+       2    1.59086%    0.79546%    0.31961%    0.07324%    0.00000%    0.24038%    0.87788%
+       5    0.91630%    0.44846%    0.17695%    0.03990%    0.00000%    0.12557%    0.44738%
+
+Each cell is % above the true optimum; lower is better. The loss is quadratic in the phi
+error, so a roughly-right phi captures most of the gain and even a 100% overcorrection
+still beats doing nothing.
