@@ -149,8 +149,11 @@ def audit_split(items, spends, B, obj):
     - From split's own answer, descent must find NOTHING better. This is the check that
       matters, but on its own it also passes for a `polish` that does nothing at all --
       which is exactly how the original version of this audit was vacuous.
-    - From a PERTURBED start, descent must come BACK to the same objective. That is what
-      shows the descent is live, and it is what makes the word "independent" honest.
+    - From a PERTURBED start, descent must come BACK to the same objective -- checked in BOTH
+      directions. Too high means it is not descending, so the first check confirms nothing;
+      too low means the perturbation found a better basin, which disproves the optimum and
+      which the first check cannot see, since descent from split's answer never leaves
+      split's basin.
 
     Tolerances are measured, not guessed. Over the 36 rows below, descent from split's
     answer improves on it by 0.0 relative in every case, and descent from a 5% perturbation
@@ -165,9 +168,15 @@ def audit_split(items, spends, B, obj):
     nudged[0] -= d
     nudged[1] += d
     back = polish(items, nudged, B)
-    assert back <= obj * (1.0 + 1e-9), (
-        f"descent from a perturbed start reached {back} against split()'s {obj}, so it is "
-        f"not descending and the check above confirms nothing")
+    # TWO-SIDED, because the two directions mean opposite things and only one of them is
+    # "the descent is broken". Coming back HIGH means it did not descend, so the check above
+    # confirms nothing. Coming back LOW means the perturbation found a better basin, which
+    # disproves the optimum outright -- and the assertion above cannot catch that, since
+    # descent from split's own answer never leaves split's own basin.
+    assert abs(back - obj) <= obj * 1e-9, (
+        f"descent from a perturbed start reached {back} against split()'s {obj}: "
+        + ("it did not descend, so the check above confirms nothing" if back > obj
+           else "it found a BETTER basin, so split()'s answer is not the optimum"))
     return same, back
 
 

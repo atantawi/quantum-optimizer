@@ -249,10 +249,11 @@ def audit_split(items, spends, B, obj):
     Two descents, because either alone is weak: from split's own answer descent must find
     nothing better -- but that alone also passes for a `polish` that does nothing, which is
     how the original version of this audit was vacuous -- and from a PERTURBED start descent
-    must come back to the same objective, which is what shows it is live.
+    must come back to the same objective, checked in BOTH directions, which is what shows it is live.
 
     Tolerances measured, not guessed: descent from split's answer improves on it by 0.0
-    relative on every row here, and from a 5% perturbation stops short by at most 1e-12.
+    relative on every row here, and from a 5% perturbation lands within [-1.3e-14, +1.0e-12] relative, over all 50 rows
+    in both probes.
     """
     same = polish(items, spends, B)
     assert same >= obj * (1.0 - 1e-12), (
@@ -263,9 +264,15 @@ def audit_split(items, spends, B, obj):
     nudged[0] -= d
     nudged[1] += d
     back = polish(items, nudged, B)
-    assert back <= obj * (1.0 + 1e-9), (
-        f"descent from a perturbed start reached {back} against split()'s {obj}, so it is "
-        f"not descending and the check above confirms nothing")
+    # TWO-SIDED, because the two directions mean opposite things and only one of them is
+    # "the descent is broken". Coming back HIGH means it did not descend, so the check above
+    # confirms nothing. Coming back LOW means the perturbation found a better basin, which
+    # disproves the optimum outright -- and the assertion above cannot catch that, since
+    # descent from split's own answer never leaves split's own basin.
+    assert abs(back - obj) <= obj * 1e-9, (
+        f"descent from a perturbed start reached {back} against split()'s {obj}: "
+        + ("it did not descend, so the check above confirms nothing" if back > obj
+           else "it found a BETTER basin, so split()'s answer is not the optimum"))
     return same, back
 
 
