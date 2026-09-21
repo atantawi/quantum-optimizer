@@ -155,9 +155,10 @@ def audit_split(items, spends, B, obj):
       which the first check cannot see, since descent from split's answer never leaves
       split's basin.
 
-    Tolerances are measured, not guessed. Over the 36 rows below, descent from split's
-    answer improves on it by 0.0 relative in every case, and descent from a 5% perturbation
-    stops short by at most 1.0e-12 relative.
+    Tolerances are measured, not guessed. Descent from split's answer improves on it by 0.0
+    relative in every case, and descent from a 5% perturbation lands within
+    [-1.3e-14, +1.0e-12] relative -- both measured over all 50 rows of this probe and
+    docs/slope-calibrated-zeta/probe.py, which shares this function.
     """
     same = polish(items, spends, B)
     assert same >= obj * (1.0 - 1e-12), (
