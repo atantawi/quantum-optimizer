@@ -3,8 +3,9 @@
 **Status: proposal. Not implemented.** `main` ships eq 22's level calibration; this argues for
 replacing it and records what that would cost.
 
-Equation numbers follow [`../paper-map.md`](../paper-map.md): `eq 20`–`eq 23` mean
-`docs/analysis.pdf`, the snapshot committed in `37a3a11`. Every number below is from
+Equation numbers follow [`../paper-map.md`](../paper-map.md): `eq 21` (the allocation rule) and
+`eq 22` (the ζ inversion) mean `docs/analysis.pdf`, the snapshot committed in `37a3a11`. Every
+number below is from
 [`probe-output.txt`](probe-output.txt), reproducible with `python docs/slope-calibrated-zeta/probe.py`
 (28 s, deterministic, no simulation service).
 
