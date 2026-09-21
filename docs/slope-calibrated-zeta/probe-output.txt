@@ -16,6 +16,53 @@ fork-join r*=1      phi= 0.995701 (fd rel 6.5e-09)  phi= 0.980485 (fd rel 1.2e-0
 The fork-join is the MILDEST case. M/D/1 reaches 0.83 and cov=5 goes well above 1, so this
 is an eq-22 issue across every station whose zeta depends on S -- not a fork-join issue.
 
+phi is not a fudge factor. It is the ELASTICITY of E[T] with respect to spare capacity
+x = S*mu - gamma, equivalently the local power-law exponent in T ~ x^(-phi). Three spellings
+of one number, checked against each other below:
+
+    phi = |dT/dS| * x / (mu * T)      as defined above
+        = |dT/dx| * x / T             since x = S*mu - gamma makes dT/dS = mu * dT/dx
+        = -d log T / d log x          the log-log slope
+
+The same cancellation puts zeta_slope in its natural variable:
+
+    zeta_slope = |dT/dS| * x^2/mu = x^2 * |dT/dx|
+
+mu drops out, so x -- spare capacity -- is what zeta is really about, not S. And because the
+surrogate is T = zeta/x, an M/M/1 station has zeta identically 1: zeta is a dimensionless
+reading of how far a station departs from the M/M/1 shape, and phi is how far its MARGINAL
+departs.
+
+station          rho  zeta_lvl=Tx  zeta_slope  x^2|dT/dx|       phi  |dT/dx|x/T  -dlogT/dlogx
+M/M/1            0.9     1.000000    1.000000    1.000000  1.000000    1.000000      1.000000
+M/M/1            0.6     1.000000    1.000000    1.000000  1.000000    1.000000      1.000000
+M/M/1            0.3     1.000000    1.000000    1.000000  1.000000    1.000000      1.000000
+M/D/1            0.9     0.550000    0.505000    0.505000  0.918182    0.918182      0.918182
+M/D/1            0.6     0.700000    0.580000    0.580000  0.828571    0.828571      0.828571
+M/D/1            0.3     0.850000    0.745000    0.745000  0.876471    0.876471      0.876471
+G/G/1 cov=2      0.9     3.700000    3.970000    3.970000  1.072973    1.072973      1.072973
+G/G/1 cov=2      0.6     2.800000    3.520000    3.520000  1.257143    1.257143      1.257143
+G/G/1 cov=2      0.3     1.900000    2.530000    2.530000  1.331579    1.331579      1.331579
+G/G/1 cov=5      0.9    22.600000   24.760000   24.760000  1.095575    1.095575      1.095575
+G/G/1 cov=5      0.6    15.400000   21.160000   21.160000  1.374026    1.374026      1.374026
+G/G/1 cov=5      0.3     8.200000   13.240000   13.240000  1.614634    1.614634      1.614634
+D/D/1 cov=0      0.9     0.100000    0.010000    0.010000  0.100000    0.100000      0.100000
+D/D/1 cov=0      0.6     0.400000    0.160000    0.160000  0.400000    0.400000      0.400000
+D/D/1 cov=0      0.3     0.700000    0.490000    0.490000  0.700000    0.700000      0.700000
+fork-join p=16   0.9     1.000866    0.999367    0.999367  0.998502    0.998502      0.998502
+fork-join p=16   0.6     1.011223    0.999501    0.999501  0.988408    0.988408      0.988408
+fork-join p=16   0.3     1.028687    1.014854    1.014854  0.986552    0.986552      0.986552
+
+worst disagreement among the three spellings of phi, and between the two of zeta_slope: 6.80e-09
+
+Read the rows as marginal return on spare capacity, in M/M/1 units:
+  M/M/1      phi == 1 at every load -- T = 1/x exactly, which is why eq 22 is already right.
+  M/D/1      phi < 1  -- T falls SLOWER than 1/x, so capacity buys less than eq 21 assumes.
+  cov 2, 5   phi > 1  -- T falls FASTER, so capacity buys more.
+  D/D/1      phi = 1 - rho exactly. E[T] = 1/m has no queueing term at all, so at high load
+             spare capacity barely moves it. That is the phi -> 0 seen in section 4, with a
+             reason rather than a shrug.
+
 where `_dt_dm1`'s kink branch would have been used instead (findings section 5):
 station             spend/floor   radial (correct)    via _dt_dm1       rel
 FJ beta1==beta2            1.05          67.915232      56.157442     17.3%

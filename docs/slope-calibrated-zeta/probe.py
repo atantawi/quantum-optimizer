@@ -325,6 +325,68 @@ carries the right slope; anything else is the factor eq 21 misprices the station
 The fork-join is the MILDEST case. M/D/1 reaches 0.83 and cov=5 goes well above 1, so this
 is an eq-22 issue across every station whose zeta depends on S -- not a fork-join issue.""")
 
+    # --- what phi MEANS -----------------------------------------------------------------
+    print("""
+phi is not a fudge factor. It is the ELASTICITY of E[T] with respect to spare capacity
+x = S*mu - gamma, equivalently the local power-law exponent in T ~ x^(-phi). Three spellings
+of one number, checked against each other below:
+
+    phi = |dT/dS| * x / (mu * T)      as defined above
+        = |dT/dx| * x / T             since x = S*mu - gamma makes dT/dS = mu * dT/dx
+        = -d log T / d log x          the log-log slope
+
+The same cancellation puts zeta_slope in its natural variable:
+
+    zeta_slope = |dT/dS| * x^2/mu = x^2 * |dT/dx|
+
+mu drops out, so x -- spare capacity -- is what zeta is really about, not S. And because the
+surrogate is T = zeta/x, an M/M/1 station has zeta identically 1: zeta is a dimensionless
+reading of how far a station departs from the M/M/1 shape, and phi is how far its MARGINAL
+departs.""")
+    print(f"\n{'station':<15}{'rho':>5}{'zeta_lvl=Tx':>13}{'zeta_slope':>12}"
+          f"{'x^2|dT/dx|':>12}{'phi':>10}{'|dT/dx|x/T':>12}{'-dlogT/dlogx':>14}")
+
+    def dT_dx(st, x):
+        """Central difference in x itself, so the identity is not assumed via dT/dS."""
+        h = 1e-7 * x
+        return ((st.sojourn_time((x + h + st.gamma) / st.mu)
+                 - st.sojourn_time((x - h + st.gamma) / st.mu)) / (2 * h))
+
+    def loglog_slope(st, x):
+        h = 1e-5 * x
+        return ((math.log(st.sojourn_time((x + h + st.gamma) / st.mu))
+                 - math.log(st.sojourn_time((x - h + st.gamma) / st.mu)))
+                / (math.log(x + h) - math.log(x - h)))
+
+    ELASTIC = CASES[:4] + [
+        ("D/D/1 cov=0", GG1Station(0.6, 1.5, c=2.0, cov_a=0.0, cov_s=0.0), dT_dS_gg1),
+        CASES[4]]
+    worst = 0.0
+    for name, st, exact in ELASTIC:
+        for target in (0.9, 0.6, 0.3):
+            S = st.gamma / (st.mu * target)
+            x = S * st.mu - st.gamma
+            T = st.sojourn_time(S)
+            z_lvl = T * x
+            z_slope = abs(exact(st, S)) * x ** 2 / st.mu
+            z_alt = x ** 2 * abs(dT_dx(st, x))
+            p = phi(st, S, exact)
+            elast = abs(dT_dx(st, x)) * x / T
+            ll = -loglog_slope(st, x)
+            worst = max(worst, abs(z_slope / z_alt - 1), abs(p / elast - 1), abs(p / ll - 1))
+            print(f"{name:<15}{target:>5.1f}{z_lvl:>13.6f}{z_slope:>12.6f}{z_alt:>12.6f}"
+                  f"{p:>10.6f}{elast:>12.6f}{ll:>14.6f}")
+    print(f"\nworst disagreement among the three spellings of phi, and between the two of "
+          f"zeta_slope: {worst:.2e}")
+    print("""
+Read the rows as marginal return on spare capacity, in M/M/1 units:
+  M/M/1      phi == 1 at every load -- T = 1/x exactly, which is why eq 22 is already right.
+  M/D/1      phi < 1  -- T falls SLOWER than 1/x, so capacity buys less than eq 21 assumes.
+  cov 2, 5   phi > 1  -- T falls FASTER, so capacity buys more.
+  D/D/1      phi = 1 - rho exactly. E[T] = 1/m has no queueing term at all, so at high load
+             spare capacity barely moves it. That is the phi -> 0 seen in section 4, with a
+             reason rather than a shrug.""")
+
     print("\nwhere `_dt_dm1`'s kink branch would have been used instead (findings section 5):")
     print(f"{'station':<18} {'spend/floor':>12} {'radial (correct)':>18} {'via _dt_dm1':>14} {'rel':>9}")
     fj = ForkJoinStation(9.0, 10.0, r=1.0, c1=0.05, c2=0.05)   # beta1 == beta2, so r* == 1

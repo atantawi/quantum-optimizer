@@ -70,6 +70,88 @@ slope-calibrated ζ does not contain the sojourn time at all. §6 is about why t
 For contrast, eq 22's `ζ = T·x` gives `wᵢ Tᵢ μᵢ/xᵢ = ν cᵢ`, which agrees only where
 `|dTᵢ/dSᵢ| = Tᵢ μᵢ/xᵢ`, i.e. where `φᵢ = 1`.
 
+### Where that form comes from
+
+`ζ_slope` is a **definition**, but a forced one. Both calibrations pick one member of the same
+one-parameter family `T̂ = ζ/x`, and the question is only which property of the true curve to
+preserve with the single degree of freedom available.
+
+What settles it is that **eq 21 reads that family only through its derivative.** The stationarity
+condition above can be rewritten `wᵢ·|dT̂ᵢ/dSᵢ| = ν cᵢ`, because `ζᵢμᵢ/xᵢ² = |dT̂ᵢ/dSᵢ|` — and
+nothing in the loop consumes the surrogate's *value*: the objective qopt reports is assembled from
+the analyzer's `E[T]`, never from `ζ/x`. So ask the surrogate's slope to be the true slope:
+
+```
+ζμ/x² = |dT/dS|        ⟹        ζ_slope = |dT/dS| · x²/μ
+```
+
+That is the entire derivation. Level calibration spends the same free parameter on the one
+quantity the allocator never looks at.
+
+Since `x = Sμ − γ` makes `dT/dS = μ·dT/dx`, the `μ` cancels and the form simplifies:
+
+```
+ζ_slope = x² · |dT/dx|
+```
+
+which is the version worth remembering — `μ` was an artifact of writing things in `S` rather than in
+spare capacity.
+
+### What it means
+
+`x = Sμ − γ` is **spare capacity**, an excess service rate. The surrogate `T = ζ/x` therefore reads
+a sojourn time as `ζ` units of reciprocal spare capacity, making **ζ dimensionless** — and an M/M/1
+station has `T = 1/x` exactly, so `ζ ≡ 1`. ζ measures how far a station departs from the M/M/1
+shape:
+
+| | asks | answers |
+|---|---|---|
+| `ζ_level = T·x` | what is `E[T]` *now*? | current congestion, in M/M/1 units |
+| `ζ_slope = x²·\|dT/dx\|` | how fast does `E[T]` *fall* as spare capacity is bought? | marginal return on capacity, in M/M/1 units |
+
+And their ratio is not a fudge factor: **φ is the elasticity of `E[T]` with respect to spare
+capacity**, equivalently the local power-law exponent in `T ∼ x^(−φ)`.
+
+```
+φ = ζ_slope/ζ_level = |dT/dx|·x/T = −d log T / d log x
+```
+
+Probe §1 checks all three spellings against each other, worst disagreement `6.80e-09`:
+
+```
+station          rho  zeta_lvl=Tx  zeta_slope  x^2|dT/dx|       phi  |dT/dx|x/T  -dlogT/dlogx
+M/M/1            0.6     1.000000    1.000000    1.000000  1.000000    1.000000      1.000000
+M/D/1            0.6     0.700000    0.580000    0.580000  0.828571    0.828571      0.828571
+G/G/1 cov=2      0.6     2.800000    3.520000    3.520000  1.257143    1.257143      1.257143
+G/G/1 cov=5      0.3     8.200000   13.240000   13.240000  1.614634    1.614634      1.614634
+D/D/1 cov=0      0.9     0.100000    0.010000    0.010000  0.100000    0.100000      0.100000
+fork-join p=16   0.6     1.011223    0.999501    0.999501  0.988408    0.988408      0.988408
+```
+
+So **eq 21 is a water-filling rule built on the premise that every station's delay curve is a
+rectangular hyperbola in spare capacity, `T ∝ 1/x`.** Where that premise fails, φ is the true local
+exponent, and `ζ ← φ·ζ` hands eq 21 the real marginal return instead of the assumed one. `D/D/1` is
+the clearest case: `φ = 1 − ρ` **exactly**, because `E[T] = 1/m` has no queueing term, so at high
+load spare capacity barely moves it. §7 notes that `φ → 0` there and why; the elasticity reading is
+what pins it to a closed form.
+
+### Why matching the slope makes the fixed point exact
+
+Geometrically there is a family of hyperbolas `ζ/x` and one point at which to spend the parameter.
+`ζ_level` picks the hyperbola **through** `(x, T)`; `ζ_slope` picks the one **tangent in slope** at
+`x`. They are different hyperbolas unless `φ = 1` — `ζ_slope` does not reproduce `E[T]` at all, it
+gives `T̂ = φT`.
+
+Giving that up costs nothing, because at convergence the calibration point and the argmin are the
+same point:
+
+- calibration ⟹ the surrogate's slope equals the true slope **at `S*`**
+- argmin ⟹ the surrogate's slope satisfies eq 21's KKT **at `S*`**
+- compose ⟹ the *true* slope satisfies the KKT at `S*`, which is global optimality
+
+Level calibration gets the right value at `S*` and a wrong slope there, so the KKT is enforced on
+the wrong quantity. That is the whole difference between the two rows of §4.
+
 ## 4. Payoff
 
 `(1)` as shipped, `(1s)` slope-calibrated, `(3)` the coupled optimum over all stations —
