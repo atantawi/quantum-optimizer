@@ -41,9 +41,14 @@ and three citations name a range:
 | `eqs 20–22` | `docs/superpowers/specs/2026-07-10-optimizer-design.md:16` | (20)–(22) | **(17)–(19)** | yes — Steps 0–5 |
 | `eqs 23–27` | `docs/optimizer-brainstorm-summary.md:62` | (23)–(27) | *not mappable* | **no** — see below |
 
-Run the commands above against this branch and the totals come out higher, because this document's
-own table rows are themselves citations. The inventory describes the corpus it documents, not the
-tree that contains it.
+Run the commands above against any tree that contains this document — including current `main` — and
+the totals come out higher, because this document's own table rows and prose are themselves
+citations. On `main` at `280b2b6` they return 147 and 60 rather than 142 and 58, plus one apparent
+`eq 20` and one `eq 23` single, which come from the sentence under [The trap](#the-trap) that names
+those numbers in prose rather than from the range rows above.
+
+So the inventory describes the corpus it documents, not the tree that contains it. That is why it is
+pinned to `1adb2d8`: the last commit before this document existed.
 
 Everything else that looks like a cross-reference — `spec §6.4`, `findings §7`, `finding 7` —
 points at **this repo's own** documents under `docs/`, not at the paper.
