@@ -400,7 +400,7 @@ serializer, and one POST is cheap.
 
 ## 10. Divergences from the paper, restated
 
-Pre-existing and deliberate, recorded at `docs/optimizer-brainstorm-summary.md:89`; this
+Pre-existing and deliberate, recorded at `docs/optimizer-brainstorm-summary.md` §3.2; this
 example inherits them and does not reopen them. They matter here because both fork-joins
 run at r = 4:
 

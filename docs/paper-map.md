@@ -33,9 +33,9 @@ cited on their own:
 | `eq 21` | 142 | (21) | **(18)** | Step 1: per-iteration capacity allocation, `i ∈ [N̂], k+1 ∈ N` |
 | `eq 22` | 58 | (22) | **(19)** | Step 3: invert the functional form for `ζ` |
 
-and three citations name a range:
+and three citations name a range. Their `file:line` references are **as of `1adb2d8`**, the tree the commands above are pinned to; the files have since gained lines above them:
 
-| citation | where | `docs/analysis.pdf` | working draft | matches? |
+| citation | where (line numbers at `1adb2d8`) | `docs/analysis.pdf` | working draft | matches? |
 |---|---|---|---|---|
 | `eq 20–21` | `docs/optimizer-brainstorm-summary.md:33` | (20)–(21) | **(17)–(18)** | yes — `Theorem 5` is the allocation theorem, (20) its `S*` |
 | `eqs 20–22` | `docs/superpowers/specs/2026-07-10-optimizer-design.md:16` | (20)–(22) | **(17)–(19)** | yes — Steps 0–5 |
@@ -54,7 +54,7 @@ Theorem numbering changed shape too: the draft moved from flat numbering to per-
 
 ## Ranges renumber worst
 
-`docs/optimizer-brainstorm-summary.md:62` reads:
+`docs/optimizer-brainstorm-summary.md` §2, the *Scope decisions* table (line 62 as of `1adb2d8`), reads:
 
 > Paper's full routing model (eqs 23–27) is out of scope.
 
@@ -90,9 +90,11 @@ So a contiguous five-equation range becomes a four-number, non-contiguous one wh
 collides with a number the draft uses for something else. Cite ranges by name as well as number.
 
 One thing in that row *is* stale, though not as a citation: it also says "no network routing
-modeled", and `Network.solve_traffic` now derives `γ` from the topology. The paper's path-dependent
+modeled", and `Network` now solves the traffic equations at construction — via
+`qopt.traffic.solve_traffic` — and binds each station's derived `γ`. The paper's *path-dependent*
 `E[T_i]` remains out of scope, so the parenthetical still holds; it is the surrounding prose that
-predates the traffic solver. Left as written, per the dated-record policy below.
+predates the traffic solver. Left as written per the dated-record policy below, with a dated note at
+the head of that document recording what was superseded.
 
 ## The trap
 
