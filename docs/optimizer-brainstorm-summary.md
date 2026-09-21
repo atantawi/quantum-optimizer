@@ -6,13 +6,15 @@ formal spec (that comes next)._
 
 Date: 2026-07-10
 
-**Two of these decisions were later reversed, and this record is left as written.** `γ` is no
-longer a fixed per-station constant: `Network` solves the traffic equations at construction
-(`qopt.traffic.solve_traffic`) and binds each station's derived `γ`, so the network's routing *is*
-modeled. And per-station analytic evaluation is no longer the only Step 2: `SimulationAnalyzer`
-evaluates the whole network with one `POST /simulate` per optimizer iteration, which captures the
-inter-station coupling §2 sets aside. What stands unchanged is the paper's *path-dependent*
-`E[T_i]` — see `docs/paper-map.md` — which remains out of scope.
+**Two of these decisions were later reversed, and this record is left as written.** `γ` is no longer
+*independently supplied* per station: `Network` derives it from the topology by solving the traffic
+equations at construction (`qopt.traffic.solve_traffic`) and binds each station's value, so the
+network's routing *is* modeled. It remains a fixed per-station constant thereafter — nothing moves
+`γ` during the optimizer loop, and eq 21's feasibility floor depends on that. And per-station
+analytic evaluation is no longer the only Step 2: `SimulationAnalyzer` evaluates the whole network
+with one `POST /simulate` per optimizer iteration, which captures the inter-station coupling §2 sets
+aside. What stands unchanged is the paper's *path-dependent* `E[T_i]` — see `docs/paper-map.md` —
+which remains out of scope.
 
 Everything below records what was chosen on the date above, not what the code does now. For
 current behaviour see `README.md` and `docs/superpowers/specs/`.

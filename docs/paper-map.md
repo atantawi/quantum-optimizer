@@ -33,7 +33,7 @@ cited on their own:
 | `eq 21` | 142 | (21) | **(18)** | Step 1: per-iteration capacity allocation, `i ∈ [N̂], k+1 ∈ N` |
 | `eq 22` | 58 | (22) | **(19)** | Step 3: invert the functional form for `ζ` |
 
-and three citations name a range:
+and three citations name a range. Their `file:line` references are **as of `1adb2d8`**, the tree the commands above are pinned to; the files have since gained lines above them:
 
 | citation | where | `docs/analysis.pdf` | working draft | matches? |
 |---|---|---|---|---|
@@ -54,7 +54,7 @@ Theorem numbering changed shape too: the draft moved from flat numbering to per-
 
 ## Ranges renumber worst
 
-`docs/optimizer-brainstorm-summary.md:62` reads:
+`docs/optimizer-brainstorm-summary.md` §2, the *Scope decisions* table (line 62 as of `1adb2d8`), reads:
 
 > Paper's full routing model (eqs 23–27) is out of scope.
 
