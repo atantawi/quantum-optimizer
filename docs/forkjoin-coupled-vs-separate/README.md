@@ -8,6 +8,7 @@ right design, and this records why.
 | `findings.md` | the write-up: the three formulations, why their ray conditions coincide, and what the spend split is worth |
 | `probe.py` | every check the write-up cites, self-contained (imports only `qopt` and the stdlib) |
 | `probe-output.txt` | captured output, so the numbers are checkable without running anything |
+| [`../audit-selfcheck.py`](../audit-selfcheck.py) | checks that `probe.py`'s optimum-confirming audit can actually fail, and has not drifted from the copy in `../slope-calibrated-zeta/` |
 
 Reproduce with:
 
