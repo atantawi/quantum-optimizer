@@ -90,9 +90,11 @@ So a contiguous five-equation range becomes a four-number, non-contiguous one wh
 collides with a number the draft uses for something else. Cite ranges by name as well as number.
 
 One thing in that row *is* stale, though not as a citation: it also says "no network routing
-modeled", and `Network.solve_traffic` now derives `γ` from the topology. The paper's path-dependent
+modeled", and `Network` now solves the traffic equations at construction — via
+`qopt.traffic.solve_traffic` — and binds each station's derived `γ`. The paper's *path-dependent*
 `E[T_i]` remains out of scope, so the parenthetical still holds; it is the surrounding prose that
-predates the traffic solver. Left as written, per the dated-record policy below.
+predates the traffic solver. Left as written per the dated-record policy below, with a dated note at
+the head of that document recording what was superseded.
 
 ## The trap
 
