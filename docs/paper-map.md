@@ -14,15 +14,17 @@ dangling one — it silently resolves to a different, plausible-looking equation
 
 ## Inventory
 
-Counted against `main` at `1adb2d8`, reproducibly:
+Counted against `1adb2d8` — the last commit before this document existed, which is why the tree is
+named **inside** the commands. Run them as written from any checkout and they reproduce the figures
+below exactly, however much the repository has moved on since:
 
 ```sh
 # single-number citations, by number
-git grep -ohiE "eq(uation)?s?\.? *\(?[0-9]{1,2}\)?([–-][0-9]{1,2})?" \
+git grep -ohiE "eq(uation)?s?\.? *\(?[0-9]{1,2}\)?([–-][0-9]{1,2})?" 1adb2d8 \
   | grep -vE "[–-][0-9]" | sed -E 's/.*[^0-9]([0-9]+)\)?$/\1/' | sort -n | uniq -c
 
 # range-style citations
-git grep -nohiE "eq(uation)?s?\.? *\(?[0-9]{1,2}\)?[–-][0-9]{1,2}" | sort | uniq -c
+git grep -nohiE "eq(uation)?s?\.? *\(?[0-9]{1,2}\)?[–-][0-9]{1,2}" 1adb2d8 | sort | uniq -c
 ```
 
 **200 single-number citations and 3 ranges, 203 in total.** Only two equation numbers are ever
@@ -41,14 +43,10 @@ and three citations name a range:
 | `eqs 20–22` | `docs/superpowers/specs/2026-07-10-optimizer-design.md:16` | (20)–(22) | **(17)–(19)** | yes — Steps 0–5 |
 | `eqs 23–27` | `docs/optimizer-brainstorm-summary.md:62` | (23)–(27) | *not mappable* | **no** — see below |
 
-Run the commands above against any tree that contains this document — including current `main` — and
-the totals come out higher, because this document's own table rows and prose are themselves
-citations. On `main` at `280b2b6` they return 147 and 60 rather than 142 and 58, plus one apparent
-`eq 20` and one `eq 23` single, which come from the sentence under [The trap](#the-trap) that names
-those numbers in prose rather than from the range rows above.
-
-So the inventory describes the corpus it documents, not the tree that contains it. That is why it is
-pinned to `1adb2d8`: the last commit before this document existed.
+Drop the `1adb2d8` and the totals come out higher on any tree that contains this document, because
+its tables and prose are themselves citations of `eq 21`, `eq 22`, `eq 20` and `eq 23` — this very
+sentence adds four. That is not a caveat to keep updated but the reason the tree is pinned: the
+inventory describes the corpus it documents, not whatever tree happens to contain it.
 
 Everything else that looks like a cross-reference — `spec §6.4`, `findings §7`, `finding 7` —
 points at **this repo's own** documents under `docs/`, not at the paper.
@@ -122,4 +120,6 @@ than "the latest PDF".
 ## Symbol collision
 
 The working draft uses `κ_i` for the sojourn-time functional form (new eq 21, 23, 24). New analysis
-in this repo that needs a symbol for something else should avoid `κ`.
+in this repo that needs a symbol for something else should avoid `κ`;
+[`slope-calibrated-zeta/`](slope-calibrated-zeta/findings.md) uses `φ` for its slope-correction
+factor for exactly that reason.

@@ -105,6 +105,14 @@ each ray back into the next iteration's prices.
 
 ## 4. What the split is actually worth
 
+`(3)` is water-filled on true marginals, then audited by pairwise local descent on the exact
+objective so a bug in one cannot hide in the other. The audit runs in **both** directions: descent
+from the water-filled answer must find nothing better, *and* descent from a 5% perturbation must
+return to the same objective. The second direction is what makes the first meaningful — a descent
+that did nothing would satisfy the first on its own, and coming back *better* would refute the
+optimum outright, which descent from the answer cannot detect because it never leaves that answer's
+basin.
+
 Negative means better than (1).
 
 ```
