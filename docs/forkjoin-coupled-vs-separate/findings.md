@@ -13,7 +13,8 @@ which is precisely what fixing `C_FJ` freezes.
 
 Equation numbers follow [`../paper-map.md`](../paper-map.md). Every number below is from
 [`probe-output.txt`](probe-output.txt), reproducible with
-`python docs/forkjoin-coupled-vs-separate/probe.py` (deterministic, no simulation service).
+`python docs/forkjoin-coupled-vs-separate/probe.py` (78 s, deterministic, no simulation
+service).
 
 **Status: analysis only.** Nothing here proposes a code change. The follow-on proposal it
 motivates is [`../slope-calibrated-zeta/`](../slope-calibrated-zeta/findings.md).
@@ -24,7 +25,7 @@ motivates is [`../slope-calibrated-zeta/`](../slope-calibrated-zeta/findings.md)
 |---|---|
 | **(1)** | what qopt does today: eq 21 splits spend across *all* stations, then each fork-join station solves its own ray at the spend it received |
 | **(2)** | the proposal: `C_FJ = C −` (single-server spend chosen by (1)), then all fork-join stations solved as one coupled problem under `C_FJ` |
-| **(3)** | reference: one coupled problem over *every* station |
+| **(3)** | reference: one coupled problem over *every* station, water-filled on true marginals and audited by local descent in both directions (see §4) |
 
 All three minimize the same objective under the same total budget.
 
@@ -37,13 +38,22 @@ scalar, that station's spend.
 
 Even that dependence is structurally thin. In *slack* space `x_k = m_k − γ`, both `t_ub` and
 `t_bot` are homogeneous of degree −1, and `α = (γ/m₁ + γ/m₂)/8` is the only term in `t_ul` that is
-not. With `α` frozen the stationarity condition is homogeneous of degree 0 — it pins a
-**direction**, not a magnitude — and `u = x₂/x₁` solves a closed form in the price ratio
-`p = β₁/β₂` alone:
+not. With `α` frozen the stationarity condition is homogeneous of degree 0, so it pins a
+**direction**, not a magnitude: `u = x₂/x₁` is then determined by the price ratio `p = β₁/β₂` and
+`α`, with the spend level dropping out entirely. Writing `x₁` as the bottleneck, so `t_bot = 1/x₁`:
 
 ```
-p/u² − 1 = (p−1)/(1+u)²
+p/u² − 1/(1−α) = (p−1)/(1+u)²                      (frozen α)
+
+p/u² − 1        = (p−1)/(1+u)²                     (its α → 0 limit)
 ```
+
+**The spend reaches `u` only through `α`,** and that accounts for essentially all of the drift. Solve
+the frozen-α equation at each row's own measured `α` and it predicts the measured `u` to within
+**0.67%** worst case over eight orders of magnitude of spend; the α → 0 form, by contrast, returns
+`2.80223709` for every row, which is **12.0%** off at the tightest budget. The ≤0.67% residual is
+the next-order effect the frozen-α condition drops — `α` is not actually constant, so the true
+condition carries `∂α/∂x` terms, which `_dt_dm1` includes.
 
 ```
  spend/floor    r* = m2/m1     u = x2/x1      alpha     rho1
@@ -53,9 +63,10 @@ p/u² − 1 = (p−1)/(1+u)²
        1e+08    2.80223707    2.80223709   0.000000   0.0000
 ```
 
-`u*(16) = 2.8022370912` from the closed form, against `2.80223707` as the measured spend→∞ limit:
-the same to 8 digits. So `r* = (γ+x₂)/(γ+x₁)` runs from 1 at the boundary up to `u*` and saturates
-— `u` moves only 2.502 → 2.802 across eight orders of magnitude of spend, all of it `α` drift.
+`u*(16) = 2.8022370912` from the **α → 0** form, against `2.80223707` as the measured spend→∞ limit:
+the same to 8 digits, which is the limit doing what it should. So `r* = (γ+x₂)/(γ+x₁)` runs from 1 at
+the boundary up to `u*(p, 0)` and saturates — `u` moves only 2.502 → 2.802 across eight orders of
+magnitude of spend, and the frozen-α equation above accounts for all but 0.67% of that movement.
 
 ## 3. Why the coupled KKT collapses onto the per-station condition
 

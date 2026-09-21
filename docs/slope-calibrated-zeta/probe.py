@@ -162,7 +162,12 @@ def split(items, B):
 
 def polish(items, spends, B):
     """Pairwise local descent on the exact objective -- audits `split` without reusing its
-    marginal formula, so a bug in one cannot hide in the other."""
+    marginal formula, so a bug in one cannot hide in the other.
+
+    Use `audit_split` rather than calling this and comparing: `polish` starts from the
+    objective at `spends` and only ever lowers it, so "no worse than split's" is true by
+    construction and tests nothing.
+    """
     s = list(spends)
     best = sum(it.w * it.T(x) for it, x in zip(items, s))
     step = 1e-3 * B
@@ -235,6 +240,33 @@ def vals(specs):
         d = dict(spec)
         out.append(VFJ(**d) if d.pop("kind") == "fj" else VGG1(**d))
     return out
+
+
+
+def audit_split(items, spends, B, obj):
+    """Confirm `split`'s answer is the local optimum. Returns (from_answer, from_perturbed).
+
+    Two descents, because either alone is weak: from split's own answer descent must find
+    nothing better -- but that alone also passes for a `polish` that does nothing, which is
+    how the original version of this audit was vacuous -- and from a PERTURBED start descent
+    must come back to the same objective, which is what shows it is live.
+
+    Tolerances measured, not guessed: descent from split's answer improves on it by 0.0
+    relative on every row here, and from a 5% perturbation stops short by at most 1e-12.
+    """
+    same = polish(items, spends, B)
+    assert same >= obj * (1.0 - 1e-12), (
+        f"local descent beat split() by {(obj - same) / obj:.3e} relative: split() did not "
+        f"find the optimum")
+    nudged = list(spends)
+    d = 0.05 * (spends[0] - items[0].floor)
+    nudged[0] -= d
+    nudged[1] += d
+    back = polish(items, nudged, B)
+    assert back <= obj * (1.0 + 1e-9), (
+        f"descent from a perturbed start reached {back} against split()'s {obj}, so it is "
+        f"not descending and the check above confirms nothing")
+    return same, back
 
 
 # --- the networks used below ----------------------------------------------------------
@@ -348,8 +380,7 @@ is a property of the fixed point and not an identity.""")
             rL, rS = Optimizer(stL, C).run(), Optimizer(stS, C).run()
             _, sp3 = split(V, C)
             o3 = sum(x.w * x.T(y) for x, y in zip(V, sp3))
-            audit = polish(V, sp3, C)
-            assert audit <= o3 + 1e-12, f"split() is not a local min: {audit} < {o3}"
+            audit_split(V, sp3, C, o3)
             print(f"{mult:>8g} {rL.objective:>15.9f} {rS.objective:>15.9f} {o3:>15.9f}"
                   f" {(rS.objective-o3)/o3*100:>11.6f}% {(rL.objective-o3)/o3*100:>9.4f}%"
                   f" {rL.iterations:>4} {rS.iterations:>5}")

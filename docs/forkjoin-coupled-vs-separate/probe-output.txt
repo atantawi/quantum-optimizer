@@ -20,19 +20,39 @@ station gamma=0.45 mu=1.0 r=4.0 c1=4.0 c2=1.0:  beta1=4.0 beta2=0.25  price rati
        10000    2.80201563    2.80221496   0.000019   0.0001
        1e+08    2.80223707    2.80223709   0.000000   0.0000
 
-closed form for the alpha-free limit:  p/u^2 - 1 = (p-1)/(1+u)^2
-  p = b1/b2               u*
+Does the frozen-alpha condition actually PREDICT that drift?  Solve it at each row's own
+measured alpha and compare with the measured u.  The alpha -> 0 form is shown alongside: it
+is a single number for every row, so it cannot explain any of the drift.
+
+ spend/floor     alpha    u measured  u frozen-alpha       rel  u at alpha=0
+       1.001  0.249599    2.50195279      2.50214675   7.8e-05    2.80223709
+        1.01  0.246050    2.50497141      2.50682713   7.4e-04    2.80223709
+         1.1  0.215926    2.53360747      2.54601023   4.9e-03    2.80223709
+         1.5  0.142745    2.61975238      2.63737259   6.7e-03    2.80223709
+           2  0.101836    2.67312414      2.68629891   4.9e-03    2.80223709
+           4  0.048362    2.74276622      2.74816210   2.0e-03    2.80223709
+          10  0.018952    2.77948472      2.78124891   6.3e-04    2.80223709
+         100  0.001878    2.80001804      2.80016911   5.4e-05    2.80223709
+       10000  0.000019    2.80221496      2.80221644   5.3e-07    2.80223709
+       1e+08  0.000000    2.80223709      2.80223709   5.3e-11    2.80223709
+
+worst |frozen-alpha prediction / measured - 1| = 6.73e-03
+The residual is the next-order effect frozen alpha drops: alpha is not really
+constant, so the true condition carries d(alpha)/dx terms, which `_dt_dm1` includes.
+
+the alpha -> 0 limit, across price ratios:
+  p = b1/b2    u* at alpha=0
        0.25     0.5953550577
           1     1.0000000000
           4     1.6796699500
          16     2.8022370912
         100     5.4242131399
 
-u*(16) = 2.8022370912 vs the spend->inf row above: the same to 8 digits.
+u*(16) = 2.8022370912 vs the spend->inf row above: same to 8 digits.
 
-So the budget does not choose the DIRECTION, only how far out along it the station sits.
-r* = (gamma + x2)/(gamma + x1) therefore runs from 1 at the stability boundary up to u*, and
-saturates once rho is small.
+So the budget does not choose the DIRECTION, only how far out along it the station sits, and
+it reaches the direction only through alpha. r* = (gamma + x2)/(gamma + x1) therefore runs
+from 1 at the stability boundary up to u*(p, 0), and saturates once rho is small.
 
 ====================================================================================
 2. the coupled KKT collapses to the per-station ray condition

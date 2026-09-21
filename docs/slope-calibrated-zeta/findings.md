@@ -7,7 +7,7 @@ Equation numbers follow [`../paper-map.md`](../paper-map.md): `eq 21` (the alloc
 `eq 22` (the ζ inversion) mean `docs/analysis.pdf`, the snapshot committed in `37a3a11`. Every
 number below is from
 [`probe-output.txt`](probe-output.txt), reproducible with `python docs/slope-calibrated-zeta/probe.py`
-(28 s, deterministic, no simulation service).
+(29 s, deterministic, no simulation service).
 
 ## 1. Claim
 
@@ -73,8 +73,11 @@ For contrast, eq 22's `ζ = T·x` gives `wᵢ Tᵢ μᵢ/xᵢ = ν cᵢ`, which 
 ## 4. Payoff
 
 `(1)` as shipped, `(1s)` slope-calibrated, `(3)` the coupled optimum over all stations —
-water-filled on true marginals and audited by pairwise local descent on the exact objective, so a
-bug in one cannot hide in the other.
+water-filled on true marginals, then audited by pairwise local descent on the exact objective so a
+bug in one cannot hide in the other. The audit runs in **both** directions: descent from the
+water-filled answer must find nothing better, *and* descent from a 5% perturbation must return to
+the same objective. The second direction is what makes the first meaningful — a descent that did
+nothing would satisfy the first on its own.
 
 ```
 --- 2 fork-join + 2 M/M/1 (phi moves only on the FJ pair) ---

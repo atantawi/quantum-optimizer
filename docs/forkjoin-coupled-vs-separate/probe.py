@@ -110,7 +110,12 @@ def split(items, B):
 def polish(items, spends, B):
     """Pairwise local descent on the exact objective, auditing `split` without reusing its
     marginal formula. Relative threshold and a round cap: an absolute one spins forever once
-    the objective is ~1e3, where a single ulp is ~1e-13 and rounding noise reads as progress."""
+    the objective is ~1e3, where a single ulp is ~1e-13 and rounding noise reads as progress.
+
+    Use `audit_split` rather than calling this directly and comparing: `polish` starts from
+    the objective at `spends` and only ever lowers it, so "the result is no worse than
+    split's" is true by construction and tests nothing.
+    """
     s = list(spends)
     best = sum(it.w * it.T(x) for it, x in zip(items, s))
     step = 1e-3 * B
@@ -134,6 +139,36 @@ def polish(items, spends, B):
         if not improved:
             step *= 0.5
     return best
+
+
+def audit_split(items, spends, B, obj):
+    """Confirm `split`'s answer is the local optimum. Returns (from_answer, from_perturbed).
+
+    Two descents, because either alone is weak:
+
+    - From split's own answer, descent must find NOTHING better. This is the check that
+      matters, but on its own it also passes for a `polish` that does nothing at all --
+      which is exactly how the original version of this audit was vacuous.
+    - From a PERTURBED start, descent must come BACK to the same objective. That is what
+      shows the descent is live, and it is what makes the word "independent" honest.
+
+    Tolerances are measured, not guessed. Over the 36 rows below, descent from split's
+    answer improves on it by 0.0 relative in every case, and descent from a 5% perturbation
+    stops short by at most 1.0e-12 relative.
+    """
+    same = polish(items, spends, B)
+    assert same >= obj * (1.0 - 1e-12), (
+        f"local descent beat split() by {(obj - same) / obj:.3e} relative: split() did not "
+        f"find the optimum")
+    nudged = list(spends)
+    d = 0.05 * (spends[0] - items[0].floor)
+    nudged[0] -= d
+    nudged[1] += d
+    back = polish(items, nudged, B)
+    assert back <= obj * (1.0 + 1e-9), (
+        f"descent from a perturbed start reached {back} against split()'s {obj}, so it is "
+        f"not descending and the check above confirms nothing")
+    return same, back
 
 
 def build(specs):
@@ -202,26 +237,54 @@ term in t_ul that is not homogeneous of degree -1 in the slacks x_k = m_k - gamm
         print(f"{k:>12g} {m2/m1:>13.8f} {(m2-G)/(m1-G):>13.8f} "
               f"{(G/m1 + G/m2)/8:>10.6f} {G/m1:>8.4f}")
 
-    def u_star(p):
-        """Solve the alpha-free ray condition  p/u^2 - 1 = (p-1)/(1+u)^2  for u = x2/x1."""
+    def u_star(p, alpha=0.0):
+        """Ray condition with alpha held CONSTANT, solved for u = x2/x1.
+
+            p/u^2 - 1/(1-alpha) = (p-1)/(1+u)^2
+
+        With x1 the bottleneck, t_bot = 1/x1, so at frozen alpha
+        dT/dx1 = -1/x1^2 + (1-alpha)/D^2  and  dT/dx2 = (1-alpha)(-1/x2^2 + 1/D^2);
+        setting the ratio to p, normalizing x1 = 1, x2 = u and dividing by (1-alpha) gives
+        the above. alpha = 0 recovers the asymptotic form the spend->inf row converges to.
+        """
         def g(u):
             D = 1.0 + u
-            return (-1.0 + 1.0 / D ** 2) - p * (-1.0 / u ** 2 + 1.0 / D ** 2)
+            return p / u ** 2 - 1.0 / (1.0 - alpha) - (p - 1.0) / D ** 2
         lo, hi = 1e-10, 1e10        # g decreasing in u: +inf as u->0, -inf as u->inf
-        for _ in range(200):
+        for _ in range(300):
             mid = math.sqrt(lo * hi)
             lo, hi = (mid, hi) if g(mid) > 0 else (lo, mid)
         return math.sqrt(lo * hi)
 
-    print("\nclosed form for the alpha-free limit:  p/u^2 - 1 = (p-1)/(1+u)^2")
-    print(f"{'p = b1/b2':>11} {'u*':>16}")
-    for p in (0.25, 1.0, 4.0, 16.0, 100.0):
-        print(f"{p:>11g} {u_star(p):>16.10f}")
-    print(f"\nu*(16) = {u_star(16.0):.10f} vs the spend->inf row above: the same to 8 digits.")
     print("""
-So the budget does not choose the DIRECTION, only how far out along it the station sits.
-r* = (gamma + x2)/(gamma + x1) therefore runs from 1 at the stability boundary up to u*, and
-saturates once rho is small.""")
+Does the frozen-alpha condition actually PREDICT that drift?  Solve it at each row's own
+measured alpha and compare with the measured u.  The alpha -> 0 form is shown alongside: it
+is a single number for every row, so it cannot explain any of the drift.""")
+    print(f"\n{'spend/floor':>12} {'alpha':>9} {'u measured':>13} {'u frozen-alpha':>15}"
+          f" {'rel':>9} {'u at alpha=0':>13}")
+    u_inf = u_star(b1 / b2, 0.0)
+    worst = 0.0
+    for k in (1.001, 1.01, 1.1, 1.5, 2, 4, 10, 100, 1e4, 1e8):
+        m1, m2 = _min_on_spend_line(G, b1, b2, sfloor * k)
+        alpha = (G / m1 + G / m2) / 8.0
+        um = (m2 - G) / (m1 - G)
+        uf = u_star(b1 / b2, alpha)
+        worst = max(worst, abs(uf / um - 1))
+        print(f"{k:>12g} {alpha:>9.6f} {um:>13.8f} {uf:>15.8f} {abs(uf/um-1):>9.1e}"
+              f" {u_inf:>13.8f}")
+    print(f"\nworst |frozen-alpha prediction / measured - 1| = {worst:.2e}")
+    print("""The residual is the next-order effect frozen alpha drops: alpha is not really
+constant, so the true condition carries d(alpha)/dx terms, which `_dt_dm1` includes.""")
+
+    print("\nthe alpha -> 0 limit, across price ratios:")
+    print(f"{'p = b1/b2':>11} {'u* at alpha=0':>16}")
+    for p in (0.25, 1.0, 4.0, 16.0, 100.0):
+        print(f"{p:>11g} {u_star(p, 0.0):>16.10f}")
+    print(f"\nu*(16) = {u_star(16.0, 0.0):.10f} vs the spend->inf row above: same to 8 digits.")
+    print("""
+So the budget does not choose the DIRECTION, only how far out along it the station sits, and
+it reaches the direction only through alpha. r* = (gamma + x2)/(gamma + x1) therefore runs
+from 1 at the stability boundary up to u*(p, 0), and saturates once rho is small.""")
 
     # ==================================================================================
     # 2. the coupled KKT collapses to the per-station ray condition
@@ -318,8 +381,7 @@ than (1).""")
 
             _, spend3 = split(allv, C)
             obj3 = sum(v.w * v.T(x) for v, x in zip(allv, spend3))
-            audit = polish(allv, spend3, C)
-            assert audit <= obj3 + 1e-12, f"split() is not a local min: {audit} < {obj3}"
+            audit_split(allv, spend3, C, obj3)
 
             if nfj > 1:
                 B_FJ = C - sum(spend1[nfj:])
