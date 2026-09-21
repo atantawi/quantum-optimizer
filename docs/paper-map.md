@@ -5,8 +5,6 @@
 resolvable from a clean checkout forever, with no external dependency. This is the convention; it
 is not a description of what the current draft happens to say.
 
-One existing citation does **not** satisfy it. See [Known exception](#known-exception).
-
 The working draft has moved on and **renumbered**. The substance behind each cited equation did not
 change, but the numbers did, and not by a constant offset. A stale reference is therefore not a
 dangling one — it silently resolves to a different, plausible-looking equation. See
@@ -14,15 +12,17 @@ dangling one — it silently resolves to a different, plausible-looking equation
 
 ## Inventory
 
-Counted against `main` at `1adb2d8`, reproducibly:
+Counted against `1adb2d8` — the last commit before this document existed, which is why the tree is
+named **inside** the commands. Run them as written from any checkout and they reproduce the figures
+below exactly, however much the repository has moved on since:
 
 ```sh
 # single-number citations, by number
-git grep -ohiE "eq(uation)?s?\.? *\(?[0-9]{1,2}\)?([–-][0-9]{1,2})?" \
+git grep -ohiE "eq(uation)?s?\.? *\(?[0-9]{1,2}\)?([–-][0-9]{1,2})?" 1adb2d8 \
   | grep -vE "[–-][0-9]" | sed -E 's/.*[^0-9]([0-9]+)\)?$/\1/' | sort -n | uniq -c
 
 # range-style citations
-git grep -nohiE "eq(uation)?s?\.? *\(?[0-9]{1,2}\)?[–-][0-9]{1,2}" | sort | uniq -c
+git grep -nohiE "eq(uation)?s?\.? *\(?[0-9]{1,2}\)?[–-][0-9]{1,2}" 1adb2d8 | sort | uniq -c
 ```
 
 **200 single-number citations and 3 ranges, 203 in total.** Only two equation numbers are ever
@@ -39,11 +39,12 @@ and three citations name a range:
 |---|---|---|---|---|
 | `eq 20–21` | `docs/optimizer-brainstorm-summary.md:33` | (20)–(21) | **(17)–(18)** | yes — `Theorem 5` is the allocation theorem, (20) its `S*` |
 | `eqs 20–22` | `docs/superpowers/specs/2026-07-10-optimizer-design.md:16` | (20)–(22) | **(17)–(19)** | yes — Steps 0–5 |
-| `eqs 23–27` | `docs/optimizer-brainstorm-summary.md:62` | (23)–(27) | *not mappable* | **no** — see below |
+| `eqs 23–27` | `docs/optimizer-brainstorm-summary.md:62` | (23)–(27) | **(21), —, (22), (23), (24)** | yes — the network/routing model; see [Ranges renumber worst](#ranges-renumber-worst) |
 
-Run the commands above against this branch and the totals come out higher, because this document's
-own table rows are themselves citations. The inventory describes the corpus it documents, not the
-tree that contains it.
+Drop the `1adb2d8` and the totals come out higher on any tree that contains this document, because
+its tables and prose are themselves citations of `eq 21`, `eq 22`, `eq 20` and `eq 23` — this very
+sentence adds four. That is not a caveat to keep updated but the reason the tree is pinned: the
+inventory describes the corpus it documents, not whatever tree happens to contain it.
 
 Everything else that looks like a cross-reference — `spec §6.4`, `findings §7`, `finding 7` —
 points at **this repo's own** documents under `docs/`, not at the paper.
@@ -51,31 +52,47 @@ points at **this repo's own** documents under `docs/`, not at the paper.
 Theorem numbering changed shape too: the draft moved from flat numbering to per-section, so
 `Theorem 5` (the allocation theorem, which `eq 20–21` names) is now **`Theorem 4.1`**.
 
-## Known exception
+## Ranges renumber worst
 
 `docs/optimizer-brainstorm-summary.md:62` reads:
 
 > Paper's full routing model (eqs 23–27) is out of scope.
 
-This does not resolve against `docs/analysis.pdf`:
+This resolves correctly. In `docs/analysis.pdf`, (23)–(27) sit under *Brownian Approximation of
+Generalized Jackson Networks* and are exactly the network-topology model: the paper characterizes the
+network as a graph `G = (V, E)` in which "the set of (directed) edges `E` represents the paths of jobs
+from one queue to another queue", defines `p_{i,j}` as "the probability associated with the edge from
+vertex `i` to vertex `j`", `ι(i)` as the parent vertex of `i`, and `P(i)` as "the (unique) path taken
+by a job" to queue `i`, and then defines
 
-- (23)–(27) there are the `κ`-substitution machinery — a sojourn-time expression, the
-  `(OPTRCA:FF:κ)` problem, the `S*` fixed-point system, `ẑ_i(Ŝ_i)`, and the definition of
-  `ζ_i(ẑ_i)`. None of them is a routing model.
-- The string "routing" does not appear in `docs/analysis.pdf` at all — nor in the working draft.
+```
+κ_i(z_i) := Σ_{j ∈ P(i)} Q(i,j) · E[T_j(γ_i + z_i)],    Q(i,j) = Π_{ℓ∈P(i), ℓ∉P(j)} p_{ι(ℓ),ℓ}
+```
 
-So this citation was written against something other than the committed snapshot. Both files
-entered the repo in the same commit (`37a3a11`), so it is not a case of the PDF being replaced
-under the text.
+so `E[T_i]` in (23) depends on the whole path from the root to `i`, weighted by products of edge
+probabilities. That is a routing model under a different name — the paper never uses the word
+"routing", which is why grepping for it finds nothing in either PDF. And it is genuinely out of
+qopt's scope: `AnalyticAnalyzer` computes each station's `E[T]` from that station's own `γ`, never
+path-dependently.
 
-**Unresolved, deliberately.** Fixing it means knowing what "the paper's full routing model" was
-meant to point at, which the repo does not record. The claim it supports — that deriving `γ` from
-network topology is out of scope — was in any case superseded by `Network.solve_traffic`. Left for
-whoever knows the intent; flagged here so the convention above is not read as covering it.
+**What the range does illustrate is renumbering.** It is the one citation in the corpus that does not
+survive the move to the working draft as a range:
 
-This range also demonstrates the renumbering problem concretely: `(23)` → `(21)` and `(25)` → `(22)`
-in the working draft, while `(24)` — the `(OPTRCA:FF:κ)` display — is unnumbered there. A range that
-was contiguous in one document is neither contiguous nor complete in the other.
+| `docs/analysis.pdf` | working draft | |
+|---|---|---|
+| (23) | **(21)** | `E[T_i(Ŝ_i)] = κ_i(…) − p_{ι(i),i} κ_{ι(i)}(…)` |
+| (24) | **unnumbered** | the `(OPT_RCA:FF:κ)` program — a numbered display in one, not in the other |
+| (25) | **(22)** | the `S*` fixed-point system |
+| (26) | **(23)** | `ζ_i(Ŝ)` in terms of `ẑ` |
+| (27) | **(24)** | the definition of `ζ_i(ẑ_i)` |
+
+So a contiguous five-equation range becomes a four-number, non-contiguous one whose first element
+collides with a number the draft uses for something else. Cite ranges by name as well as number.
+
+One thing in that row *is* stale, though not as a citation: it also says "no network routing
+modeled", and `Network.solve_traffic` now derives `γ` from the topology. The paper's path-dependent
+`E[T_i]` remains out of scope, so the parenthetical still holds; it is the surrounding prose that
+predates the traffic solver. Left as written, per the dated-record policy below.
 
 ## The trap
 
@@ -102,14 +119,13 @@ than "the latest PDF".
 
 ## The convention, stated
 
-- **Existing citations: leave them.** They mean `docs/analysis.pdf`, as recorded above, with the one
-  exception noted.
+- **Existing citations: leave them.** They mean `docs/analysis.pdf`, as recorded above.
 - **New documents:** keep citing the pinned numbering, and name the equation the first time it
   appears in a document, e.g. *"eq 21 (the allocation rule)"*. The name survives renumbering; the
   number locates it in the committed PDF.
-- **Never** cite a number read off a newer PDF without saying so, and never cite a *range* without
-  checking that it still describes the same equations — the `eqs 23–27` exception above is what that
-  failure looks like once the referent has moved.
+- **Never** cite a number read off a newer PDF without saying so, and prefer naming a *range*'s
+  subject over its endpoints — `eqs 23–27` above is the citation that renumbers worst, and it is its
+  wording, not its numbers, that still locates the right equations.
 - **When the paper is submitted or published**, that is the moment to do one sweep: re-snapshot the
   PDF, update this table, and decide then whether to renumber live code and README (leaving the
   dated records under `docs/superpowers/` alone).
@@ -117,4 +133,6 @@ than "the latest PDF".
 ## Symbol collision
 
 The working draft uses `κ_i` for the sojourn-time functional form (new eq 21, 23, 24). New analysis
-in this repo that needs a symbol for something else should avoid `κ`.
+in this repo that needs a symbol for something else should avoid `κ`;
+[`slope-calibrated-zeta/`](slope-calibrated-zeta/findings.md) uses `φ` for its slope-correction
+factor for exactly that reason.

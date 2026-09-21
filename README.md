@@ -218,6 +218,11 @@ See also:
   network (topology, workloads, budget). Implemented; see `examples/qcsc_network.py`.
 - `docs/optimizer-brainstorm-summary.md` — problem statement and design rationale.
 - `docs/paper-map.md` — which paper `eq N` refers to, and the crosswalk to the newer draft.
+- `docs/forkjoin-coupled-vs-separate/findings.md` — why each fork-join station's `r*` is solved
+  on its own rather than as one coupled problem. Analysis only; no change proposed.
+- `docs/slope-calibrated-zeta/findings.md` — a proposal to calibrate ζ to the slope of E[T]
+  rather than its level, which would make the eq-21 fixed point exactly optimal. Not
+  implemented.
 
 ## License
 
