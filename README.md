@@ -4,7 +4,10 @@ A Python optimizer that allocates resource capacities `S` across a **network of 
 minimize the sum of weighted expected sojourn times subject to a budget and stability
 constraints. It implements the Section-5 fixed-point iteration of the analysis paper
 (`docs/analysis.pdf`, "Optimization and Performance Analysis of Resource Allocation in
-Quantum-Centric Supercomputing Environments").
+Quantum-Centric Supercomputing Environments"). Every `eq N` in this repository refers to that
+committed snapshot; the working draft has since renumbered, so see
+[`docs/paper-map.md`](docs/paper-map.md) for the crosswalk before reading a citation against a
+newer PDF.
 
 ## Model
 
@@ -214,6 +217,7 @@ See also:
 - `docs/superpowers/specs/2026-07-31-qcsc-example-network-design.md` — the QCSC example
   network (topology, workloads, budget). Implemented; see `examples/qcsc_network.py`.
 - `docs/optimizer-brainstorm-summary.md` — problem statement and design rationale.
+- `docs/paper-map.md` — which paper `eq N` refers to, and the crosswalk to the newer draft.
 
 ## License
 
