@@ -113,6 +113,11 @@ that did nothing would satisfy the first on its own, and coming back *better* wo
 optimum outright, which descent from the answer cannot detect because it never leaves that answer's
 basin.
 
+That those two assertions can actually fail is not taken on trust:
+[`../audit-selfcheck.py`](../audit-selfcheck.py) breaks each premise in turn and requires the
+matching assertion to fire with the matching message. The first version of this audit was vacuous,
+so the check exists.
+
 Negative means better than (1).
 
 ```

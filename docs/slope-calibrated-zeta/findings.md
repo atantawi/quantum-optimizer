@@ -79,6 +79,11 @@ water-filled answer must find nothing better, *and* descent from a 5% perturbati
 the same objective. The second direction is what makes the first meaningful — a descent that did
 nothing would satisfy the first on its own.
 
+That those two assertions can actually fail is not taken on trust:
+[`../audit-selfcheck.py`](../audit-selfcheck.py) breaks each premise in turn and requires the
+matching assertion to fire with the matching message. The first version of this audit was vacuous,
+so the check exists.
+
 ```
 --- 2 fork-join + 2 M/M/1 (phi moves only on the FJ pair) ---
  C/floor       (1) level      (1s) slope       (3) exact     (1s)-(3)    (1)-(3)   it  it_s
