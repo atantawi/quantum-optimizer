@@ -35,7 +35,7 @@ cited on their own:
 
 and three citations name a range. Their `file:line` references are **as of `1adb2d8`**, the tree the commands above are pinned to; the files have since gained lines above them:
 
-| citation | where | `docs/analysis.pdf` | working draft | matches? |
+| citation | where (line numbers at `1adb2d8`) | `docs/analysis.pdf` | working draft | matches? |
 |---|---|---|---|---|
 | `eq 20–21` | `docs/optimizer-brainstorm-summary.md:33` | (20)–(21) | **(17)–(18)** | yes — `Theorem 5` is the allocation theorem, (20) its `S*` |
 | `eqs 20–22` | `docs/superpowers/specs/2026-07-10-optimizer-design.md:16` | (20)–(22) | **(17)–(19)** | yes — Steps 0–5 |

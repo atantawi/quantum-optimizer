@@ -216,7 +216,9 @@ See also:
   (topology, `Analyzer` seam, `qsim-service` client). Implemented; see `SimulationAnalyzer`.
 - `docs/superpowers/specs/2026-07-31-qcsc-example-network-design.md` — the QCSC example
   network (topology, workloads, budget). Implemented; see `examples/qcsc_network.py`.
-- `docs/optimizer-brainstorm-summary.md` — problem statement and design rationale.
+- `docs/optimizer-brainstorm-summary.md` — problem statement and design rationale, as a
+  2026-07-10 record. Two of its scope decisions were later reversed; its header note says
+  which, and points back here for current behaviour.
 - `docs/paper-map.md` — which paper `eq N` refers to, and the crosswalk to the newer draft.
 - `docs/forkjoin-coupled-vs-separate/findings.md` — why each fork-join station's `r*` is solved
   on its own rather than as one coupled problem. Analysis only; no change proposed.
