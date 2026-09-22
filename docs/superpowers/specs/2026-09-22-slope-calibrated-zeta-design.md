@@ -29,7 +29,7 @@ its derivative**, so calibrating ζ to the curve's level spends the single free 
 one quantity the allocator never reads. Calibrating the slope instead turns the loop's fixed
 point from an approximation of the coupled optimum into the coupled optimum exactly — measured to
 machine precision at all 27 rows tested, with iteration counts essentially unchanged
-(`findings.md` §4).
+(`findings.md` §1's claim, measured in §4).
 
 `φ ≡ 1` for M/M/1, which is why this was invisible: it is the station type most of the suite uses.
 The gain tracks `|φ − 1|`, not station type — `0.0002–0.039%` where only fork-join stations
@@ -145,7 +145,7 @@ def dT_dS(self, S):
 ```
 
 Not an abstract method: slope ζ then works for **any** station, including user subclasses, and no
-existing subclass breaks. `probe.py` §1 validates this route — the closed forms below agree with
+existing subclass breaks. `probe-output.txt` §1 validates this route — the closed forms below agree with
 exactly this difference to `6.7e-09` relative across every case tested.
 
 The step is scaled to **spare capacity**, which buys two properties:
@@ -319,7 +319,7 @@ Slope ζ makes it correctness.
 Two deliverables:
 
 1. A comment at the retune site recording this, so a future reorder meets the reason first.
-2. A regression test anchored on the reference objectives in `probe-output.txt` §4.
+2. A regression test anchored on the reference objectives in `probe-output.txt` §3.
 
 **Honesty requirement.** Implementation must verify by mutation whether reordering the retune
 actually moves those numbers enough to fail that test. If it does not, the spec and the comment
@@ -462,7 +462,7 @@ revert the behaviour and confirm the test fails, with bytecode invalidation forc
 | 4 | Level mode is bit-for-bit `T*(S*μ − γ)`, via `==` | §5.1's bit-for-bit claim |
 | 5 | Unspecified `zeta_mode` resolves to `ZETA_LEVEL` | The default |
 | 6 | `zeta_from(2T, S) == 2·zeta_from(T, S)` | The linearity `_noise_floor` depends on (§5.2) |
-| 7 | Slope mode end-to-end vs the reference objectives in `probe-output.txt` §4 | The payoff, and §7's ordering anchor |
+| 7 | Slope mode end-to-end vs the reference objectives in `probe-output.txt` §3 | The payoff, and §7's ordering anchor |
 | 8 | Level-vs-slope objective gap on the mixed network, against `findings.md` §4's 0.515% | That the gain is real, not just the fixed point moving |
 | 9 | Mixed network: one slope station, one level station; modes reported | Per-station selection works and is legible |
 | 10 | A custom `Station` subclass with no closed form runs on the fd default | §4.1's no-abstract-method promise |
