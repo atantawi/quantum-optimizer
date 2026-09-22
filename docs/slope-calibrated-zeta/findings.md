@@ -167,7 +167,7 @@ matching assertion to fire with the matching message. The first version of this 
 so the check exists.
 
 ```
---- 2 fork-join + 2 M/M/1 (phi moves only on the FJ pair) ---
+--- 2 fork-join + 2 M/M/1  (phi moves only on the FJ pair) ---
  C/floor       (1) level      (1s) slope       (3) exact     (1s)-(3)    (1)-(3)   it  it_s
     1.01   845.653557502   845.326602738   845.326602738    0.000000%    0.0387%    6     7
      1.5    17.147817304    17.144312750    17.144312750    0.000000%    0.0204%    8     8
