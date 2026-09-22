@@ -16,6 +16,53 @@ fork-join r*=1      phi= 0.995701 (fd rel 6.5e-09)  phi= 0.980485 (fd rel 1.2e-0
 The fork-join is the MILDEST case. M/D/1 reaches 0.83 and cov=5 goes well above 1, so this
 is an eq-22 issue across every station whose zeta depends on S -- not a fork-join issue.
 
+phi is not a fudge factor. It is the ELASTICITY of E[T] with respect to spare capacity
+x = S*mu - gamma, equivalently the local power-law exponent in T ~ x^(-phi). Three spellings
+of one number, checked against each other below:
+
+    phi = |dT/dS| * x / (mu * T)      as defined above
+        = |dT/dx| * x / T             since x = S*mu - gamma makes dT/dS = mu * dT/dx
+        = -d log T / d log x          the log-log slope
+
+The same cancellation puts zeta_slope in its natural variable:
+
+    zeta_slope = |dT/dS| * x^2/mu = x^2 * |dT/dx|
+
+mu drops out, so x -- spare capacity -- is what zeta is really about, not S. And because the
+surrogate is T = zeta/x, an M/M/1 station has zeta identically 1: zeta is a dimensionless
+reading of how far a station departs from the M/M/1 shape, and phi is how far its MARGINAL
+departs.
+
+station          rho  zeta_lvl=Tx  zeta_slope  x^2|dT/dx|       phi  |dT/dx|x/T  -dlogT/dlogx
+M/M/1            0.9     1.000000    1.000000    1.000000  1.000000    1.000000      1.000000
+M/M/1            0.6     1.000000    1.000000    1.000000  1.000000    1.000000      1.000000
+M/M/1            0.3     1.000000    1.000000    1.000000  1.000000    1.000000      1.000000
+M/D/1            0.9     0.550000    0.505000    0.505000  0.918182    0.918182      0.918182
+M/D/1            0.6     0.700000    0.580000    0.580000  0.828571    0.828571      0.828571
+M/D/1            0.3     0.850000    0.745000    0.745000  0.876471    0.876471      0.876471
+G/G/1 cov=2      0.9     3.700000    3.970000    3.970000  1.072973    1.072973      1.072973
+G/G/1 cov=2      0.6     2.800000    3.520000    3.520000  1.257143    1.257143      1.257143
+G/G/1 cov=2      0.3     1.900000    2.530000    2.530000  1.331579    1.331579      1.331579
+G/G/1 cov=5      0.9    22.600000   24.760000   24.760000  1.095575    1.095575      1.095575
+G/G/1 cov=5      0.6    15.400000   21.160000   21.160000  1.374026    1.374026      1.374026
+G/G/1 cov=5      0.3     8.200000   13.240000   13.240000  1.614634    1.614634      1.614634
+D/D/1 cov=0      0.9     0.100000    0.010000    0.010000  0.100000    0.100000      0.100000
+D/D/1 cov=0      0.6     0.400000    0.160000    0.160000  0.400000    0.400000      0.400000
+D/D/1 cov=0      0.3     0.700000    0.490000    0.490000  0.700000    0.700000      0.700000
+fork-join p=16   0.9     1.000866    0.999367    0.999367  0.998502    0.998502      0.998502
+fork-join p=16   0.6     1.011223    0.999501    0.999501  0.988408    0.988408      0.988408
+fork-join p=16   0.3     1.028687    1.014854    1.014854  0.986552    0.986552      0.986552
+
+worst disagreement among the three spellings of phi, and between the two of zeta_slope: 6.80e-09
+
+Read the rows as marginal return on spare capacity, in M/M/1 units:
+  M/M/1      phi == 1 at every load -- T = 1/x exactly, which is why eq 22 is already right.
+  M/D/1      phi < 1  -- T falls SLOWER than 1/x, so capacity buys less than eq 21 assumes.
+  cov 2, 5   phi > 1  -- T falls FASTER, so capacity buys more.
+  D/D/1      phi = 1 - rho exactly. E[T] = 1/m has no queueing term at all, so at high load
+             spare capacity barely moves it. That is the phi -> 0 seen in section 4, with a
+             reason rather than a shrug.
+
 where `_dt_dm1`'s kink branch would have been used instead (findings section 5):
 station             spend/floor   radial (correct)    via _dt_dm1       rel
 FJ beta1==beta2            1.05          67.915232      56.157442     17.3%
@@ -146,3 +193,59 @@ not measurable (findings section 6).
 Each cell is % above the true optimum; lower is better. The loss is quadratic in the phi
 error, so a roughly-right phi captures most of the gain and even a 100% overcorrection
 still beats doing nothing.
+
+====================================================================================
+7. the tuned-r* retune is orthogonal to zeta's calibration
+====================================================================================
+The first question an implementer asks is whether slope-calibrated zeta removes the
+need for `ForkJoinStation.retune` -- which solves r* at the spend eq 21 granted, then
+re-expresses that spend as a capacity at the station's NEW `alloc_cost`. It does not, and the
+two are independent for a structural reason: zeta prices one half of the KKT (the scalar nu
+equalizing marginals across stations) while r* answers the other half (the per-station ray
+condition, which is nu-free, budget-free, weight-free and zeta-free). The re-expression is
+neither -- it is a change of variables forced by eq 21 allocating S at a price that moves with
+r*.
+
+Every slope-calibrated number in this probe was produced with the retune ACTIVE: `build`
+constructs fork-join stations with r_star="tuned". The table below varies the two
+independently, so the absence of an interaction is measured rather than asserted.
+
+ C/floor    zeta  rescale    final spend/C - 1  iters  converged
+    1.05   level     True           +0.000e+00      7       True
+    1.05   level    False           +7.398e-12      7       True
+    1.05   slope     True           +0.000e+00      7       True
+    1.05   slope    False           +3.316e-12      7       True
+
+     1.5   level     True           +2.220e-16     11       True
+     1.5   level    False           -6.318e-13     11       True
+     1.5   slope     True           +0.000e+00     10       True
+     1.5   slope    False           +1.776e-12     10       True
+
+       5   level     True           +0.000e+00     10       True
+       5   level    False           -1.710e-13     10       True
+       5   slope     True           +0.000e+00     11       True
+       5   slope    False           -4.674e-13     10       True
+
+zeta's calibration does not appear in the answer: level and slope behave the same
+way with the rescale on and with it off. Note also that dropping it does NOT break the final
+budget -- `allocate` re-derives S from scratch each iteration, and once r* settles the price
+stops moving, so at the fixed point the re-expression is a no-op.
+
+What it buys is per-ITERATE budget exactness, which is not a small effect while r* is still
+moving:
+
+ C/floor    max drift        first         last
+    1.05    3.388e-03    3.388e-03    5.878e-12
+     1.5    2.690e-02    2.690e-02    3.288e-12
+       5    7.869e-02    7.869e-02    9.276e-13
+
+Per station per iteration, |spend after the ray solve / spend before - 1|. The first iteration
+misprices a station by percent-scale amounts and the last by ~1e-12, which is the shape of a
+transient-only correction.
+
+One real interaction, in the other direction: slope zeta needs dT/dS, taken along the
+station's CURRENT ray, where level zeta needs only E[T]. Section 2 shows the radial derivative
+equals the true marginal only ON the optimal ray. That works out because the Optimizer calls
+`retune` LAST in each iteration, so the next iteration's `zeta_from` sees a ray already optimal
+for the spend the station holds -- the retune's existing placement is load-bearing for this
+proposal, not merely compatible with it.
