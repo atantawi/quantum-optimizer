@@ -1189,7 +1189,7 @@ def test_a_non_positive_phi_is_refused_and_the_message_names_the_station():
         st.zeta_from(1.0, 2.0)
     # Level mode on the same station is untouched: the guard is slope-only.
     ok = FlatStation(gamma=0.5, mu=1.0, name="flat", zeta_mode=ZETA_LEVEL)
-    assert ok.zeta_from(1.0, 2.0) == 0.5
+    assert ok.zeta_from(1.0, 2.0) == 1.5      # T*x = 1.0 * (2.0*1.0 - 0.5)
 
 
 def test_a_tiny_phi_still_produces_a_usable_zeta():
