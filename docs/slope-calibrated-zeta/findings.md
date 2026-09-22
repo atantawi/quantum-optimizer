@@ -7,7 +7,9 @@ Equation numbers follow [`../paper-map.md`](../paper-map.md): `eq 21` (the alloc
 `eq 22` (the ζ inversion) mean `docs/analysis.pdf`, the snapshot committed in `37a3a11`. Every
 number below is from
 [`probe-output.txt`](probe-output.txt), reproducible with `python docs/slope-calibrated-zeta/probe.py`
-(30 s, deterministic, no simulation service).
+(30 s, deterministic, no simulation service). That claim is enforced, not just stated:
+[`../quotes-selfcheck.py`](../quotes-selfcheck.py) requires every fenced quote below to match that
+file exactly.
 
 ## 1. Claim
 

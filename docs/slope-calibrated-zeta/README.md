@@ -9,6 +9,7 @@ level-calibrated ζ of eq 22 and this directory argues for changing that.
 | `probe.py` | every check the write-up cites, self-contained (imports only `qopt` and the stdlib) |
 | `probe-output.txt` | captured output of `probe.py`, so the numbers in `findings.md` are checkable without running anything |
 | [`../audit-selfcheck.py`](../audit-selfcheck.py) | checks that `probe.py`'s optimum-confirming audit can actually fail, and has not drifted from the copy in `../forkjoin-coupled-vs-separate/` |
+| [`../quotes-selfcheck.py`](../quotes-selfcheck.py) | checks that every line `findings.md` quotes from `probe-output.txt` is still verbatim |
 
 Reproduce with:
 
