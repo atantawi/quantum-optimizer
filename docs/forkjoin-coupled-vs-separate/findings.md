@@ -14,7 +14,9 @@ which is precisely what fixing `C_FJ` freezes.
 Equation numbers follow [`../paper-map.md`](../paper-map.md). Every number below is from
 [`probe-output.txt`](probe-output.txt), reproducible with
 `python docs/forkjoin-coupled-vs-separate/probe.py` (78 s, deterministic, no simulation
-service).
+service). That claim is enforced, not just stated:
+[`../quotes-selfcheck.py`](../quotes-selfcheck.py) requires every fenced quote below to match that
+file exactly.
 
 **Status: analysis only.** Nothing here proposes a code change. The follow-on proposal it
 motivates is [`../slope-calibrated-zeta/`](../slope-calibrated-zeta/findings.md).

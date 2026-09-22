@@ -9,6 +9,7 @@ right design, and this records why.
 | `probe.py` | every check the write-up cites, self-contained (imports only `qopt` and the stdlib) |
 | `probe-output.txt` | captured output, so the numbers are checkable without running anything |
 | [`../audit-selfcheck.py`](../audit-selfcheck.py) | checks that `probe.py`'s optimum-confirming audit can actually fail, and has not drifted from the copy in `../slope-calibrated-zeta/` |
+| [`../quotes-selfcheck.py`](../quotes-selfcheck.py) | checks that every line `findings.md` quotes from `probe-output.txt` is still verbatim |
 
 Reproduce with:
 
