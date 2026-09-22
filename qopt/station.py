@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from qopt.exceptions import InstabilityError
 from qopt.forkjoin_approx import t_ul
 from qopt.forkjoin_policy import R_STAR_TUNED, optimal_ray, resolve_r_star
+from qopt.zeta import ZETA_LEVEL, ZETA_SLOPE, resolve_zeta_mode
 
 
 def distribution_dict(rate, scv):
@@ -49,7 +50,8 @@ class Station(ABC):
     DOT_SHAPE = "box"
     """Graphviz node shape used by Network.to_dot()."""
 
-    def __init__(self, gamma=None, mu=None, weight=1.0, *, name=None):
+    def __init__(self, gamma=None, mu=None, weight=1.0, *, name=None,
+                 zeta_mode=ZETA_LEVEL):
         # `isfinite` first: NaN passes every ordering comparison, so `nan <= 0` is False.
         if gamma is not None and (not math.isfinite(gamma) or gamma <= 0):
             raise ValueError(f"gamma must be a finite number > 0, got {gamma}")
@@ -64,6 +66,9 @@ class Station(ABC):
         self.mu = mu
         self.weight = weight
         self.name = name
+        # Validated here so `zeta_from` can branch on ZETA_SLOPE alone and treat
+        # anything else as level -- an unknown mode cannot reach the hot path.
+        self._zeta_mode = resolve_zeta_mode(zeta_mode)
 
     @property
     def gamma(self):
@@ -98,6 +103,16 @@ class Station(ABC):
                 f"cannot rebind to {value}"
             )
         self._gamma = value
+
+    @property
+    def zeta_mode(self):
+        """Which ζ calibration this station uses (a qopt.ZETA_* constant).
+
+        Read-only and fixed at construction, for the reason `ForkJoinStation.policy` is:
+        a run prices iterations against a calibration, so changing it mid-run would leave
+        a converged ζ that no single rule produced.
+        """
+        return self._zeta_mode
 
     @abstractmethod
     def sojourn_time(self, S):
@@ -205,8 +220,9 @@ class Station(ABC):
 class SingleServerStation(Station):
     """Abstract base for one-server queues. Concrete subclasses supply sojourn_time."""
 
-    def __init__(self, gamma=None, mu=None, weight=1.0, *, c, name=None):
-        super().__init__(gamma, mu, weight, name=name)
+    def __init__(self, gamma=None, mu=None, weight=1.0, *, c, name=None,
+                 zeta_mode=ZETA_LEVEL):
+        super().__init__(gamma, mu, weight, name=name, zeta_mode=zeta_mode)
         if not math.isfinite(c) or c <= 0:
             raise ValueError(f"c must be a finite number > 0, got {c}")
         self.c = c
@@ -228,8 +244,9 @@ class GG1Station(SingleServerStation):
     with mu_eff = S*mu and rho = gamma/mu_eff. Exact for any M/G/1 (cov_a == 1).
     """
 
-    def __init__(self, gamma=None, mu=None, weight=1.0, *, c, cov_a, cov_s, name=None):
-        super().__init__(gamma, mu, weight, c=c, name=name)
+    def __init__(self, gamma=None, mu=None, weight=1.0, *, c, cov_a, cov_s, name=None,
+                 zeta_mode=ZETA_LEVEL):
+        super().__init__(gamma, mu, weight, c=c, name=name, zeta_mode=zeta_mode)
         if not math.isfinite(cov_a) or cov_a < 0:
             raise ValueError(f"cov_a must be a finite number >= 0, got {cov_a}")
         if not math.isfinite(cov_s) or cov_s < 0:
@@ -245,14 +262,23 @@ class GG1Station(SingleServerStation):
         return (1.0 / mu_eff) * (1.0 + k * rho / (1.0 - rho))
 
     @classmethod
-    def mm1(cls, gamma=None, mu=None, weight=1.0, *, c, name=None):
-        """M/M/1 preset (cov_a = cov_s = 1); zeta is identically 1."""
-        return cls(gamma, mu, weight, c=c, cov_a=1.0, cov_s=1.0, name=name)
+    def mm1(cls, gamma=None, mu=None, weight=1.0, *, c, name=None,
+            zeta_mode=ZETA_LEVEL):
+        """M/M/1 preset (cov_a = cov_s = 1); zeta is identically 1.
+
+        phi is identically 1 too, so `zeta_mode` makes no difference on this station --
+        the two calibrations agree exactly. It is accepted so a network can be switched
+        wholesale without special-casing its M/M/1 members.
+        """
+        return cls(gamma, mu, weight, c=c, cov_a=1.0, cov_s=1.0, name=name,
+                   zeta_mode=zeta_mode)
 
     @classmethod
-    def md1(cls, gamma=None, mu=None, weight=1.0, *, c, name=None):
+    def md1(cls, gamma=None, mu=None, weight=1.0, *, c, name=None,
+            zeta_mode=ZETA_LEVEL):
         """M/D/1 preset (cov_a = 1, cov_s = 0); zeta = 1 - rho/2."""
-        return cls(gamma, mu, weight, c=c, cov_a=1.0, cov_s=0.0, name=name)
+        return cls(gamma, mu, weight, c=c, cov_a=1.0, cov_s=0.0, name=name,
+                   zeta_mode=zeta_mode)
 
     def sim_node(self, S, job_class):
         return {
@@ -313,7 +339,7 @@ class ForkJoinStation(Station):
     DOT_SHAPE = "box3d"
 
     def __init__(self, gamma=None, mu=None, weight=1.0, *, r, c1, c2, r_star=None,
-                 name=None):
+                 name=None, zeta_mode=ZETA_LEVEL):
         if not math.isfinite(r) or r < 1:
             raise ValueError(f"r must be a finite number >= 1, got {r}")
         self._policy, r_star = resolve_r_star(r_star, r)
@@ -328,7 +354,8 @@ class ForkJoinStation(Station):
         # 2, since `_check_stable(S*mu)` guards only one of them -- lives in `_anchor`.
         # `mu` may be None here -- pass it through so Station raises the canonical error.
         k = min(1.0, r_star)
-        super().__init__(gamma, mu if mu is None else mu * k, weight, name=name)
+        super().__init__(gamma, mu if mu is None else mu * k, weight, name=name,
+                         zeta_mode=zeta_mode)
         if not math.isfinite(c1) or c1 <= 0:
             raise ValueError(f"c1 must be a finite number > 0, got {c1}")
         if not math.isfinite(c2) or c2 <= 0:
