@@ -10,6 +10,7 @@ Sections mirror the findings document:
   4  phi stays positive and bounded                        (findings section 7)
   5  convergence is unaffected                             (findings section 7)
   6  robustness to a wrong phi                             (findings section 6)
+  7  the tuned-r* retune is orthogonal to zeta's calibration (findings section 7)
 
 The ray/KKT results this proposal rests on are NOT repeated here: they belong to the prior
 question and live in docs/forkjoin-coupled-vs-separate/, which this document's section 2 cites.
@@ -23,7 +24,7 @@ import warnings
 
 from qopt import ForkJoinStation, GG1Station, Optimizer
 from qopt.forkjoin_approx import t_ul
-from qopt.forkjoin_policy import _dt_dm1, _min_on_spend_line
+from qopt.forkjoin_policy import _dt_dm1, _min_on_spend_line, optimal_ray
 
 warnings.simplefilter("ignore")
 
@@ -208,9 +209,22 @@ def _slope_zeta(st, T, S, exact):
     return phi(st, S, exact) * T * x
 
 
-def build(specs, *, blend):
+RESCALE_DRIFT = []
+"""Per-retune |spend after / spend before - 1|, filled by `build(rescale=False)` stations.
+
+Module-level because it instruments a method the Optimizer calls, and section 7 is the only
+reader; it clears the list before each run.
+"""
+
+
+def build(specs, *, blend, rescale=True):
     """blend=0 reproduces the shipped eq-22 level calibration exactly (phi forced to 1);
-    blend=1 is the proposal; intermediate values interpolate, for section 8."""
+    blend=1 is the proposal; intermediate values interpolate, for section 6.
+
+    rescale=False keeps the retune's ray solve but drops its re-expression of S at the new
+    price, which is how section 7 isolates what that re-expression is for. Fork-join only --
+    no other station type has a price that moves.
+    """
     out = []
     for spec in specs:
         d = dict(spec)
@@ -221,6 +235,18 @@ def build(specs, *, blend):
                     x = S * self.mu - self.gamma
                     p = phi(self, S, dT_dS_fj)
                     return (1.0 + _b * (p - 1.0)) * T * x
+                def retune(self, S, _r=rescale):
+                    if _r:
+                        return super().retune(S)
+                    # Solve the ray as usual, then return S UNCHANGED instead of the capacity
+                    # that buys the same spend at the new `alloc_cost`. The station is now
+                    # priced differently than eq 21 priced it, which is exactly the effect
+                    # section 7 measures.
+                    spend = S * self.alloc_cost
+                    self._anchor(optimal_ray(self.gamma, self.mu_base, self.r_base,
+                                             self.c1, self.c2, spend))
+                    RESCALE_DRIFT.append(abs(S * self.alloc_cost / spend - 1.0))
+                    return S
             out.append(C(d["gamma"], d["mu"], w, r=d["r"], c1=d["c1"], c2=d["c2"],
                          r_star="tuned", name=name))
         else:
@@ -532,6 +558,60 @@ not measurable (findings section 6).""")
 Each cell is % above the true optimum; lower is better. The loss is quadratic in the phi
 error, so a roughly-right phi captures most of the gain and even a 100% overcorrection
 still beats doing nothing.""")
+
+    # ======================================================================================
+    # 7. the tuned-r* retune is orthogonal to zeta's calibration
+    # ======================================================================================
+    head(7, "the tuned-r* retune is orthogonal to zeta's calibration")
+    print("""The first question an implementer asks is whether slope-calibrated zeta removes the
+need for `ForkJoinStation.retune` -- which solves r* at the spend eq 21 granted, then
+re-expresses that spend as a capacity at the station's NEW `alloc_cost`. It does not, and the
+two are independent for a structural reason: zeta prices one half of the KKT (the scalar nu
+equalizing marginals across stations) while r* answers the other half (the per-station ray
+condition, which is nu-free, budget-free, weight-free and zeta-free). The re-expression is
+neither -- it is a change of variables forced by eq 21 allocating S at a price that moves with
+r*.
+
+Every slope-calibrated number in this probe was produced with the retune ACTIVE: `build`
+constructs fork-join stations with r_star="tuned". The table below varies the two
+independently, so the absence of an interaction is measured rather than asserted.""")
+    print(f"\n{'C/floor':>8} {'zeta':>7} {'rescale':>8} {'final spend/C - 1':>20} {'iters':>6}"
+          f" {'converged':>10}")
+    for mult in (1.05, 1.5, 5):
+        for blend, label in ((0.0, "level"), (1.0, "slope")):
+            for rs in (True, False):
+                st = build(NET_MIXED_COV, blend=blend, rescale=rs)
+                C = mult * sum(x.min_spend for x in st)
+                res = Optimizer(st, C).run()
+                spend = sum(x.alloc_cost * Si for x, Si in zip(st, res.capacities))
+                print(f"{mult:>8g} {label:>7} {str(rs):>8} {spend / C - 1:>+20.3e}"
+                      f" {res.iterations:>6} {str(res.converged):>10}")
+        print()
+    print("""zeta's calibration does not appear in the answer: level and slope behave the same
+way with the rescale on and with it off. Note also that dropping it does NOT break the final
+budget -- `allocate` re-derives S from scratch each iteration, and once r* settles the price
+stops moving, so at the fixed point the re-expression is a no-op.
+
+What it buys is per-ITERATE budget exactness, which is not a small effect while r* is still
+moving:""")
+    print(f"\n{'C/floor':>8} {'max drift':>12} {'first':>12} {'last':>12}")
+    for mult in (1.05, 1.5, 5):
+        RESCALE_DRIFT.clear()
+        st = build(NET_MIXED_COV, blend=1.0, rescale=False)
+        Optimizer(st, mult * sum(x.min_spend for x in st)).run()
+        print(f"{mult:>8g} {max(RESCALE_DRIFT):>12.3e} {RESCALE_DRIFT[0]:>12.3e}"
+              f" {RESCALE_DRIFT[-1]:>12.3e}")
+    print("""
+Per station per iteration, |spend after the ray solve / spend before - 1|. The first iteration
+misprices a station by percent-scale amounts and the last by ~1e-12, which is the shape of a
+transient-only correction.
+
+One real interaction, in the other direction: slope zeta needs dT/dS, taken along the
+station's CURRENT ray, where level zeta needs only E[T]. Section 2 shows the radial derivative
+equals the true marginal only ON the optimal ray. That works out because the Optimizer calls
+`retune` LAST in each iteration, so the next iteration's `zeta_from` sees a ray already optimal
+for the spend the station holds -- the retune's existing placement is load-bearing for this
+proposal, not merely compatible with it.""")
 
 
 if __name__ == "__main__":

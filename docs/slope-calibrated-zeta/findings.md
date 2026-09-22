@@ -7,7 +7,7 @@ Equation numbers follow [`../paper-map.md`](../paper-map.md): `eq 21` (the alloc
 `eq 22` (the ζ inversion) mean `docs/analysis.pdf`, the snapshot committed in `37a3a11`. Every
 number below is from
 [`probe-output.txt`](probe-output.txt), reproducible with `python docs/slope-calibrated-zeta/probe.py`
-(29 s, deterministic, no simulation service).
+(30 s, deterministic, no simulation service).
 
 ## 1. Claim
 
@@ -291,6 +291,64 @@ even a 100% overcorrection (`f=2`) beats doing nothing. An approximate `φ` is s
 - The reference optimum is computed by my own water-filling plus a local-descent audit. Both are
   local methods; they agree with each other and with the slope-calibrated loop at every row, but
   none of the three establishes global uniqueness.
+
+### What it does not touch: the tuned-`r*` retune
+
+The first question an implementer asks is whether this removes the need for
+`ForkJoinStation.retune` — which solves `r*` at the spend eq 21 granted, then re-expresses that
+spend as a capacity at the station's *new* `alloc_cost`. **It does not, and the two are
+independent.**
+
+The reason is structural. ζ prices one half of the KKT — the scalar ν equalizing marginals across
+stations — while `r*` answers the other half, the per-station ray condition, which is ν-free,
+budget-free, weight-free and **ζ-free** (see
+[`../forkjoin-coupled-vs-separate/`](../forkjoin-coupled-vs-separate/findings.md) §3). ζ is a
+scalar per station and cannot encode a ray, so it could not absorb `r*` even in principle. And the
+re-expression is neither half: it is a change of variables forced by eq 21 allocating `S` at a
+price that **moves with `r*`**.
+
+Every slope-calibrated number above was produced with the retune active — the probe builds its
+fork-join stations with `r_star="tuned"`. Probe §7 varies the two independently, so the absence of
+an interaction is measured rather than asserted:
+
+```
+ C/floor    zeta  rescale    final spend/C - 1  iters  converged
+     1.5   level     True           +2.220e-16     11       True
+     1.5   level    False           -6.318e-13     11       True
+     1.5   slope     True           +0.000e+00     10       True
+     1.5   slope    False           +1.776e-12     10       True
+```
+
+Two things that table shows, the second of which corrected my own expectation:
+
+1. **ζ's calibration does not appear in the answer** — level and slope behave the same way with
+   the re-expression on and with it off.
+2. **Dropping it does not break the final budget.** `allocate` re-derives `S` from scratch each
+   iteration, and once `r*` settles the price stops moving, so *at the fixed point the
+   re-expression is a no-op.*
+
+What it buys is per-**iterate** budget exactness, which is not a small effect while `r*` is still
+moving — per station per iteration, `|spend after the ray solve / spend before − 1|`:
+
+```
+ C/floor    max drift        first         last
+    1.05    3.388e-03    3.388e-03    5.878e-12
+     1.5    2.690e-02    2.690e-02    3.288e-12
+       5    7.869e-02    7.869e-02    9.276e-13
+```
+
+Up to **7.9% on the first iteration**, decaying to ~1e-12 on the last: the shape of a
+transient-only correction. So it protects iterate feasibility and the stability guards, not the
+final answer. If the re-expression were ever to go away, the lever is eq 21's decision *variable*
+— allocating spend rather than `S` needs no rescale, because spend is what is held fixed — and
+that is a change to the paper's equation, not to ζ.
+
+**One real interaction, in the other direction.** Slope ζ needs `dT/dS`, taken along the station's
+*current* ray, where level ζ needs only `E[T]`. §5 shows the radial derivative equals the true
+marginal only *on* the optimal ray. That works out because the `Optimizer` calls `retune` **last**
+in each iteration, so the next iteration's `zeta_from` sees a ray already optimal for the spend the
+station holds. The retune's existing placement is therefore load-bearing for this proposal, not
+merely compatible with it — worth knowing before anyone reorders that loop.
 
 ## 8. Suggested sequencing
 
