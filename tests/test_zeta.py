@@ -1,6 +1,7 @@
 """ζ calibration: level (eq 22) and slope (docs/slope-calibrated-zeta/)."""
 
 import math
+import warnings
 
 import pytest
 
@@ -729,3 +730,121 @@ def test_a_slope_run_converges_on_a_network_with_a_very_small_phi():
     assert res.converged, res.stop_reason
     assert all(z > 0.0 for z in res.zeta)
     assert 0.0 < res.zeta_phi[0] < 0.5
+
+
+from qopt.analyzer import Analyzer, Evaluation
+
+
+class _ScaledAnalyzer(Analyzer):
+    """Reports each station's analytic E[T] scaled by a factor: a stand-in for a
+    simulator whose measurement disagrees with the station's model."""
+
+    is_stochastic = False
+
+    def __init__(self, factor):
+        self.factor = factor
+
+    def evaluate(self, stations, S, *, fresh_seed=False):
+        return Evaluation(
+            sojourn_times=[st.sojourn_time(Si) * self.factor
+                           for st, Si in zip(stations, S)],
+        )
+
+
+def test_the_cross_check_is_silent_when_measurement_matches_the_model():
+    stations = _mixed_pair(ZETA_SLOPE, ZETA_SLOPE)
+    C = 4.0 * min_feasible_budget(stations)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")          # any warning becomes a failure
+        res = Optimizer(stations, C, analyzer=_ScaledAnalyzer(1.10)).run()
+    assert res.zeta_shape_flags == []           # 10% is inside the 25% default
+
+
+def test_the_cross_check_fires_above_the_tolerance_and_names_the_station():
+    stations = _mixed_pair(ZETA_SLOPE, ZETA_LEVEL)
+    C = 4.0 * min_feasible_budget(stations)
+    with pytest.warns(RuntimeWarning, match="md1"):
+        res = Optimizer(stations, C, analyzer=_ScaledAnalyzer(4.0)).run()
+    assert len(res.zeta_shape_flags) == 1       # only the SLOPE station is checked
+    assert "md1" in res.zeta_shape_flags[0]
+    assert "cov" in res.zeta_shape_flags[0]     # the message points at the likely cause
+
+
+def test_the_cross_check_warns_once_per_station_not_once_per_iteration():
+    # The condition it detects is a constructor argument: it cannot heal between
+    # iterations, so repeating the warning for every one of them is noise.
+    stations = _mixed_pair(ZETA_SLOPE, ZETA_SLOPE)
+    C = 4.0 * min_feasible_budget(stations)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        res = Optimizer(stations, C, analyzer=_ScaledAnalyzer(4.0)).run()
+    shape = [w for w in caught if "analytic" in str(w.message)]
+    assert len(shape) == 2                      # two slope stations, one warning each
+    assert len(res.zeta_shape_flags) == 2
+    # Guards against the test being vacuous: if the loop ran no more iterations than it
+    # emitted warnings, it proves nothing about per-iteration repetition. If this fires,
+    # lower `damping` to force more iterations -- do NOT delete the assertion.
+    assert res.iterations > len(shape), res.iterations
+
+
+def test_the_cross_check_is_vacuous_on_the_analytic_path():
+    # AnalyticAnalyzer returns st.sojourn_time(Si), and the check recomputes exactly
+    # that at the same S, so the ratio is 1.0 and this can never fire.
+    stations = _mixed_pair(ZETA_SLOPE, ZETA_SLOPE)
+    C = 1.01 * min_feasible_budget(stations)    # a tight budget, where E[T] is largest
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        res = Optimizer(stations, C).run()
+    assert res.zeta_shape_flags == []
+
+
+def test_a_shape_flag_does_not_make_a_strict_run_raise():
+    # A cov_a mismatch is a MODEL-SPECIFICATION signal, not a simulation-quality one.
+    # Routing it through `degraded` would make strict=True abort a run whose simulation
+    # was fine, so it gets its own field.
+    stations = _mixed_pair(ZETA_SLOPE, ZETA_SLOPE)
+    C = 4.0 * min_feasible_budget(stations)
+    with pytest.warns(RuntimeWarning):
+        res = Optimizer(stations, C, analyzer=_ScaledAnalyzer(4.0), strict=True).run()
+    assert res.zeta_shape_flags
+    assert res.degraded == []
+
+
+def test_the_cross_check_can_be_retuned_or_disabled():
+    stations = _mixed_pair(ZETA_SLOPE, ZETA_SLOPE)
+    C = 4.0 * min_feasible_budget(stations)
+    # A tighter tolerance fires on a disagreement the default tolerates.
+    with pytest.warns(RuntimeWarning):
+        Optimizer(stations, C, analyzer=_ScaledAnalyzer(1.10), zeta_shape_tol=0.05).run()
+    # None disables it entirely.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        res = Optimizer(_mixed_pair(ZETA_SLOPE, ZETA_SLOPE), C,
+                        analyzer=_ScaledAnalyzer(4.0), zeta_shape_tol=None).run()
+    assert res.zeta_shape_flags == []
+
+
+def test_a_level_only_run_never_evaluates_the_cross_check():
+    # The default path must not start computing an analytic sojourn time it did not
+    # need before.
+    class BrokenAnalytic(GG1Station):
+        calls = 0
+
+        def sojourn_time(self, S):
+            type(self).calls += 1
+            return super().sojourn_time(S)
+
+    stations = [BrokenAnalytic(0.6, 1.5, c=2.0, cov_a=1.0, cov_s=0.0, name="lvl")]
+    C = 4.0 * min_feasible_budget(stations)
+    res = Optimizer(stations, C, analyzer=_ScaledAnalyzer(4.0)).run()
+    assert res.zeta_shape_flags == []
+    # Only the analyzer's own calls, one per iteration plus the final evaluation.
+    assert BrokenAnalytic.calls == res.iterations + 1
+
+
+def test_an_invalid_shape_tolerance_is_rejected():
+    stations = _mixed_pair(ZETA_SLOPE, ZETA_SLOPE)
+    C = 4.0 * min_feasible_budget(stations)
+    for bad in (-0.1, 0.0, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="zeta_shape_tol"):
+            Optimizer(stations, C, zeta_shape_tol=bad)

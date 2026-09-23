@@ -8,7 +8,7 @@ from qopt.allocator import allocate, min_feasible_budget, noise_floor
 from qopt.analyzer import AnalyticAnalyzer
 from qopt.exceptions import InfeasibleBudgetError, SimulationQualityError
 from qopt.network import Network
-from qopt.zeta import ZETA_SLOPE
+from qopt.zeta import ZETA_SHAPE_TOL, ZETA_SLOPE
 
 
 @dataclass
@@ -90,7 +90,8 @@ class Optimizer:
 
     def __init__(self, stations, budget, *, analyzer=None, tol=1e-9, max_iter=None,
                  initial_zeta=None, damping=None, noise_kappa=1.0,
-                 final_evaluation=True, strict=False, warm_start=True):
+                 final_evaluation=True, strict=False, warm_start=True,
+                 zeta_shape_tol=ZETA_SHAPE_TOL):
         if isinstance(stations, Network):
             self.network = stations
             self.stations = list(stations.stations)
@@ -119,6 +120,18 @@ class Optimizer:
             raise ValueError(
                 f"noise_kappa must be a finite number >= 0, got {self.noise_kappa}"
             )
+
+        # None disables the measured-vs-analytic E[T] cross-check; any other value must
+        # be a usable relative tolerance. `inf` is rejected rather than treated as
+        # "disabled" so there is exactly one way to turn it off.
+        if zeta_shape_tol is not None and not (
+            math.isfinite(zeta_shape_tol) and zeta_shape_tol > 0.0
+        ):
+            raise ValueError(
+                f"zeta_shape_tol must be None or a finite number > 0, got "
+                f"{zeta_shape_tol}"
+            )
+        self.zeta_shape_tol = zeta_shape_tol
 
         if getattr(self.analyzer, "seed_policy", None) == "fixed" and not final_evaluation:
             warnings.warn(
@@ -189,6 +202,8 @@ class Optimizer:
             S = allocate(stations, self.budget, zeta)  # S^(1)
 
         degraded = []
+        zeta_shape_flags = []
+        shape_checked = set()     # station ids already flagged; warn once each
         sim_calls = 0
         iterations = 0
         residual = math.inf
@@ -202,6 +217,46 @@ class Optimizer:
             if stochastic:
                 sim_calls += 1
             degraded.extend(evaluation.degraded)
+
+            # Under slope calibration phi comes from the station's ANALYTIC model while
+            # E[T] is measured, so a model parameter describing something the station
+            # does not actually see -- `cov_a` for an arrival process shaped by internal
+            # traffic -- buys a converged, plausible, quietly suboptimal answer with no
+            # symptom of its own. Comparing the two E[T] values tests exactly that
+            # assumption, costs one analytic evaluation, and AMPLIFIES what it detects:
+            # a 24% error in phi shows up as a 268% error in E[T].
+            #
+            # Here and not in `zeta_from`, because `_noise_floor` calls that hook with a
+            # CI HALF-WIDTH in the T position -- a shape check inside it would compare a
+            # half-width against a sojourn time and fire on every stochastic iteration.
+            #
+            # Warned once per station: the cause is a constructor argument and cannot
+            # heal between iterations. Vacuous on the analytic path, where `evaluate`
+            # returns this same `sojourn_time` at this same S. On a stochastic path,
+            # though, an early noisy measurement can push a station whose model is fine
+            # past the tolerance -- warn-once then makes that flag stick for the rest of
+            # the run, which is part of why the flag is advisory and kept out of
+            # `degraded` rather than treated as a hard quality signal.
+            if self.zeta_shape_tol is not None:
+                for st, T, Si in zip(stations, evaluation.sojourn_times, S):
+                    if st.zeta_mode != ZETA_SLOPE or id(st) in shape_checked:
+                        continue
+                    T_model = st.sojourn_time(Si)
+                    if abs(T / T_model - 1.0) > self.zeta_shape_tol:
+                        shape_checked.add(id(st))
+                        message = (
+                            f"station {st.name!r}: measured E[T]={T:g} disagrees with "
+                            f"its analytic model's {T_model:g} by "
+                            f"{abs(T / T_model - 1.0) * 100:.1f}%, above "
+                            f"zeta_shape_tol={self.zeta_shape_tol:g}. Slope-calibrated "
+                            f"zeta takes the SHAPE of E[T] from that model, so check the "
+                            f"station's parameters -- most often cov_a, which is never "
+                            f"sent to the simulator and must describe the arrival process "
+                            f"the station actually sees, internal traffic included. "
+                            f"cov_a=1 is the safe assumption when it is unknown."
+                        )
+                        zeta_shape_flags.append(message)
+                        warnings.warn(message, RuntimeWarning, stacklevel=2)
 
             zeta = [
                 st.zeta_from(T, Si)
@@ -363,6 +418,7 @@ class Optimizer:
             sim_calls=sim_calls,
             zeta_phi=zeta_phi,
             zeta_mode=zeta_mode,
+            zeta_shape_flags=zeta_shape_flags,
         )
 
     def _noise_floor(self, stations, S, zeta, ci):
