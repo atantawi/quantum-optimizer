@@ -183,8 +183,11 @@ class Station(ABC):
         InstabilityError rather than this dividing by zero. Below the boundary h is
         negative -- but that costs nothing, because BOTH evaluations are then unstable
         and this raises whichever of the two runs first. Reordering the calls or taking
-        `abs(h)` is therefore indistinguishable from what is written here at every S
-        (probed at six capacities under five variants of the step). The load-bearing
+        `abs(h)` therefore changes no OUTCOME at any S -- probed at six capacities under
+        five variants of the step; all three raise wherever any of them does, and agree
+        bitwise wherever they return. (Only the `S*mu` quoted in the raised message
+        differs, since the two orders reach _check_stable with the other evaluation
+        point. No test matches on it.) The load-bearing
         property is the SCALING to spare capacity: scaling to `S`, or a fixed step,
         raises a hair above the boundary where this returns a derivative. Pinned by
         test_the_finite_difference_step_stays_inside_the_stability_region.

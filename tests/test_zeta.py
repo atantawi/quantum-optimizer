@@ -186,7 +186,8 @@ def test_dt_ds_refuses_an_unstable_capacity():
     # What this pins is "no derivative for a station that has no sojourn time", and
     # nothing more. At and below the boundary every evaluation the difference makes is
     # unstable, so the subclass's own _check_stable raises whichever of the two calls
-    # runs first: the sign of h and their order cannot be distinguished by any input. At
+    # runs first: no input distinguishes the sign of h or their order by OUTCOME, though
+    # the two orders do quote different S*mu in the message they raise. At
     # S == gamma/mu the step is 0, and sojourn_time(S) raises before the division by
     # 2*h can. The step property that IS pinnable is its scaling -- next test.
     st = QuadraticStation(gamma=0.5, mu=1.0)
@@ -577,11 +578,15 @@ def test_the_reported_zeta_closes_the_eq_21_round_trip_on_the_analytic_path():
     # evaluation is deterministic at the converged S, so those are the same numbers the
     # last allocate saw and the round trip closes. On a stochastic analyzer they come
     # from the fresh-seeded final evaluation -- a different sample path from the CRN
-    # iterate that set the capacities -- and the round trip does NOT close: measured at
-    # +8.28% / -17.71% with a station-dependent perturbation. (A UNIFORM perturbation
-    # leaves it closing to ~1e-10, because eq 21 is a share rule, so no test that scales
-    # all stations alike can see the gap.) README's `Result.zeta` sentence states which
-    # E[T] the reported zeta belongs to; do not read this test as promising more.
+    # iterate that set the capacities -- and the round trip does NOT close. Measured on
+    # this same pair, with an analyzer that returns the analytic E[T] unperturbed to the
+    # loop and scales station i by factors[i] on the fresh_seed call only: factors
+    # [1.2, 0.8] gives +4.06% / -11.20%, [1.1, 0.9] gives +2.06% / -5.68%, [1.05, 0.95]
+    # gives +1.04% / -2.86%. The gap scales with the perturbation and has no fixed size,
+    # so quote the recipe with any figure. A UNIFORM factor closes to ~4e-13 instead
+    # ([1.1, 1.1]), because eq 21 is a share rule -- so no test that scales all stations
+    # alike can see the gap at all. README's `Result.zeta` sentence states which E[T] the
+    # reported zeta belongs to; do not read this test as promising more.
     from qopt.allocator import allocate
 
     stations = _mixed_pair(ZETA_SLOPE, ZETA_SLOPE)
@@ -738,8 +743,15 @@ def test_slope_mode_on_an_all_mm1_network_matches_level_mode_to_machine_precisio
     # cancellation in its closed form does not round exactly. So every capacity must
     # agree to machine precision -- and what that catches is a NON-UNIFORM error in phi:
     # eq 21 is a share rule, so a stray factor applied to every station alike cancels out
-    # of the capacities by construction and is invisible here. Any phi error that varies
-    # across the three stations moves them by vastly more than 1e-12.
+    # of the capacities by construction and is invisible here at any size.
+    #
+    # Measured sensitivity, so nobody reads more into rel=1e-12 than it holds: a
+    # station-dependent phi deviation of at most e moves the capacities by 0.2*e to
+    # 0.5*e (0.23 with one station off, 0.52 with one up and one down by e) -- the share
+    # rule ATTENUATES a non-uniform error rather than amplifying it. So this assertion
+    # first fails around e = 1e-11 and a non-uniform error of 1e-12 or below slips
+    # through. That is the intended reach: under any plausible defect in the slope arm
+    # phi is wrong here by a factor, not by an ulp.
     def net(mode):
         return [
             GG1Station.mm1(0.6, 1.5, 1.0, c=2.0, name="a", zeta_mode=mode),
@@ -827,9 +839,12 @@ def test_the_shape_tolerance_is_a_relative_disagreement_not_an_absolute_time():
     # do it -- the budget is the same multiple of a floor that scales with mu, so S
     # absorbs the change and S*mu, rho and E[T] all come out unmoved. Scaling both
     # leaves every rho and every capacity ANALYTICALLY unmoved while dividing E[T] by
-    # 100 -- measured, they agree to 1-2 ulp rather than bitwise, since eq 21 divides by
-    # a sqrt(mu) that is 100x larger. Nothing here rests on that: the test needs only
-    # the flag and the small absolute difference below. So
+    # 100 -- measured, they agree to 1-2 ulp rather than bitwise. Three separate roundings
+    # contribute, so do not attribute it to one: gamma/mu itself moves (0.6/1.5 is
+    # 0.39999999999999997 where 60.0/150.0 is exactly 0.4), which shifts the floor and
+    # so the budget and slack BEFORE eq 21 runs; phi moves an ulp at the same S; and
+    # eq 21's share weights divide by a sqrt(mu) 100x larger. Nothing here rests on any
+    # of that: the test needs only the flag and the small absolute difference below. So
     # _ScaledAnalyzer(4.0) injects the same 300% disagreement a relative tolerance must
     # still fire on, while the absolute difference shrinks to ~0.016.
     stations = [

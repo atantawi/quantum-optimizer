@@ -514,7 +514,7 @@ revert the behaviour and confirm the test fails, with bytecode invalidation forc
 - **Redoing the contraction proof.** `findings.md` §7 notes that
   `docs/convergence-tuned-r-star`'s analysis is for the current map; slope ζ changes the map. That
   is a docs task on local material, and the measurements show no practical change (iterations
-  5–18 vs 6–18, zero failures, zero off-optimum rows over 13 budgets from `1.0001×` to `1e4×` the
+  5–17 vs 6–18, zero failures, zero off-optimum rows over 13 budgets from `1.0001×` to `1e4×` the
   floor).
 - **The `findings.md` §6 blend knob `f`.** Stays in the probe.
 - **Any change to the paper or `docs/analysis.pdf`.**

@@ -2242,7 +2242,7 @@ Co-Authored-By: Claude <209825114+claude[bot]@users.noreply.github.com>"
 
 Recorded so no task quietly picks them up:
 
-- **Redoing the contraction argument** for the new map (`docs/convergence-tuned-r-star` analyses the current one). Measurements show no practical change: iterations 5–18 against 6–18, zero failures across 13 budgets from 1.0001× to 1e4× the floor.
+- **Redoing the contraction argument** for the new map (`docs/convergence-tuned-r-star` analyses the current one). Measurements show no practical change: iterations 5–17 against 6–18, zero failures across 13 budgets from 1.0001× to 1e4× the floor.
 - **The `findings.md` §6 blend knob** `ζ = [1 + f(φ−1)]·T·x`. A research instrument; it stays in the probe.
 - **Any edit to `docs/analysis.pdf`** or to the paper.
 - **Changing the default.** It stays `ZETA_LEVEL`.
