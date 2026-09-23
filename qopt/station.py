@@ -26,10 +26,23 @@ def distribution_dict(rate, scv):
 _FD_STEP = 1e-7
 """Central-difference step for `Station.dT_dS`, as a FRACTION OF SPARE CAPACITY.
 
-Scaled to spare capacity rather than to S, which is what keeps `S - h` strictly inside the
-stability region for a station run arbitrarily close to its boundary. 1e-7 is near the
-cube-root-of-epsilon optimum for a central difference and is measured to agree with the
-closed forms to 6.7e-09 relative (docs/slope-calibrated-zeta/probe-output.txt section 1).
+Scaled to spare capacity rather than to S, which is what keeps `S - h` inside the stability
+region for a station run close to its boundary. Not ARBITRARILY close: below a spare
+capacity of about ulp(S)/1e-7 the step underflows and `S - h` rounds back to S -- inside
+the region still, but no longer a distinct point. `dT_dS` widens there; see its docstring
+for why the nominal step stops being the divisor at that point.
+
+1e-7 is near the cube-root-of-epsilon optimum for a central difference. Against the closed
+forms it agrees to 1.5e-08 relative at the three loads
+docs/slope-calibrated-zeta/probe-output.txt section 1 tabulates, and to 6.8e-08 worst case
+/ 6.7e-10 median over a 1800-point sweep of six station types across rho 0.02..0.999. That
+probe's own `dT_dS_fd` helper is a local copy of the pre-widening expression and prints
+6.7e-09 for the same three loads: it measures the arithmetic as the design study left it,
+not as `Station.dT_dS` now computes it, so the two figures are not comparable and the
+probe's is not the shipped one. The sweep is what covers the shipped path, and it is where
+the true-spacing divisor measures BETTER than the nominal one on both worst case and
+median -- at those three tabulated loads alone the nominal step happens to look better,
+which is why three points were not enough to choose on.
 """
 
 
@@ -183,14 +196,59 @@ class Station(ABC):
         InstabilityError rather than this dividing by zero. Below the boundary h is
         negative -- but that costs nothing, because BOTH evaluations are then unstable
         and this raises whichever of the two runs first. Reordering the calls or taking
-        `abs(h)` therefore changes no OUTCOME at any S -- probed at six capacities under
-        five variants of the step; all three raise wherever any of them does, and agree
-        bitwise wherever they return. (Only the `S*mu` quoted in the raised message
+        `abs(h)` therefore changes no OUTCOME at any S -- probed at thirteen capacities
+        spanning both sides of the boundary, the widening branch below, and the ordinary
+        interior; all three raise wherever any of them does, and agree bitwise wherever
+        they return. (Only the `S*mu` quoted in the raised message
         differs, since the two orders reach _check_stable with the other evaluation
         point. No test matches on it.) The load-bearing
         property is the SCALING to spare capacity: scaling to `S`, or a fixed step,
         raises a hair above the boundary where this returns a derivative. Pinned by
         test_the_finite_difference_step_stays_inside_the_stability_region.
+
+        Scaling to spare capacity has a floating-point cost of its own, which the widening
+        branch pays: when the spare capacity is small enough that `h` falls below one ulp
+        of S, `S + h` and `S - h` both round back to S, and the difference of two
+        IDENTICAL sojourn times is 0 -- a zero slope at a point where the true slope is
+        enormous, which `zeta_from` then rejects as a non-positive phi while naming the
+        wrong cause. That band is wide, not a corner: for a station at gamma/mu = 0.5 it
+        is every spare capacity below 1.1e-9. Widening to the neighbouring representable
+        capacities fixes it, and the lower one is kept inside the stability region so a
+        station one ulp above its boundary goes one-sided rather than raising while stable.
+
+        The divisor is the endpoints' ACTUAL spacing, `hi - lo` (exact here by Sterbenz),
+        not the nominal `2 * h`. Rounding the endpoints moves their true spacing away from
+        `2 * h`, and dividing by the nominal step misreports the slope by the ratio of the
+        two -- silently, with distinct endpoints and no guard to fire, measured at a clean
+        factor of 2 just above the collapse band. Over a 1800-point sweep of six station
+        types across rho 0.02..0.999 the true spacing is also the more accurate divisor
+        (worst 6.8e-08 vs 1.5e-07, median 6.7e-10 vs 1.0e-09, better at 1188 of 1800
+        points). Both are pinned by
+        test_the_finite_difference_divides_by_the_spacing_it_actually_used.
+
+        What widening cannot buy is resolution in `x = S*mu - gamma`, which is what E[T]
+        actually depends on. Within an ulp or two of the boundary a one-ulp change in S
+        may leave `S*mu` unchanged -- for gamma=0.6, mu=1.5 the two neighbouring
+        capacities either side of the boundary share a single `S*mu` -- so both sojourn
+        times are bitwise equal and this returns 0 again. That is the measured slope at
+        the finest resolution the number line offers, and it is indistinguishable from a
+        genuinely flat E[T], so it is reported rather than guessed at: `zeta_from` refuses
+        the point. "Two ulps" is measured, not estimated: over a 25x25 grid of (gamma, mu),
+        90 pairs produce such a zero and the largest distance above the boundary at which
+        one appears is exactly 2 ulps, with none at any spare capacity from 1e-9 up to 10.
+        `allocate` reaches it only with a collapsed share (see `min_feasible_budget`), and
+        no shipped station reaches it at all -- `GG1Station` and `ForkJoinStation` both
+        override this with closed forms. Pinned by
+        test_the_finite_difference_reports_a_zero_it_cannot_resolve.
+
+        The step width can also be exactly 0.0 on a station that is perfectly stable, and
+        that case used to CRASH rather than misreport. `h` scales to `S - gamma/mu` while
+        stability tests `S * mu > gamma`, and the two expressions disagree at the boundary:
+        for gamma=0.1, mu=0.39 the capacity `gamma/mu` is stable -- x = 1.4e-17 -- with a
+        step of exactly zero, so `/ (2.0 * h)` raised ZeroDivisionError from inside a
+        derivative, naming no station. 148 (gamma, mu) pairs on a 59x59 grid do this;
+        widening gives all of them a one-sided difference and a finite negative slope.
+        Pinned by test_the_finite_difference_survives_a_zero_width_step.
 
         For a fork-join this differences along the station's FIXED CURRENT RAY, because
         `sojourn_time` scales both servers with S. That is the radial derivative slope
@@ -198,7 +256,18 @@ class Station(ABC):
         reproduce the `forkjoin_policy._dt_dm1` defect.
         """
         h = _FD_STEP * (S - self.gamma / self.mu)
-        return (self.sojourn_time(S + h) - self.sojourn_time(S - h)) / (2.0 * h)
+        hi = S + h
+        lo = S - h
+        if hi == lo:
+            # h underflowed relative to S. Widen to the neighbouring representable
+            # capacities, keeping the lower one inside the stability region -- one ulp
+            # above the boundary there is nothing below S to use, so the difference goes
+            # one-sided rather than raising on a station that is stable.
+            hi = math.nextafter(S, math.inf)
+            lo = math.nextafter(S, -math.inf)
+            if not lo * self.mu > self.gamma:
+                lo = S
+        return (self.sojourn_time(hi) - self.sojourn_time(lo)) / (hi - lo)
 
     def phi(self, S):
         """Elasticity of E[T] in spare capacity: -d log T / d log x, with x = S*mu - gamma.

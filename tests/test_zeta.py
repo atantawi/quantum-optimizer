@@ -8,7 +8,7 @@ import pytest
 from qopt.allocator import min_feasible_budget
 from qopt.exceptions import InstabilityError
 from qopt.optimizer import Optimizer, Result
-from qopt.station import ForkJoinStation, GG1Station, Station
+from qopt.station import _FD_STEP, ForkJoinStation, GG1Station, Station
 from qopt.zeta import (
     ZETA_LEVEL,
     ZETA_MODES,
@@ -228,6 +228,117 @@ def test_the_finite_difference_step_stays_inside_the_stability_region():
     slope = st.dT_dS(boundary + 1e-9)                # a hair above it, still fine
     assert math.isfinite(slope) and slope < 0.0, slope
 
+
+def test_the_finite_difference_endpoints_stay_representably_distinct():
+    # Near the boundary the step is a fraction of a spare capacity that is itself tiny,
+    # so h underflows relative to S: `S + h == S - h == S`, the difference of two
+    # IDENTICAL sojourn times is 0, and phi comes back -0.0. `zeta_from` then rejects a
+    # point that is perfectly stable -- T is finite and x > 0 -- with the "phi is
+    # non-positive" ValueError, which names the wrong cause.
+    #
+    # The kill set: `h < ulp(S)` at every spare capacity below ~1.1e-9 for this station,
+    # i.e. the whole of the region 1e-7 * spare < ulp(S). Restoring `/ (2.0 * h)` with
+    # `S ± h` endpoints returns -0.0 at every S below.
+    st = QuadraticStation(gamma=0.5, mu=1.0)
+    boundary = st.gamma / st.mu                      # 0.5
+    for spare in (1e-10, 3e-10, 1e-12, 1e-14, 1e-15):
+        S = boundary + spare
+        assert S * st.mu > st.gamma, spare           # genuinely stable, so phi must exist
+        slope = st.dT_dS(S)
+        assert math.isfinite(slope) and slope < 0.0, (spare, slope)
+        # T = x**-2 makes phi exactly 2 at every S -- the boundary is no exception.
+        #
+        # The tolerance is DERIVED, not chosen. Once widening is in force the step is one
+        # ulp of S, so the central difference's own second-order truncation error is
+        # O((ulp(S)/spare)**2). Measured relative error at the last three spares is
+        # 2.5e-08, 2.5e-04 and 2.5e-02, against a bound of 1.0e-06, 9.9e-04 and 9.9e-02
+        # -- the 1e-6 floor decides the first of those, where the truncation term is only
+        # 9.9e-08, and the derived term decides the other two. That is the accuracy the
+        # number line affords at this S and no step choice beats it; the bound is still
+        # far from vacuous, since the pre-fix -0.0 is a relative error of 1.0 and the
+        # half-collapsed band's factor of 2 is 1.0 as well.
+        resolvable = math.ulp(S) / spare
+        assert st.phi(S) == pytest.approx(
+            2.0, rel=max(1e-6, 8.0 * resolvable ** 2)
+        ), (spare, st.phi(S))
+        # And the calibration it feeds must go through rather than reject the point.
+        assert st.zeta_from(st.sojourn_time(S), S) > 0.0, spare
+
+
+def test_the_finite_difference_divides_by_the_spacing_it_actually_used():
+    # The half-collapsed band, which is worse than the collapse above because it is
+    # SILENT: `S + h != S - h`, so no guard fires, but rounding has moved the endpoints
+    # to a spacing that is not the nominal `2 * h`. Dividing by `2 * h` then misreports
+    # the slope by the ratio of the two -- measured up to a clean factor of 2, with no
+    # error and no warning, straight into eq 21's allocation.
+    #
+    # This is why the fix is `(hi - lo)` and not merely "widen when the endpoints
+    # collapse": widening alone leaves this band reporting phi = 3.97 where the station's
+    # phi is exactly 2. Sterbenz makes `hi - lo` exact for endpoints this close, so the
+    # divisor is the spacing that was actually differenced.
+    st = QuadraticStation(gamma=0.5, mu=1.0)
+    boundary = st.gamma / st.mu
+    # Each of these has distinct endpoints whose true spacing is not 2*h; the last is
+    # the factor-of-2 case, the first two are the ordinary ~0.08% skew far from it.
+    for spare in (5.6e-10, 1e-9, 1.2e-9, 1e-8, 1e-7):
+        S = boundary + spare
+        h = _FD_STEP * (S - boundary)
+        assert S + h != S - h, spare                 # not the collapsed case above
+        assert st.phi(S) == pytest.approx(2.0, rel=1e-6), (spare, st.phi(S))
+
+
+def test_the_finite_difference_keeps_its_lower_endpoint_inside_the_region():
+    # One ulp above the boundary there is NO representable capacity between S and
+    # gamma/mu, so a central difference is impossible and `nextafter(S, -inf)` is the
+    # boundary itself. Widening blindly would raise InstabilityError from inside a
+    # derivative whose station is stable; the difference has to go one-sided instead.
+    #
+    # Only the SIGN and finiteness are claimed here, deliberately. With a single ulp of
+    # resolution on a T that varies as x**-2 the truncation error is O(1) -- phi measures
+    # 0.75 against an exact 2 -- and no step choice can recover accuracy at this S. What
+    # the sign buys is that phi stays positive, so slope calibration proceeds on a stable
+    # station instead of rejecting it, which is the defect being fixed. A caller this
+    # close to a boundary has a capacity problem, not a derivative problem.
+    st = QuadraticStation(gamma=0.5, mu=1.0)
+    boundary = st.gamma / st.mu
+    S = math.nextafter(boundary, math.inf)
+    assert math.nextafter(S, -math.inf) == boundary   # no room below: one-sided or bust
+    slope = st.dT_dS(S)
+    assert math.isfinite(slope) and slope < 0.0, slope
+    assert st.phi(S) > 0.0, st.phi(S)
+
+
+def test_the_finite_difference_reports_a_zero_it_cannot_resolve():
+    # The residual corner widening cannot fix, pinned so it cannot quietly get worse.
+    # E[T] depends on x = S*mu - gamma, and within an ulp or two of the boundary a
+    # one-ulp change in S need not move `S*mu` at all: for gamma=0.6, mu=1.5 the
+    # capacities either side of the boundary share a single `S*mu`, so both sojourn times
+    # are bitwise equal and the difference is a true 0 at the finest available resolution.
+    #
+    # Claimed here: it returns 0 rather than a wrong nonzero number, and the calibration
+    # REFUSES the point rather than allocating on it. That is the safe outcome, and it is
+    # unreachable in practice -- GG1Station overrides dT_dS with a closed form, so the
+    # base difference has to be called explicitly to see this at all.
+    st = GG1Station(0.6, 1.5, c=2.0, cov_a=1.0, cov_s=1.0, zeta_mode=ZETA_SLOPE)
+    boundary = st.gamma / st.mu
+    S = math.nextafter(boundary, math.inf)
+    assert S * st.mu == math.nextafter(S, math.inf) * st.mu   # the collision itself
+    assert Station.dT_dS(st, S) == 0.0
+    # The closed form this station actually uses is unaffected, which is why no shipped
+    # station reaches the corner.
+    assert st.dT_dS(S) < 0.0 and math.isfinite(st.dT_dS(S))
+
+
+def test_the_finite_difference_still_refuses_at_and_below_the_boundary():
+    # The widening must not resurrect a derivative where there is no sojourn time. At
+    # S == gamma/mu the spare capacity is 0, so every candidate endpoint is at or below
+    # the boundary and `sojourn_time` has to raise -- the property the old `h == 0`
+    # arithmetic gave for free and a nextafter fallback could silently take away.
+    st = QuadraticStation(gamma=0.5, mu=1.0)
+    boundary = st.gamma / st.mu
+    for S in (boundary, math.nextafter(boundary, -math.inf), boundary * 0.5):
+        with pytest.raises(InstabilityError):
+            st.dT_dS(S)
 
 def test_phi_on_an_unbound_gamma_names_the_station():
     # Review Focus 3. A station built bare for a Network has no gamma until bind_gamma.
@@ -940,3 +1051,53 @@ def test_an_invalid_shape_tolerance_is_rejected():
     for bad in (-0.1, 0.0, float("nan"), float("inf")):
         with pytest.raises(ValueError, match="zeta_shape_tol"):
             Optimizer(stations, C, zeta_shape_tol=bad)
+
+
+def test_the_finite_difference_survives_a_zero_width_step():
+    """`h` can be exactly 0.0 on a station that is genuinely stable, which used to CRASH.
+
+    The step scales to spare capacity, `h = _FD_STEP * (S - gamma/mu)`, and the stability
+    test is `S * mu > gamma`. Those are different expressions, so they disagree at the
+    boundary: for gamma=0.1, mu=0.39 the capacity `S = gamma/mu` satisfies `S * mu > gamma`
+    -- x = 1.4e-17 -- while `S - gamma/mu` is exactly 0.0. The station is stable, E[T] is
+    finite, and the step width is zero.
+
+    Pre-fix that divided by `2.0 * h == 0.0` and raised ZeroDivisionError: a bare arithmetic
+    crash from inside a derivative, naming no station and suggesting no cause. Widening turns
+    it into the one-sided difference the number line can actually support. This is not an
+    exotic hand-picked pair -- sweeping gamma in 0.1 steps and mu in 0.13 steps over a 59x59
+    grid, 148 (gamma, mu) pairs put `gamma/mu` on a stable-but-zero-width capacity, and every
+    one of them crashed before and returns a finite negative slope now.
+
+    The kill set: restoring `/ (2.0 * h)` with `S ± h` endpoints raises ZeroDivisionError
+    here. Restoring only the divisor, keeping widened endpoints, also raises it -- which is
+    the point, since `hi - lo` is what makes the widened endpoints usable.
+    """
+    st = QuadraticStation(gamma=0.1, mu=0.39)
+    S = st.gamma / st.mu
+
+    assert S * st.mu > st.gamma                  # stable, so a derivative is owed
+    assert S - st.gamma / st.mu == 0.0           # yet the scaled step has zero width
+    assert _FD_STEP * (S - st.gamma / st.mu) == 0.0
+
+    slope = st.dT_dS(S)
+    assert math.isfinite(slope) and slope < 0.0, slope
+
+    # phi is NOT checked against 2 here. One-sided over a single ulp at x = 1.4e-17 is the
+    # coarsest resolution in the whole domain, and phi measures far from 2; the contract at
+    # this capacity is that it returns a usable sign at all instead of crashing.
+    assert st.zeta_from(st.sojourn_time(S), S) > 0.0
+
+    # Every one of the 148 grid pairs, not just this one.
+    survived = 0
+    for gi in range(1, 60):
+        for mi in range(1, 60):
+            gamma, mu = gi * 0.1, mi * 0.13
+            b = gamma / mu
+            if not b * mu > gamma:
+                continue
+            other = QuadraticStation(gamma=gamma, mu=mu)
+            d = other.dT_dS(b)
+            assert math.isfinite(d) and d < 0.0, (gamma, mu, d)
+            survived += 1
+    assert survived == 148, survived

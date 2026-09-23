@@ -141,19 +141,63 @@ Three new methods on `Station`.
 def dT_dS(self, S):
     h = _FD_STEP * (S - self.gamma / self.mu)      # _FD_STEP = 1e-7, module-private
                                                    # to station.py
-    return (self.sojourn_time(S + h) - self.sojourn_time(S - h)) / (2.0 * h)
+    hi = S + h
+    lo = S - h
+    if hi == lo:                                   # h underflowed relative to S
+        hi = math.nextafter(S, math.inf)
+        lo = math.nextafter(S, -math.inf)
+        if not lo * self.mu > self.gamma:           # no room below: go one-sided
+            lo = S
+    return (self.sojourn_time(hi) - self.sojourn_time(lo)) / (hi - lo)
 ```
 
 Not an abstract method: slope ζ then works for **any** station, including user subclasses, and no
-existing subclass breaks. `probe-output.txt` §1 validates this route — the closed forms below agree with
-exactly this difference to `6.7e-09` relative across every case tested.
+existing subclass breaks.
 
-The step is scaled to **spare capacity**, which buys two properties:
+The step is scaled to **spare capacity**, which buys one property outright:
 
 - `S − h > γ/μ` always, by construction, so the difference can never step across the stability
   boundary.
-- At `S == γ/μ` exactly, `h = 0` and `sojourn_time` raises `InstabilityError` before any division
-  by zero.
+
+An earlier draft claimed a second: that at `S == γ/μ` exactly, `h = 0` and `sojourn_time` raises
+`InstabilityError` before any division by zero. That is false, and it is the fourth bullet below —
+`h` scales to `S − γ/μ` while stability tests `Sμ > γ`, and the two disagree at the boundary.
+
+Scaling to spare capacity costs four properties it does *not* buy, which is why the widening branch
+and the `hi − lo` divisor were added after the review of PR #26:
+
+- **`S ± h` need not be distinct.** Below a spare capacity of about `ulp(S)/1e-7` — every spare
+  capacity under `1.1e-9` for a station at `γ/μ = 0.5` — `h` falls under one ulp of `S` and both
+  endpoints round back to `S`. The difference of two identical sojourn times is `0`, so `φ` comes
+  back `−0.0` and `zeta_from` rejects a *stable* point while blaming a non-positive φ. Widening to
+  the neighbouring representable capacities fixes it; the lower endpoint is kept inside the
+  stability region, so a station one ulp above its boundary differences one-sided instead of
+  raising while stable.
+- **`2·h` is not the spacing actually differenced.** Rounding moves the endpoints off the nominal
+  step, so dividing by `2·h` misreports the slope by the ratio of the two — silently, with distinct
+  endpoints and no guard to fire, measured at a clean factor of 2 just above the collapse band.
+  `hi − lo` is exact here by Sterbenz.
+- **Resolution in `x = Sμ − γ` is still unbuyable.** Within an ulp or two of the boundary a one-ulp
+  change in `S` may leave `Sμ` unchanged (γ=0.6, μ=1.5 is such a case), both sojourn times are
+  bitwise equal, and the difference is a true `0`. Indistinguishable from a genuinely flat `E[T]`,
+  so it is reported and `zeta_from` refuses the point. Measured: over a 25×25 (γ, μ) grid, 90 pairs
+  produce such a zero and the largest distance at which one appears is exactly 2 ulps, with none at
+  any spare capacity from `1e-9` to `10`.
+- **`h == 0` does not imply an unstable `S`.** `h` scales to `S − γ/μ`; stability tests `Sμ > γ`.
+  For γ=0.1, μ=0.39 the capacity `γ/μ` satisfies `Sμ > γ` — x = `1.4e-17` — with a step of exactly
+  zero, so `/ (2·h)` raised **ZeroDivisionError** on a stable station, naming nothing. 148 (γ, μ)
+  pairs on a 59×59 grid do this; widening gives each a one-sided difference and a finite negative
+  slope. `allocate` reaches such a capacity whenever a share collapses (§ eq 21 rounding), so this
+  is reachable, not hypothetical.
+
+`probe-output.txt` §1 validates the *closed forms* against a central difference and reports
+`6.7e-09` relative worst case. That figure is measured by the probe's own `dT_dS_fd` helper, a local
+copy of the pre-widening expression, so it is a record of the design study and not of the shipped
+`Station.dT_dS`. Against the closed forms the shipped path agrees to `1.5e-08` at the three loads §1
+tabulates, and to `6.8e-08` worst case / `6.7e-10` median over a 1800-point sweep of six station
+types across ρ = 0.02..0.999 — where the true-spacing divisor beats the nominal one on both worst
+case and median. At those three tabulated loads alone the nominal step looks better, which is why
+three points were not enough to choose on.
 
 For a fork-join, differencing `sojourn_time` varies `S` along the **fixed current ray**, so this
 default yields the radial derivative §4.3 requires. It cannot accidentally reproduce the
