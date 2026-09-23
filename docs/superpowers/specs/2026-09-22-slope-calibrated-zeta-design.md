@@ -520,7 +520,8 @@ revert the behaviour and confirm the test fails, with bytecode invalidation forc
 ## 11. Out of scope
 
 - **Redoing the contraction proof.** `findings.md` §7 notes that
-  `docs/convergence-tuned-r-star`'s analysis is for the current map; slope ζ changes the map. That
+  the convergence analysis held in `docs/convergence-tuned-r-star` (a local working directory, not
+  part of this repository) is for the current map; slope ζ changes the map. That
   is a docs task on local material, and the measurements show no practical change (iterations
   5–17 vs 6–18, zero failures, zero off-optimum rows over 13 budgets from `1.0001×` to `1e4×` the
   floor).
