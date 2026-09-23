@@ -1,8 +1,9 @@
 # Slope-calibrated ζ
 
-A proposal, with evidence. **Implemented** as a per-station opt-in: `zeta_mode=ZETA_SLOPE`, default still level. See
-`docs/superpowers/specs/2026-09-22-slope-calibrated-zeta-design.md`. `qopt` on `main` ships the
-level-calibrated ζ of eq 22 and this directory argues for changing that.
+The derivation, the evidence, and the outcome. **Implemented** as a per-station opt-in:
+`zeta_mode=ZETA_SLOPE`, with the default still the level-calibrated ζ of eq 22 that `qopt` has
+shipped all along. See `docs/superpowers/specs/2026-09-22-slope-calibrated-zeta-design.md`.
+This directory made the case and records what it cost; the paper is unchanged.
 
 | file | what it is |
 |---|---|

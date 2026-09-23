@@ -1,8 +1,9 @@
 # Slope-calibrated ζ
 
 **Status: implemented** (2026-09-22) as a per-station opt-in; the default is still eq 22's level
-calibration and the paper is unchanged. `main` ships eq 22's level calibration; this argues for
-replacing it and records what that would cost.
+calibration, and the paper is unchanged. What follows is the argument as it was made, in its own
+tense: it argues for *replacing* the default, which is not what was built. Read its "would" as
+conditional on a decision that landed narrower -- an opt-in, not a swap.
 
 Equation numbers follow [`../paper-map.md`](../paper-map.md): `eq 21` (the allocation rule) and
 `eq 22` (the ζ inversion) mean `docs/analysis.pdf`, the snapshot committed in `37a3a11`. Every
