@@ -1101,3 +1101,59 @@ def test_the_finite_difference_survives_a_zero_width_step():
             assert math.isfinite(d) and d < 0.0, (gamma, mu, d)
             survived += 1
     assert survived == 148, survived
+
+
+def test_zeta_is_bounded_away_from_zero_at_the_boundary_unless_k_is_zero():
+    """The dividing line between stations whose share can collapse and stations whose cannot,
+    and it is a property of k, not of the calibration.
+
+    Both arms return `(phi *) T * x`, so what happens as the spare capacity x -> 0 depends on
+    how fast E[T] blows up. For k = (cov_a^2 + cov_s^2)/2 > 0 the Allen-Cunneen congestion
+    term `k*gamma/(m*x)` diverges at exactly the rate x vanishes, so
+
+        zeta -> k * rho,     rho = gamma/m -> 1
+
+    in BOTH modes -- phi -> 1 there, which is why slope and level agree in the limit even
+    though they disagree at an interior S. Bounded away from zero, and measurably so even for
+    near-deterministic traffic: 1.0e-02 at k = 0.01. Since eq 21 gives a station a share
+    proportional to sqrt(zeta), such a station's share cannot be driven to zero by the
+    calibration; only eq 21's own rounding can lose it, and that needs a weight ratio of 1e30
+    (test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacity).
+
+    At k = 0 exactly, the congestion term is absent, `T = 1/m` is FINITE at rho = 1, and both
+    modes send zeta -> 0 -- but at different orders, because phi is exactly `1 - rho = x/m`:
+
+        zeta_level = T*x     ~ x/gamma        (linear)
+        zeta_slope = phi*T*x ~ x^2/gamma^2    (quadratic)
+
+    so the share goes as sqrt(x) under level and as x under slope. The linear one is a
+    contraction whose fixed point is the stability boundary itself, which is the whole reason a
+    cov = 0 station can walk onto its boundary under slope calibration at budgets four orders
+    of magnitude above the floor. This test pins the two orders, not just the two limits: a
+    hundredfold squeeze of x must move level's zeta by 1e2 and slope's by 1e4.
+    """
+    gamma, mu = 1.0, 2.0
+
+    def zeta_at(cov, x, mode):
+        st = GG1Station(gamma=gamma, mu=mu, c=1.0, cov_a=cov, cov_s=cov, zeta_mode=mode)
+        S = (gamma + x) / mu
+        assert S * mu - gamma > 0.0, (cov, x)     # still strictly inside the region
+        return st.zeta_from(st.sojourn_time(S), S)
+
+    for cov in (0.1, 0.5, 1.0, 2.0):
+        k = cov ** 2
+        for mode in (ZETA_LEVEL, ZETA_SLOPE):
+            # rho -> 1, so the limit is k itself. Approached from x = 1e-8 downwards, where
+            # the 1/x in T is already large enough to have converged to it.
+            for x in (1e-8, 1e-12):
+                assert zeta_at(cov, x, mode) == pytest.approx(k, rel=1e-6), (cov, x, mode)
+
+    # k = 0: no limit to converge to, and the two modes separate by one power of x.
+    for x in (1e-4, 1e-6, 1e-8):
+        lv, sl = zeta_at(0.0, x, ZETA_LEVEL), zeta_at(0.0, x, ZETA_SLOPE)
+        assert lv == pytest.approx(x / gamma, rel=1e-3), (x, lv)
+        assert sl == pytest.approx((x / gamma) ** 2, rel=1e-3), (x, sl)
+        # And the orders are what make slope the contracting one: level's share, which goes
+        # as sqrt(zeta), shrinks as sqrt(x) while slope's shrinks as x.
+        assert math.sqrt(lv) == pytest.approx(math.sqrt(x / gamma), rel=1e-3)
+        assert math.sqrt(sl) == pytest.approx(x / gamma, rel=1e-3)

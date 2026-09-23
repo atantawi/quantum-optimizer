@@ -282,6 +282,28 @@ how `allocate` rejects bad ζ.
 (measured minimum `0.000001`). ζ_slope `= φ·T·x` stays strictly positive and `allocate`'s
 `sqrt` handles it. Pinned by a test at that extreme (§9).
 
+**But "strictly positive" is not the whole question, and this paragraph originally stopped
+there.** What eq 21 reads is the *share*, `∝ √ζ`, so the order in which ζ vanishes decides
+whether the allocation is stable. For every `k = (cov_a²+cov_s²)/2 > 0` the congestion term
+`k·γ/(m·x)` diverges at exactly the rate `x` vanishes, so `ζ → k·ρ → k` — bounded away from
+zero, `1.0e-02` even at `k = 0.01`, in *both* modes (φ → 1 at the boundary). At `k = 0` there
+is no such term, and the two modes separate by one power of `x`:
+
+| | ζ as `x → 0` | share `∝ √ζ` |
+|---|---|---|
+| level | `T·x ~ x/γ` | `~ √x` |
+| slope | `φ·T·x ~ x²/γ²` | `~ x` |
+
+Only the second is a contraction onto `x = 0`: the slope share map's fixed point *is* the
+stability boundary. So a `cov = 0` station can walk onto its own boundary under slope
+calibration at budgets four orders of magnitude above the floor, where level does not. This is
+a real restriction on slope mode's domain, it is confined to `k = 0` exactly, and it is pinned
+by `test_zeta_is_bounded_away_from_zero_at_the_boundary_unless_k_is_zero` together with the
+`cov = 0` arms of
+`test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacity`. The failure is
+loud (`InstabilityError` naming the station) rather than a wrong number — see `min_feasible_budget`
+for the one configuration where the same collapse is silent instead.
+
 ---
 
 ## 5. The ζ seam

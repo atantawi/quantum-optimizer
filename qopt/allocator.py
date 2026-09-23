@@ -16,13 +16,28 @@ def min_feasible_budget(stations):
     What decides that is the ratio of a station's SHARE to its own base `gamma_i/mu_i`, not
     the budget's distance from this floor: the share is added to the base, so it vanishes
     once it falls below half an ulp of it. A lopsided weight vector is therefore enough on
-    its own. Measured on two stations at gamma/mu = 0.5, the light one rounds onto its
-    boundary at 1.01x, 2x, 100x AND 10000x this floor at a weight ratio of 1e20 under slope
-    calibration, and at the same four multiples at 1e30 under level -- so this is eq 21's
-    rounding, not a slope-calibration effect, and level mode only needs a larger ratio to
-    reach it. An earlier version of this note put the effect "within a few ulps of the
-    floor", which understates it: budget proximity and weight skew are two independent
-    ways in, and the second reaches four orders of magnitude above the floor.
+    its own. An earlier version of this note put the effect "within a few ulps of the
+    floor", which understates it: budget proximity and weight skew are two independent ways
+    in. It then overcorrected, reporting a grid measured entirely on cov = 0 stations as eq
+    21's rounding. Two mechanisms are in play and only the first is:
+
+      * Eq 21's rounding, which is calibration-independent. Measured on two stations at
+        gamma/mu = 0.5 with cov = 1, where the two calibrations are bit-identical because
+        phi == 1: the light station rounds onto its boundary at a weight ratio of 1e30 and a
+        budget 1.01x this floor, under BOTH modes, and survives from 2x upwards (x = 2.0e-15
+        there). At a ratio of 1e20 it survives every multiple from 1.01x up.
+      * The k = 0 zeta degeneracy, which is specific to deterministic stations and reaches
+        much further. For any k = (cov_a^2+cov_s^2)/2 > 0, zeta tends to `k*rho` as the spare
+        capacity x tends to 0 -- 1.0e-02 at k = 0.01 -- so it stays bounded away from zero
+        and the share cannot round away for budget reasons alone. At k = 0 the congestion
+        term is absent and zeta tends to 0 instead: as x, under level, and as x^2 under
+        slope. Shares go as sqrt(zeta), so slope's share map is linear in x and contracts
+        onto the stability boundary. A cov = 0 light station therefore hits it under slope at
+        a ratio of 1e20 at 1.01x, 2x, 100x AND 10000x this floor, where level needs 1e30.
+
+    Both are pinned by
+    test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacity, which
+    keeps the cov = 1 and cov = 0 arms separate for exactly this reason.
 
     What happens next depends on how `gamma_i/mu_i` itself rounds, and only one of the two
     outcomes is loud. Where `b * mu == gamma` exactly -- gamma=0.5, mu=1.0 -- the station is

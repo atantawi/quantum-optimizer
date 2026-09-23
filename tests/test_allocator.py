@@ -216,21 +216,36 @@ def test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacit
 
     `min_feasible_budget` once described this as happening only "within a few ulps of the
     floor". It is really set by the share-to-base ratio, so weight skew reaches it at any
-    budget. Measured grid, both calibrations, light station at gamma/mu = 0.5:
+    budget. TWO INDEPENDENT mechanisms get there, and an earlier version of this test
+    conflated them: it measured its whole grid on a cov = 0 light station and reported the
+    result as eq 21's rounding, which only the first of these is.
 
-        slope: 1e20 raises at 1.01x, 2x, 100x and 10000x the floor, succeeds at 1e6x
-        level: 1e30 raises at the same four multiples, succeeds at 1e6x
+    EQ 21's ROUNDING is calibration-independent, and the clean way to see that is at cov = 1,
+    where the two modes are bit-identical -- phi == 1, so slope's `phi*T*x` IS level's `T*x`.
+    Both then need a weight ratio of 1e30 AND a budget at 1.01x the floor; from 2x upwards the
+    share survives, down to x = 2.0e-15. Two calibrations failing on exactly the same cell is
+    what rules the calibration out as the cause.
 
-    So it is not a slope-calibration effect -- level mode reaches it too, just at a larger
-    ratio. What this pins is the FAILS-LOUDLY half: the run names the station it could not
+    The cov = 0 ZETA DEGENERACY is a different thing, and it is a genuine slope-mode effect.
+    For every k > 0, `zeta -> k*rho` as x -> 0 in BOTH modes -- measured 1.0e-02 at k = 0.01,
+    i.e. bounded away from zero even for near-deterministic traffic -- because the
+    Allen-Cunneen term `k*gamma/(m*x)` diverges at exactly the rate `zeta = T*x` divides out.
+    At k = 0 that term is absent, T = 1/m is finite at the boundary, and the two modes part:
+    `zeta_level = T*x ~ x` while `zeta_slope = phi*T*x ~ x^2`, since phi is exactly `1 - rho`
+    there. A share goes as sqrt(zeta), so it is ~sqrt(x) under level and ~x under slope --
+    and only the linear map contracts onto x = 0. That is why slope reaches the boundary here
+    at a weight ratio ten orders of magnitude smaller than level does, and it is a property of
+    the k = 0 station, not of an arbitrary G/G/1.
+
+    What this pins either way is the FAILS-LOUDLY half: the run names the station it could not
     keep stable instead of reporting an objective computed at `S*mu == gamma`.
     """
     from qopt.exceptions import InstabilityError
     from qopt.optimizer import Optimizer
     from qopt.zeta import ZETA_LEVEL, ZETA_SLOPE
 
-    def run(weight_ratio, multiple, mode):
-        light = GG1Station(gamma=1.0, mu=2.0, weight=1.0, c=1.0, cov_a=0.0, cov_s=0.0,
+    def run(cov, weight_ratio, multiple, mode):
+        light = GG1Station(gamma=1.0, mu=2.0, weight=1.0, c=1.0, cov_a=cov, cov_s=cov,
                            name="light", zeta_mode=mode)
         heavy = GG1Station.mm1(gamma=1.0, mu=2.0, weight=weight_ratio, c=1.0, name="heavy",
                                zeta_mode=mode)
@@ -238,23 +253,36 @@ def test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacit
         C = multiple * min_feasible_budget(stations)
         return stations, Optimizer(stations, C).run()
 
-    # Two orders of magnitude above the floor, and again four orders above that: the
-    # collapse is not a knife-edge artefact of a budget sitting on the floor.
+    # Eq 21's rounding, at cov = 1 where the two calibrations are the same arithmetic. Only
+    # the knife-edge budget reaches it, and it takes a ratio of 1e30 to do so.
+    for mode in (ZETA_SLOPE, ZETA_LEVEL):
+        with pytest.raises(InstabilityError, match="light"):
+            run(1.0, 1e30, 1.01, mode)
+        # One doubling of the budget is enough to save the share -- barely.
+        stations, res = run(1.0, 1e30, 2.0, mode)
+        x = res.capacities[0] * stations[0].mu - stations[0].gamma
+        assert 0.0 < x < 1e-14, x
+
+    # The cov = 0 degeneracy under slope, which is NOT a knife-edge budget: two orders of
+    # magnitude above the floor, and again four orders above that.
     for multiple in (100.0, 10000.0):
         with pytest.raises(InstabilityError, match="light"):
-            run(1e20, multiple, ZETA_SLOPE)
+            run(0.0, 1e20, multiple, ZETA_SLOPE)
 
-    # Level mode reaches the same place at a larger ratio, so the effect belongs to eq 21's
-    # rounding and not to slope calibration.
+    # Level mode on the same cov = 0 station survives that ratio at those budgets, which is
+    # the sqrt(x)-versus-x difference above and not a tolerance: it needs 1e30 to fail.
+    stations, res = run(0.0, 1e20, 10000.0, ZETA_LEVEL)
+    assert res.capacities[0] * stations[0].mu > stations[0].gamma
     with pytest.raises(InstabilityError, match="light"):
-        run(1e30, 10000.0, ZETA_LEVEL)
+        run(0.0, 1e30, 10000.0, ZETA_LEVEL)
 
-    # The same network with a sane weight ratio is fine under both, so the test is about
-    # the ratio and not about these stations being unservable.
+    # The same networks with a sane weight ratio are fine under both calibrations, so the
+    # test is about the ratio and not about these stations being unservable.
     for mode in (ZETA_SLOPE, ZETA_LEVEL):
-        stations, res = run(10.0, 100.0, mode)
-        for st, Si in zip(stations, res.capacities):
-            assert Si * st.mu > st.gamma
+        for cov in (0.0, 1.0):
+            stations, res = run(cov, 10.0, 100.0, mode)
+            for st, Si in zip(stations, res.capacities):
+                assert Si * st.mu > st.gamma
 
 
 def test_a_collapsed_share_can_land_on_a_technically_stable_capacity():
