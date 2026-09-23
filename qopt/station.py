@@ -214,12 +214,36 @@ class Station(ABC):
         return -self.dT_dS(S) * x / (self.mu * self.sojourn_time(S))
 
     def zeta_from(self, T, S):
-        """Invert the functional form (eq 22) for an externally supplied E[T].
+        """Invert the functional form for an externally supplied E[T].
 
         Pure station arithmetic, independent of where E[T] came from — the analytic
-        sojourn time or a simulation run.
+        sojourn time or a simulation run. The single point at which either calibration is
+        applied, so the branch lives here and nowhere else.
+
+        LEVEL (eq 22, the default) makes the surrogate zeta/x pass through (S, T). SLOPE
+        matches its derivative instead, which is the only thing eq 21 reads -- see
+        qopt/zeta.py. The level arm is the shipped expression, operation for operation, so
+        the default path does not move by one ulp.
+
+        Both arms are LINEAR IN T, which `Optimizer._noise_floor` depends on: it passes a
+        CI half-width in the T position and needs the result to be the correspondingly
+        scaled perturbation of zeta.
+
+        No clamp on phi. It is legitimately tiny -- exactly `1 - rho` for a cov = 0
+        station, measured down to 1e-6 -- and `allocate` requires only that zeta be
+        finite and positive.
         """
-        return T * (S * self.mu - self.gamma)
+        x = S * self.mu - self.gamma
+        if self._zeta_mode == ZETA_SLOPE:
+            phi = self.phi(S)
+            if not (math.isfinite(phi) and phi > 0.0):
+                raise ValueError(
+                    f"station {self.name!r}: slope-calibrated zeta needs a finite, "
+                    f"strictly positive phi, got {phi} at S={S}. E[T] must strictly "
+                    f"decrease in capacity for there to be a slope to calibrate to."
+                )
+            return phi * T * x
+        return T * x
 
     def zeta(self, S):
         """Eq 22 evaluated at this station's own analytic sojourn time."""

@@ -340,3 +340,109 @@ def test_forkjoin_phi_is_positive_over_a_wide_grid():
             base = st.gamma / st.mu
             for mult in (1.000001, 1.001, 1.1, 2.0, 10.0, 1e4, 1e8):
                 assert st.phi(base * mult) > 0.0, (r, r_star, mult)
+
+
+def test_level_mode_is_bit_for_bit_the_shipped_expression():
+    # `==`, not approx: the default path must not move by one ulp. Binding x to a local
+    # does not change float semantics, but reordering the multiply would.
+    for st in _every_station_kind():
+        for T in (0.5, 2.5, 137.125):
+            for S in (2.0, 7.5):
+                assert st.zeta_from(T, S) == T * (S * st.mu - st.gamma), (st.name, T, S)
+
+
+def test_slope_mode_is_phi_times_the_level_value():
+    for st in _every_station_kind(zeta_mode=ZETA_SLOPE):
+        for S in (2.0, 7.5):
+            T = st.sojourn_time(S)
+            level = T * (S * st.mu - st.gamma)
+            assert st.zeta_from(T, S) == pytest.approx(st.phi(S) * level, rel=1e-15), st.name
+
+
+def test_slope_zeta_is_x_squared_times_the_slope_in_x():
+    # The identity that makes eq 21 exact: zeta/x has derivative -|dT/dx| in x, so
+    # zeta = x**2 * |dT/dx|. Checked against dT_dS with the mu factor undone.
+    st = GG1Station(0.6, 1.5, c=2.0, cov_a=2.0, cov_s=2.0, zeta_mode=ZETA_SLOPE)
+    for S in (0.5, 1.0, 4.0):
+        x = S * st.mu - st.gamma
+        dT_dx = st.dT_dS(S) / st.mu
+        assert st.zeta_from(st.sojourn_time(S), S) == pytest.approx(
+            x ** 2 * abs(dT_dx), rel=1e-12
+        ), S
+
+
+def test_mm1_slope_and_level_zeta_agree_exactly():
+    # phi == 1 identically, so the two calibrations must coincide -- and since phi is
+    # computed, not assumed, this also pins that the closed form returns exactly 1.
+    level = GG1Station.mm1(0.6, 1.0, c=2.0)
+    slope = GG1Station.mm1(0.6, 1.0, c=2.0, zeta_mode=ZETA_SLOPE)
+    for S in (0.7, 1.0, 5.0):
+        T = level.sojourn_time(S)
+        assert slope.zeta_from(T, S) == pytest.approx(level.zeta_from(T, S), rel=1e-12)
+
+
+def test_zeta_from_is_linear_in_T_in_both_modes():
+    # The ONLY property Optimizer._noise_floor relies on: it propagates a CI half-width
+    # through this same hook, so zeta_from(h, S) must be the correctly scaled
+    # perturbation. If slope mode were not linear in T, the noise floor would need
+    # special-casing and this change would not be cheap.
+    for mode in ZETA_MODES:
+        for st in _every_station_kind(zeta_mode=mode):
+            for S in (2.0, 9.0):
+                base = st.zeta_from(1.0, S)
+                assert st.zeta_from(2.0, S) == pytest.approx(2.0 * base, rel=1e-14)
+                assert st.zeta_from(0.25, S) == pytest.approx(0.25 * base, rel=1e-14)
+
+
+def test_the_station_zeta_method_follows_the_mode():
+    st_l = GG1Station.md1(0.6, 1.0, c=1.0)
+    st_s = GG1Station.md1(0.6, 1.0, c=1.0, zeta_mode=ZETA_SLOPE)
+    assert st_s.zeta(2.0) != st_l.zeta(2.0)
+    assert st_s.zeta(2.0) == pytest.approx(st_s.phi(2.0) * st_l.zeta(2.0), rel=1e-12)
+
+
+def test_a_non_positive_phi_is_refused_and_the_message_names_the_station():
+    # A station whose E[T] does not decrease in capacity has no slope to calibrate to.
+    # allocate would reject the zeta anyway; this fails earlier with a message that says
+    # which station and at what capacity, because the cause is a modelling error.
+    from qopt.station import Station
+
+    class FlatStation(Station):
+        def sojourn_time(self, S):
+            self._check_stable(S * self.mu)
+            return 1.0                      # constant: dT/dS == 0, so phi == 0
+
+        def sim_node(self, S, job_class):
+            raise NotImplementedError
+
+        @property
+        def alloc_cost(self):
+            return 1.0
+
+        @property
+        def default_zeta(self):
+            return 1.0
+
+    st = FlatStation(gamma=0.5, mu=1.0, name="flat", zeta_mode=ZETA_SLOPE)
+    with pytest.raises(ValueError, match="flat"):
+        st.zeta_from(1.0, 2.0)
+    # Level mode on the same station is untouched: the guard is slope-only.
+    ok = FlatStation(gamma=0.5, mu=1.0, name="flat", zeta_mode=ZETA_LEVEL)
+    assert ok.zeta_from(1.0, 2.0) == 1.5      # T*x = 1.0 * (2.0*1.0 - 0.5)
+
+
+def test_a_tiny_phi_still_produces_a_usable_zeta():
+    # Review Focus 4. A cov = 0 station has phi = 1 - rho exactly, so at extreme load
+    # zeta_slope is ~1e-6 of zeta_level. ZETA_FLOOR is local to noise_floor and clamps
+    # nothing in allocate, which needs only finite and > 0 -- so this must pass straight
+    # through rather than being clamped or refused.
+    from qopt.allocator import allocate
+
+    st = GG1Station(0.6, 1.0, c=1.0, cov_a=0.0, cov_s=0.0, zeta_mode=ZETA_SLOPE)
+    S = st.gamma / st.mu * (1.0 + 1e-6)
+    z = st.zeta_from(st.sojourn_time(S), S)
+    assert 0.0 < z < 1e-9
+    assert math.isfinite(z)
+    partner = GG1Station.mm1(0.6, 1.0, c=1.0)
+    caps = allocate([st, partner], 10.0, [z, partner.zeta(2.0)])
+    assert all(math.isfinite(c) and c > 0 for c in caps)
