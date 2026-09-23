@@ -203,3 +203,87 @@ def test_phi_on_an_unbound_gamma_names_the_station():
         st.phi(2.0)
     with pytest.raises(ValueError, match="unbound"):
         st.dT_dS(2.0)
+
+
+def _central_difference(st, S, frac=1e-7):
+    """The base-class difference, computed independently of whatever dT_dS now does."""
+    h = frac * (S - st.gamma / st.mu)
+    return (st.sojourn_time(S + h) - st.sojourn_time(S - h)) / (2.0 * h)
+
+
+def test_gg1_closed_form_matches_the_central_difference():
+    # Over loads AND coefficients of variation: the closed form has a k*gamma*(2m-gamma)
+    # term whose sign and grouping a single (cov, load) pair cannot pin.
+    for cov_a in (0.0, 0.5, 1.0, 2.0, 5.0):
+        for cov_s in (0.0, 1.0, 3.0):
+            st = GG1Station(0.6, 1.5, c=1.0, cov_a=cov_a, cov_s=cov_s)
+            for S in (0.45, 0.6, 1.0, 3.0, 20.0):
+                assert st.dT_dS(S) == pytest.approx(
+                    _central_difference(st, S), rel=1e-6
+                ), (cov_a, cov_s, S)
+
+
+def test_gg1_phi_is_exactly_one_for_mm1_under_the_closed_form():
+    # Now abs=1e-12 rather than the difference-limited 1e-9 of the fd default: the
+    # closed form should make this invariant hold to machine precision.
+    st = GG1Station.mm1(0.6, 1.0, c=2.0)
+    for S in (0.61, 1.0, 2.5, 100.0, 1e6):
+        assert st.phi(S) == pytest.approx(1.0, abs=1e-12), S
+
+
+def test_gg1_phi_is_exactly_one_minus_rho_for_cov_zero_under_the_closed_form():
+    st = GG1Station(0.6, 1.0, c=1.0, cov_a=0.0, cov_s=0.0)
+    for S in (0.7, 1.0, 2.0, 50.0):
+        rho = st.gamma / (S * st.mu)
+        assert st.phi(S) == pytest.approx(1.0 - rho, rel=1e-12), S
+
+
+def test_gg1_phi_matches_the_documented_sensitivity_table():
+    # Spec section 8.2, and this test is that table's source of record. gamma = 0.6,
+    # cov_s = 1, phi read at three loads for a true and a mis-specified cov_a.
+    #
+    # It is here because under slope calibration `cov_a` stops being decorative on the
+    # simulated path -- it is never sent to qsim and never measured back, so it enters
+    # the allocation only through phi. Understating it drives phi toward 1 and degrades
+    # to level calibration; OVERSTATING it can land worse than the incumbent.
+    #
+    # NOTE: three of the seven rows below were corrected from the task brief's literal
+    # text (1.240030 -> 1.240326 at rho=0.67/cov_a=3; 1.039697 -> 1.039583 at
+    # rho=0.95/cov_a=3; 1.165419 -> 1.165411 at rho=0.67/cov_a=2). The brief's own
+    # scale-free formula phi = ((1-rho)^2 + k*rho*(2-rho)) / ((1-rho) + k*rho), and the
+    # already-locked docs/slope-calibrated-zeta/findings.md formula it specializes,
+    # both reproduce every OTHER row and spot-check in the brief exactly (including the
+    # k=25/rho=0.25 -> 23/14 check and findings.md's own probe-verified cov=2/cov=5
+    # table), and the unmodified fd default -- already passing, unchanged by this task
+    # -- agrees with the corrected values to ~1e-9, not the brief's originals. The
+    # brief's own test_a_wrong_cov_a_moves_... below independently pins phi at this
+    # exact (rho=0.67, k=5) point to ~1.2403 (abs=0.005), confirming 1.240326 over
+    # 1.240030. See task-4-report.md for the full derivation.
+    rows = [
+        # rho,  cov_a, expected phi
+        (0.30, 1.0, 1.000000),
+        (0.30, 3.0, 1.381818),
+        (0.67, 1.0, 1.000000),
+        (0.67, 3.0, 1.240326),
+        (0.95, 1.0, 1.000000),
+        (0.95, 3.0, 1.039583),
+        (0.67, 2.0, 1.165411),
+    ]
+    gamma = 0.6
+    for rho, cov_a, expected in rows:
+        st = GG1Station(gamma, 1.0, c=1.0, cov_a=cov_a, cov_s=1.0)
+        S = gamma / rho / st.mu          # m = gamma/rho
+        assert st.phi(S) == pytest.approx(expected, rel=1e-6), (rho, cov_a)
+
+
+def test_a_wrong_cov_a_moves_expected_sojourn_time_far_more_than_it_moves_phi():
+    # Why the measured-vs-analytic E[T] cross-check (Task 9) is the right detector: the
+    # symptom is roughly ten times larger than the defect it indicates.
+    S = 0.6 / 0.67
+    truth = GG1Station(0.6, 1.0, c=1.0, cov_a=1.0, cov_s=1.0)
+    wrong = GG1Station(0.6, 1.0, c=1.0, cov_a=3.0, cov_s=1.0)
+    phi_error = wrong.phi(S) / truth.phi(S) - 1.0
+    t_error = wrong.sojourn_time(S) / truth.sojourn_time(S) - 1.0
+    assert phi_error == pytest.approx(0.240, abs=0.005)
+    assert t_error == pytest.approx(2.68, abs=0.02)
+    assert t_error > 10 * phi_error

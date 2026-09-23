@@ -317,6 +317,26 @@ class GG1Station(SingleServerStation):
         k = (self.cov_a ** 2 + self.cov_s ** 2) / 2.0
         return (1.0 / mu_eff) * (1.0 + k * rho / (1.0 - rho))
 
+    def dT_dS(self, S):
+        """Closed form of the Allen-Cunneen derivative.
+
+            E[T] = 1/m + k*gamma/(m*x),   m = S*mu,  x = m - gamma,  k = (cov_a^2+cov_s^2)/2
+
+        differentiated in S:
+
+            dT/dS = -mu * [ 1/m^2 + k*gamma*(2m - gamma)/(m*x)^2 ]
+
+        Every term is negative, so no sign can cancel silently. At k = 1 this gives
+        phi == 1 exactly, which is the M/M/1 invariant; at k = 0 it gives phi = 1 - rho.
+        """
+        m = S * self.mu
+        self._check_stable(m)
+        x = m - self.gamma
+        k = (self.cov_a ** 2 + self.cov_s ** 2) / 2.0
+        return -self.mu * (
+            1.0 / m ** 2 + k * self.gamma * (2.0 * m - self.gamma) / (m * x) ** 2
+        )
+
     @classmethod
     def mm1(cls, gamma=None, mu=None, weight=1.0, *, c, name=None,
             zeta_mode=ZETA_LEVEL):
