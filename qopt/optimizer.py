@@ -260,6 +260,17 @@ class Optimizer:
                     RuntimeWarning,
                     stacklevel=2,
                 )
+                # Reset first: the pre-solve ran on these same objects and its retunes
+                # are still on them, so eq 21 here would price a tuned fork-join on the
+                # ray the DECLINED answer converged to. That is neither the documented
+                # cold allocation nor what `warm_start=False` produces -- measured on a
+                # three-station network with a tuned fork-join, the fallback allocated at
+                # r_star = 1.0002380061 against a cold run's constructed 1.0, and the two
+                # first capacity vectors differed in the 5th significant digit. Declining
+                # a warm start has to discard all of it, the ray included. Pinned by
+                # test_a_declined_warm_start_discards_the_pre_solves_policy_state.
+                for st in stations:
+                    st.reset_policy()
                 S = allocate(stations, self.budget, zeta)
                 warm_start_iterations = 0
         else:
@@ -276,6 +287,7 @@ class Optimizer:
         evaluation = None
 
         S_accepted = None      # last capacity vector the analyzer actually evaluated
+        policy_accepted = None  # ...and the station state it was evaluated under
 
         for _ in range(self.max_iter):
             # Eq 21 answers against the analytic domain, so an iterate can walk onto a
@@ -288,7 +300,13 @@ class Optimizer:
                 break
             iterations += 1
             evaluation = self.analyzer.evaluate(stations, S)
+            # Snapshot the policy state WITH the capacities, not just the capacities: the
+            # retune at the bottom of this iteration mutates the station, so `S_accepted`
+            # alone describes a station that has since moved. Pure reads, so the analytic
+            # path stays bit-for-bit inert; `policy_state` is None for every station
+            # without a free parameter.
             S_accepted = list(S)
+            policy_accepted = [st.policy_state() for st in stations]
             if stochastic:
                 sim_calls += 1
             degraded.extend(evaluation.degraded)
@@ -468,7 +486,19 @@ class Optimizer:
             # vector was evaluated, so `evaluation`, `residual` and the reported metrics all
             # describe a feasible point; `residual` is the step that left the domain, which
             # is the useful number -- it says how much further the loop wanted to go.
+            #
+            # The station state goes back with it. The retune that produced the refused
+            # candidate has already been applied, so restoring capacities alone would leave
+            # the reported vector priced and measured on one ray and the station exposed on
+            # another: measured on a tuned fork-join, the last accepted evaluation ran at
+            # r_star = 1.0002380171 and the final evaluation of the SAME capacities at
+            # 1.0002380065, and the reported spend came back 2.4e-09 under a budget eq 21
+            # had exhausted. Both halves are the same restore -- the final evaluation, the
+            # reported zeta/phi and `alloc_cost` all read the station, not this vector.
+            # Pinned by test_an_abandoned_candidates_retune_is_rolled_back_with_it.
             S = S_accepted
+            for st, state in zip(stations, policy_accepted):
+                st.restore_policy(state)
 
         converged = stop_reason in ("tol", "noise-floor")
         if stop_reason == "max_iter":
@@ -507,9 +537,11 @@ class Optimizer:
             st.zeta_from(T, Si) for st, T, Si in zip(stations, sojourn_times, S)
         ]
         # Recomputed HERE rather than captured in the loop: this runs after the last
-        # retune, at the same S and the same station state as the zeta_from call above,
-        # so it is the phi that produced the reported zeta bit-for-bit. A level station
-        # reports the literal 1.0 -- no derivative is evaluated on the default path.
+        # retune -- or, on the analyzer-domain path, after the rollback that undid the
+        # retune belonging to the refused candidate -- at the same S and the same station
+        # state as the zeta_from call above, so it is the phi that produced the reported
+        # zeta bit-for-bit. A level station reports the literal 1.0 -- no derivative is
+        # evaluated on the default path.
         zeta_phi = [
             st.phi(Si) if st.zeta_mode == ZETA_SLOPE else 1.0
             for st, Si in zip(stations, S)

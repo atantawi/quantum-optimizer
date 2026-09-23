@@ -916,3 +916,132 @@ def test_the_domain_guard_is_inert_for_an_analyzer_that_accepts_the_boundary():
     assert result.converged is True
     assert result.capacities[0] * stations[0].mu == stations[0].gamma
     assert Optimizer(stations, C)._refused_by_analyzer(stations, result.capacities) == []
+
+
+class RecordingStrictFake(StrictFake):
+    """`StrictFake` that records the full state each evaluation actually ran against.
+
+    Capacities alone are not that state. A tuned fork-join's ray is read by `alloc_cost`,
+    `sojourn_time` and `zeta_from` alike, so an evaluation is the pair (capacities, policy
+    state) and these tests compare both.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.seen = []        # (fresh_seed, capacities, per-station policy state)
+
+    def evaluate(self, stations, S, *, fresh_seed=False):
+        self.seen.append(
+            (fresh_seed, list(S), [st.policy_state() for st in stations])
+        )
+        return super().evaluate(stations, S, fresh_seed=fresh_seed)
+
+
+def _boundary_trio(mm_weight=1e6, fj_weight=1000.0):
+    """`_boundary_pair` plus a TUNED fork-join, which carries mutable policy state.
+
+    The deterministic station and the weight-carrying M/M/1 are what walk the iteration
+    onto `S*mu == gamma`; the fork-join is there because its ray is run state that a
+    declined warm start and an abandoned candidate both have to account for.
+    """
+    dd, mm = _boundary_pair(weight=mm_weight)
+    return [
+        dd,
+        mm,
+        ForkJoinStation(gamma=0.45, mu=1.0, weight=fj_weight, r=2.0, c1=1.0, c2=1.0,
+                        r_star=R_STAR_TUNED, name="fj"),
+    ]
+
+
+def test_a_declined_warm_start_discards_the_pre_solves_policy_state():
+    """Declining a warm start has to discard the retunes it applied, not just its answer.
+
+    The pre-solve runs on the SAME station objects and mutates a tuned fork-join's ray, so
+    eq 21 in the fallback would otherwise price that station on the ray the DECLINED answer
+    converged to -- neither the documented cold allocation nor what `warm_start=False`
+    produces. Measured before the fix: the fallback allocated at r_star = 1.0002380061
+    against a cold run's constructed 1.0, and the two first capacity vectors differed in
+    the 5th significant digit (0.4154041385 against 0.4154535915 at the M/M/1).
+
+    The assertion is bitwise equality with the `warm_start=False` run, which is the
+    documented meaning of the fallback, and it is made on the pair (capacities, ray) rather
+    than on capacities alone -- the ray is what was wrong.
+    """
+    stations = _boundary_trio()
+    C = 1.01 * min_feasible_budget(stations)
+
+    # The premise: the pre-solve really does both refuse AND mutate.
+    pre = Optimizer(stations, C, tol=1e-9).run()
+    assert stations[2].r_star != 1.0
+    assert Optimizer(stations, C, analyzer=StrictFake())._refused_by_analyzer(
+        stations, pre.capacities
+    ) == ["dd"]
+
+    warm = RecordingStrictFake()
+    stations = _boundary_trio()
+    # Recorded rather than `pytest.warns`, because `max_iter=1` also warns about
+    # non-convergence and both runs here are deliberately cut to one iteration.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", RuntimeWarning)
+        warm_result = Optimizer(stations, C, analyzer=warm, max_iter=1).run()
+    assert any("warm start" in str(w.message) for w in caught)
+
+    cold = RecordingStrictFake()
+    stations = _boundary_trio()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # max_iter=1 cannot converge
+        cold_result = Optimizer(stations, C, analyzer=cold, warm_start=False,
+                                max_iter=1).run()
+
+    assert warm.seen[0] == cold.seen[0]                   # capacities AND ray, bitwise
+    assert warm.seen[0][2] == [None, None, 1.0]           # the constructed ray
+    assert warm_result.warm_start_iterations == 0
+    assert warm_result.capacities == cold_result.capacities
+
+
+def test_an_abandoned_candidates_retune_is_rolled_back_with_it():
+    """Rolling back to the last accepted capacities has to roll back the station too.
+
+    The retune that produced the refused candidate has already run by the time the guard
+    sees it -- it is applied at the bottom of the previous iteration -- so restoring
+    capacities alone leaves the reported vector priced and measured on one ray while the
+    station is exposed on another. Measured before the fix: the last accepted evaluation
+    ran at r_star = 1.0002380171 and the final evaluation of the SAME capacities at
+    1.0002380065, and the reported spend came back 2.4e-09 under a budget eq 21 had
+    exhausted, because `alloc_cost` had moved under it.
+
+    Three consequences are pinned, all of the same restore: the final evaluation runs the
+    state its capacities were accepted under, the reported capacities exhaust the budget
+    again, and the station a caller reads afterwards is the one the Result describes.
+    """
+    stations = _boundary_trio()
+    C = 1.01 * min_feasible_budget(stations)
+    analyzer = RecordingStrictFake()
+    with pytest.warns(RuntimeWarning, match="refuses to evaluate"):
+        result = Optimizer(stations, C, analyzer=analyzer, damping=1.0,
+                           tol=5e-324, max_iter=200).run()
+
+    assert result.stop_reason == "analyzer-domain"
+    accepted, final = analyzer.seen[-2], analyzer.seen[-1]
+    assert accepted[0] is False and final[0] is True     # ...the fresh-seed evaluation
+    assert final[1] == accepted[1] == list(result.capacities)
+    assert final[2] == accepted[2]                       # same ray, which was the bug
+    assert stations[2].r_star == accepted[2][2]          # and that is what is exposed
+
+    # The rescale is what makes this visible in a reported number: eq 21 exhausts C at the
+    # ray it allocated on, so a stale ray leaves `alloc_cost` and the capacities describing
+    # different stations. 1e-15 relative is well inside the 1.4e-09 the stale ray cost.
+    spend = sum(st.alloc_cost * Si for st, Si in zip(stations, result.capacities))
+    assert spend == pytest.approx(C, rel=1e-15)
+
+    # Same restore covers `final_evaluation=False`, where the reported sojourn times come
+    # from the last accepted evaluation and zeta/phi are recomputed afterwards: both must
+    # read the same station state.
+    stations = _boundary_trio()
+    quiet = RecordingStrictFake()
+    with pytest.warns(RuntimeWarning, match="refuses to evaluate"):
+        no_final = Optimizer(stations, C, analyzer=quiet, damping=1.0, tol=5e-324,
+                             max_iter=200, final_evaluation=False).run()
+    assert quiet.seen[-1][0] is False                    # no fresh-seed call happened
+    assert quiet.seen[-1][1] == list(no_final.capacities)
+    assert stations[2].r_star == quiet.seen[-1][2][2]
