@@ -418,8 +418,16 @@ offending station lands in `Result.zeta_shape_flags`.
 answer — there is no symptom. The comparison is nearly free, since φ already evaluates
 `T_analytic`, and it tests exactly the shape assumption φ rests on. It also *amplifies* what it
 is detecting: `cov_a = 3` where the truth is 1 at ρ = 0.67 is a **+24% error in φ but a +268%
-error in `E[T]`** (3.385 → 12.45), so the diagnostic is far more sensitive than the defect is
+error in `E[T]`** (3.03 → 11.15), so the diagnostic is far more sensitive than the defect is
 large.
+[**Correction (2026-09-23, pre-merge evidence sweep):** the parenthesised pair read
+`3.385 → 12.45`, which reproduces at no operating point — only its RATIO (3.678) was right.
+`3.385` needs ρ ≈ 0.7046, where the pair is `3.385 → 12.93` and the errors are +21.8% / +282%,
+not the +24% / +268% stated. At the ρ = 0.67 this paragraph names, the shipped
+`GG1Station` gives `3.03 → 11.15`, and both percentages are then exact. The two PERCENTAGE
+claims — which are what the §8.4 threshold argument rests on — were correct as written and
+are unchanged; only the absolute pair was wrong. Reproduce with `GG1Station(0.67, 1.0, c=1.0,
+cov_a=1.0, cov_s=1.0)` against `cov_a=3.0`, both at `S = 1.0`.]
 
 **Threshold: `ZETA_SHAPE_TOL = 0.25`**, bracketed by evidence two orders of magnitude apart:
 
