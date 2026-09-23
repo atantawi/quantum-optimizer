@@ -312,8 +312,13 @@ optimal `0.600`.
 
 So `Station.admits_full_utilization` opens the domain at `k = 0` and nowhere else, and
 `zeta_from` returns `ζ = 0` there rather than clamping — zero is the honest value *and* an exact
-fixed point of the loop, where clamping to `ZETA_FLOOR` was measured to produce a period-3 cycle
-(`x = 0 → 3.6e-11 → 2.1e-15 → 0`) that the loop resolves only by tolerance. `allocate` accepts
+fixed point of the loop. Clamping to `ZETA_FLOOR` instead also converges, but onto
+`x = 3.577705e-11` — a fixed point whose location is set by the constant rather than by the
+problem, reached in one step from every `x` whose raw ζ falls under the floor, and worth
+`4.5e-09` of relative objective against the infimum (two decades better than level's `3.1e-07`
+here, so this is exactness over a magic constant rather than an accuracy rescue). An earlier
+revision of this section called the clamped map a period-3 cycle; that was hand arithmetic and
+is withdrawn. `allocate` accepts
 a zero ζ from such a station and from no other, so the silent-instability hole its ζ check
 closed stays closed. Pinned by
 `test_zeta_is_bounded_away_from_zero_at_the_boundary_unless_k_is_zero`,

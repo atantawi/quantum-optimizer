@@ -328,12 +328,17 @@ class Station(ABC):
                 # hole its check was added to close.
                 #
                 # The alternative considered was clamping to `ZETA_FLOOR`, and it was
-                # rejected on measurement, not taste: a floored zeta buys this station
-                # 3.6e-11 of spare capacity, whose own zeta floors again, and the map enters
-                # a period-3 CYCLE (x = 0 -> 3.6e-11 -> 2.1e-15 -> 0). The loop then stops
-                # on tolerance at whichever point of the cycle it reaches, which is the same
-                # history-dependence `Station.min_spend` exists to prevent. Pinned by
-                # test_a_deterministic_station_may_sit_exactly_on_its_boundary.
+                # rejected on measurement: the clamped map has its own fixed point, but at
+                # x = 3.577705e-11 rather than at 0, and that number is a function of
+                # `ZETA_FLOOR` rather than of the problem -- every x whose raw zeta falls
+                # under the floor (x = 0, 3.6e-11 and 1e-9 all measured) maps straight to
+                # it in one step. It costs 4.5e-09 of relative objective on the reference
+                # network, far less than level's 3.1e-07 there, so this is a choice of
+                # exactness over a magic constant and not an accuracy rescue. An earlier
+                # version of this note called the clamped map a period-3 cycle; that was
+                # hand arithmetic and is wrong -- it is a one-step fixed point. Pinned by
+                # test_a_deterministic_station_may_sit_exactly_on_its_boundary, which
+                # requires x == 0 exactly and so still fails under the clamp.
                 return 0.0
             if not (math.isfinite(phi) and phi > 0.0):
                 raise ValueError(

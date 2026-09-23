@@ -300,10 +300,12 @@ def test_a_deterministic_station_may_sit_exactly_on_its_boundary():
     (test_zeta_is_bounded_away_from_zero_at_the_boundary_unless_k_is_zero).
 
     Zero is also what `zeta_from` reports there, and that is load-bearing: it makes x = 0 an
-    exact fixed point of the loop. Clamping to ZETA_FLOOR instead was measured and rejected --
-    it buys 3.6e-11 of spare capacity whose own zeta clamps again, and the map enters a
-    period-3 cycle (0 -> 3.6e-11 -> 2.1e-15 -> 0) that the loop stops on by tolerance, at
-    whichever point it happens to reach.
+    exact fixed point of the loop, which the assertions below require. Clamping to ZETA_FLOOR
+    instead was measured and rejected: that map also has a fixed point, but at
+    x = 3.577705e-11, a value set by ZETA_FLOOR rather than by the problem and reached in one
+    step from every x whose raw zeta lands under the floor. It costs 4.5e-09 of relative
+    objective -- two decades better than level's 3.1e-07 here -- so the choice is exactness
+    over a magic constant, not accuracy.
     """
     import math
 
