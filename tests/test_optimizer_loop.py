@@ -790,7 +790,7 @@ def test_a_warm_start_outside_the_analyzers_domain_falls_back_to_the_cold_one():
     """The analytic pre-solve answers against a WIDER domain than a stochastic analyzer's.
 
     `admits_full_utilization` opens the analytic domain at `S*mu == gamma`, and on this
-    network that is where the optimum is -- so the free pre-solve returns S_dd = 0.6
+    network that is where the ANALYTIC optimum is -- so the free pre-solve returns S_dd = 0.6
     exactly and the first simulated `evaluate` refuses it. The whole run then died before
     issuing a single POST, which is what this guards: a warm start is an optimization, so
     a warm start the analyzer cannot honour is declined, not repaired.
@@ -800,6 +800,10 @@ def test_a_warm_start_outside_the_analyzers_domain_falls_back_to_the_cold_one():
     stopping rule changes. Nudging the analytic answer to the next float instead was
     rejected for the reason `min_feasible_budget` gives for not nudging a collapsed share:
     at that distance the queue is saturated and its simulated E[T] means nothing.
+
+    The warning's wording is pinned too, because it is easy to overstate: the pre-solve
+    locates the ANALYTIC optimum, and the analyzer refusing that point is precisely why it
+    cannot be the analyzer's own optimum (round 6).
     """
     stations = _boundary_pair()
     C = 1.01 * min_feasible_budget(stations)
@@ -814,8 +818,17 @@ def test_a_warm_start_outside_the_analyzers_domain_falls_back_to_the_cold_one():
 
     stations = _boundary_pair()
     analyzer = StrictFake()
-    with pytest.warns(RuntimeWarning, match="warm start"):
+    with pytest.warns(RuntimeWarning, match="warm start") as caught:
         result = Optimizer(stations, C, analyzer=analyzer).run()
+
+    # The warning may not promote the pre-solve's finding into a claim about this analyzer.
+    # What the pre-solve established is where the ANALYTIC optimum is; at that same point the
+    # analyzer refuses to return a value at all -- asserted above -- so it has no objective
+    # value there and cannot have its optimum there. Review round 6.
+    message = str(caught[0].message)
+    assert "ANALYTIC optimum" in message
+    assert "simulated optimum" not in message
+
     assert analyzer.calls > 0
     assert result.warm_start_iterations == 0        # declined, so nothing to report
     cold = allocate(_boundary_pair(), C, [st.default_zeta for st in stations])
@@ -864,12 +877,125 @@ def test_the_loop_stops_rather_than_evaluating_a_capacity_the_analyzer_refuses()
     assert result.capacities[0] * stations[0].mu > stations[0].gamma
     assert result.capacities[0] - 0.6 == pytest.approx(8.76e-14, rel=0.01)
 
-    # The stop is exactly where the next candidate leaves the domain: eq 21 at the reported
-    # zeta IS that candidate, and it sits on the boundary to the bit.
+    # The stop is exactly where the next candidate leaves the domain, and with THIS analyzer
+    # eq 21 on the reported zeta reproduces that candidate to the bit. That holds because
+    # `StrictFake` is deterministic: its fresh-seeded final evaluation returns the same E[T]
+    # as the loop's, so the reported zeta and the zeta that caused the stop coincide. It is
+    # NOT a general property of the stop, and the warning must not claim it is --
+    # test_the_reported_zeta_need_not_reproduce_the_refused_candidate is the stochastic arm.
     nxt = allocate(stations, C, result.zeta)
     assert nxt[0] * stations[0].mu == stations[0].gamma
     with pytest.raises(InstabilityError):
         analyzer.evaluate(stations, nxt)
+
+
+class FreshSkewFake(StrictFake):
+    """`StrictFake` whose fresh-seeded final evaluation lands on a different sample path.
+
+    The loop itself sees the unperturbed analytic E[T], so the run stays deterministic and
+    the refused candidate is reproducible; only the `fresh_seed=True` call is scaled, which
+    is what an independently seeded final evaluation does to a real analyzer's numbers.
+    """
+
+    def __init__(self, factors):
+        super().__init__()
+        self.factors = factors
+
+    def evaluate(self, stations, S, *, fresh_seed=False):
+        evaluation = super().evaluate(stations, S, fresh_seed=fresh_seed)
+        if fresh_seed:
+            evaluation.sojourn_times[:] = [
+                T * f for T, f in zip(evaluation.sojourn_times, self.factors)
+            ]
+        return evaluation
+
+
+def test_the_reported_zeta_need_not_reproduce_the_refused_candidate():
+    """`Result.zeta` is recomputed from the FINAL evaluation, which is a different sample.
+
+    Review round 6. The stop was diagnosed as "eq 21 at the reported zeta puts it there",
+    which holds only where the reported zeta IS the loop's zeta: a deterministic analyzer,
+    which is why the test above passes, or `final_evaluation=False`, which reports the last
+    loop iterate's numbers (measured: reported zeta_dd = 2.1314343731725096e-26, the loop's
+    value to the bit, and the round trip closes at x = 0.0). With a fresh-seeded final
+    evaluation the two are different numbers: measured here, the stop was caused by
+    zeta_dd = 2.131434e-26, whose eq-21 share rounds away entirely and lands the station on
+    its boundary, while the reported zeta_dd is 2.131434e-14 and eq 21 on it keeps a share --
+    leaving S_dd 4.6e-12 ABOVE the boundary, strictly inside the analyzer's domain.
+
+    So the warning may not attribute the stop to the reported zeta. What it can say instead
+    costs nothing to verify: the refused point is named outright, because every station it
+    lists sits at exactly its own `gamma/mu`.
+
+    The factor 1e12 is large for a seed change, and deliberately so -- but NOT because a
+    smaller skew makes a smaller version of the same discrepancy. At 1.05 the reported zeta
+    still moves (2.238006e-26 against the loop's 2.131434e-26) and eq 21 on it still collapses
+    the share entirely, so the round trip lands back on the boundary at x = 0.0 exactly and
+    the false claim comes out accidentally true. That is the second arm below. What the large
+    factor buys is a reported zeta big enough for the share to SURVIVE, which is the only
+    regime where the difference is observable at all.
+    """
+    stations = _boundary_pair()
+    C = 1.01 * min_feasible_budget(stations)
+    analyzer = FreshSkewFake([1e12, 1.0])
+    with pytest.warns(RuntimeWarning, match="refuses to evaluate") as caught:
+        result = Optimizer(stations, C, analyzer=analyzer, damping=1.0,
+                           tol=5e-324, max_iter=200).run()
+    assert result.stop_reason == "analyzer-domain"
+
+    # The premise: the loop's own zeta DID put the next candidate on the boundary. Re-derived
+    # from the returned capacities, which are the vector that zeta was measured at.
+    loop_zeta = [
+        st.zeta_from(st.sojourn_time(Si), Si)
+        for st, Si in zip(stations, result.capacities)
+    ]
+    assert loop_zeta[0] == pytest.approx(2.131434e-26, rel=1e-5)
+    assert allocate(stations, C, loop_zeta)[0] * stations[0].mu == stations[0].gamma
+
+    # And the reported zeta does not: it is 12 orders of magnitude up, and eq 21 on it stays
+    # strictly inside the domain the run stopped at the edge of.
+    assert result.zeta[0] == pytest.approx(2.131434e-14, rel=1e-5)
+    again = allocate(stations, C, result.zeta)
+    assert again[0] * stations[0].mu > stations[0].gamma
+    assert again[0] - 0.6 == pytest.approx(4.6e-12, rel=0.05)
+    optimizer = Optimizer(stations, C, analyzer=analyzer)
+    assert optimizer._refused_by_analyzer(stations, again) == []
+
+    # The message therefore attributes the stop to the loop's zeta, says what `result.zeta`
+    # is instead, and names the refused point directly. Selected by content, not by index:
+    # the declined warm start warns first on this network and matches "refuses to evaluate"
+    # too.
+    stop_messages = [
+        str(w.message) for w in caught if "stopped after" in str(w.message)
+    ]
+    assert len(stop_messages) == 1
+    message = stop_messages[0]
+    assert "last zeta the LOOP measured" in message
+    assert "result.zeta is recomputed" in message
+    assert "exactly its own gamma/mu" in message
+    assert "at the reported zeta" not in message
+
+    # Second arm: a plausible few-percent skew moves the reported zeta but not the outcome of
+    # the round trip, because the share collapses either way. A test built on that factor
+    # would have confirmed the wrong message instead of catching it.
+    stations = _boundary_pair()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        small = Optimizer(stations, C, analyzer=FreshSkewFake([1.05, 1.0]), damping=1.0,
+                          tol=5e-324, max_iter=200).run()
+    assert small.stop_reason == "analyzer-domain"
+    assert small.zeta[0] == pytest.approx(2.238006e-26, rel=1e-5)     # not the loop's zeta
+    assert allocate(stations, C, small.zeta)[0] * stations[0].mu == stations[0].gamma
+
+    # Third arm: `final_evaluation=False` reports the loop's own numbers, so there the reported
+    # zeta IS the triggering one -- to the bit, at any skew.
+    stations = _boundary_pair()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        last = Optimizer(stations, C, analyzer=FreshSkewFake([1e12, 1.0]), damping=1.0,
+                         tol=5e-324, max_iter=200, final_evaluation=False).run()
+    assert last.zeta[0] == 2.1314343731725096e-26
+    assert allocate(stations, C, last.zeta)[0] * stations[0].mu == stations[0].gamma
 
 
 def test_a_first_candidate_outside_the_analyzers_domain_raises_naming_the_input():

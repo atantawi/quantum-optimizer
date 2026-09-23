@@ -33,10 +33,10 @@ class Analyzer(ABC):
 
     Declared here, rather than left implicit in an `evaluate` preflight, because the
     Optimizer has to know it too. Its iterates come from eq 21 against the analytic domain,
-    so on a network whose optimum sits exactly on such a boundary it will hand `evaluate` a
-    capacity this analyzer cannot honour -- the analytic warm start does it on the very
-    first call. One flag, read by the preflight and by `Optimizer.run`, keeps the two from
-    disagreeing about where the domain ends.
+    so on a network whose ANALYTIC optimum sits exactly on such a boundary it will hand
+    `evaluate` a capacity this analyzer cannot honour -- the analytic warm start does it on
+    the very first call. One flag, read by the preflight and by `Optimizer.run`, keeps the
+    two from disagreeing about where the domain ends.
     """
 
     @abstractmethod

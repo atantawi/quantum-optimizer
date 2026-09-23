@@ -51,8 +51,14 @@ class Result:
     `converged` is True for the first two only. "analyzer-domain" means the iteration walked
     onto a capacity the analyzer refuses to evaluate -- `S*mu == gamma` at a station that
     admits full utilization -- so the loop stopped and `capacities` are the last vector the
-    analyzer did evaluate, with `residual` the step that would have left its domain. The
-    optimum is on that boundary and an AnalyticAnalyzer can price it; a simulated one cannot.
+    analyzer did evaluate, with `residual` the step that would have left its domain. On such
+    a network it is the ANALYTIC optimum that sits on that boundary, and an AnalyticAnalyzer
+    can price it there; an analyzer that refuses the point has no objective value there at
+    all, so this stop reports where the loop ran out of domain and NOT that the refused point
+    is that analyzer's optimum. The refused vector is the one named in the warning -- each
+    station it lists at exactly its own `gamma/mu` -- and is NOT `zeta` re-run through eq 21:
+    `zeta` is recomputed from the final evaluation (see `Result.zeta` in the README), which on
+    a stochastic path is a different sample from the one that caused the stop.
     See `Optimizer._refused_by_analyzer`.
     """
     warm_start_iterations: int = 0     # analytic iterations before the simulated phase
@@ -254,9 +260,11 @@ class Optimizer:
                 warnings.warn(
                     f"analytic warm start puts {', '.join(refused)} at exactly "
                     f"S*mu == gamma, which this analyzer refuses to evaluate; starting "
-                    f"from eq 21 on the initial zeta instead. The simulated optimum for "
-                    f"this network lies on that boundary, so expect the loop to stop "
-                    f"short of it.",
+                    f"from eq 21 on the initial zeta instead. That boundary is where the "
+                    f"ANALYTIC optimum lies -- the pre-solve is what established that, and "
+                    f"it says nothing about this analyzer's own optimum, which cannot be at "
+                    f"a point this analyzer will not price. Expect the loop to stop just "
+                    f"inside the boundary, on tol or with stop_reason='analyzer-domain'.",
                     RuntimeWarning,
                     stacklevel=2,
                 )
@@ -513,9 +521,13 @@ class Optimizer:
             warnings.warn(
                 f"stopped after {iterations} iterations because the next capacity vector "
                 f"put {', '.join(refused)} at exactly S*mu == gamma, which this analyzer "
-                f"refuses to evaluate (residual={residual:g}): eq 21 at the reported zeta "
-                f"puts it there, so the loop cannot advance without leaving the analyzer's "
-                f"domain. Returned capacities are the last vector it did evaluate.",
+                f"refuses to evaluate (residual={residual:g}): eq 21 on the last zeta the "
+                f"LOOP measured put it there. Returned capacities are the last vector this "
+                f"analyzer did evaluate; result.zeta is recomputed at those capacities from "
+                f"the final evaluation, so on a stochastic path it comes from a different "
+                f"sample path and re-running eq 21 on it need not reach the boundary again. "
+                f"The refused point itself is fully named above: each station listed sits at "
+                f"exactly its own gamma/mu.",
                 RuntimeWarning,
                 stacklevel=2,
             )
