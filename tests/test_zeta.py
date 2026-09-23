@@ -287,3 +287,56 @@ def test_a_wrong_cov_a_moves_expected_sojourn_time_far_more_than_it_moves_phi():
     assert phi_error == pytest.approx(0.240, abs=0.005)
     assert t_error == pytest.approx(2.68, abs=0.02)
     assert t_error > 10 * phi_error
+
+
+def test_forkjoin_closed_form_matches_the_central_difference():
+    # Across r AND r_star, because r_star rewrites which server binds: r_star < 1 swaps
+    # the anchor, and the closed form reads the EFFECTIVE mu and r, not the constructed
+    # ones. r_star = 1.0 is included deliberately -- see the next test.
+    for r in (1.0, 2.0, 4.0, 20.0):
+        for r_star in (0.05, 1.0, 2.0, 3.0, 50.0):
+            st = ForkJoinStation(0.45, 1.0, r=r, c1=4.0, c2=1.0, r_star=r_star)
+            base = st.gamma / st.mu
+            for mult in (1.01, 1.5, 4.0, 100.0):
+                S = base * mult
+                assert st.dT_dS(S) == pytest.approx(
+                    _central_difference(st, S), rel=1e-5
+                ), (r, r_star, mult)
+
+
+def test_forkjoin_closed_form_is_right_where_the_policy_helper_is_wrong():
+    # forkjoin_policy._dt_dm1 takes the "m1 is the non-bottleneck" branch at m1 == m2 and
+    # drops the alpha*t_bot term entirely. That is harmless inside _min_on_spend_line,
+    # whose kink is measure-zero there, but it is wrong for pricing dT/d(spend) -- and
+    # r_star = 1 is exactly where tight budgets and every beta1 == beta2 station sit.
+    # Measured at 17.3% for spend/floor = 1.05 (findings.md section 5).
+    #
+    # This test does not reimplement the helper; it pins that the radial derivative
+    # agrees with a difference of the SHIPPED sojourn_time at r_star = 1, which is the
+    # property the helper lacks.
+    st = ForkJoinStation(0.45, 1.0, r=1.0, c1=4.0, c2=1.0, r_star=1.0)
+    base = st.gamma / st.mu
+    for mult in (1.05, 1.5, 4.0):
+        S = base * mult
+        assert st.dT_dS(S) == pytest.approx(_central_difference(st, S), rel=1e-5), mult
+
+
+def test_forkjoin_phi_stays_near_one_but_not_at_one():
+    # The fork-join is the mildest deviation of the station types qopt ships -- within
+    # about 1.3% of 1 -- which is why a network whose only non-M/M/1 stations are
+    # fork-joins gains only 0.0002-0.039%. It is still NOT 1, so it still moves.
+    st = ForkJoinStation(0.45, 1.0, r=4.0, c1=4.0, c2=1.0)
+    base = st.gamma / st.mu
+    values = [st.phi(base * m) for m in (1.01, 1.5, 4.0, 100.0)]
+    assert all(0.95 < v < 1.05 for v in values), values
+    assert any(abs(v - 1.0) > 1e-6 for v in values), values
+
+
+def test_forkjoin_phi_is_positive_over_a_wide_grid():
+    # Spec assumption 2, and eq 21 needs a strictly positive zeta: sqrt(w*zeta/...).
+    for r in (1.0, 2.0, 20.0):
+        for r_star in (0.05, 1.0, 3.0, 50.0):
+            st = ForkJoinStation(0.45, 1.0, r=r, c1=4.0, c2=1.0, r_star=r_star)
+            base = st.gamma / st.mu
+            for mult in (1.000001, 1.001, 1.1, 2.0, 10.0, 1e4, 1e8):
+                assert st.phi(base * mult) > 0.0, (r, r_star, mult)

@@ -575,6 +575,39 @@ class ForkJoinStation(Station):
         self._check_stable(m1)
         return t_ul(self.gamma, m1, m2)
 
+    def dT_dS(self, S):
+        """Radial derivative of `t_ul` along this station's CURRENT ray.
+
+        Both effective rates scale with S, so this differentiates
+        t_ul(gamma, a*S, b*S) in S with a = mu and b = mu*r held fixed. That is the
+        derivative slope calibration needs, and it equals the true marginal of the
+        coupled problem only ON the optimal ray -- which the Optimizer guarantees by
+        calling `retune` LAST in each iteration.
+
+        `t_bot` needs no max() here. `_anchor` pairs `mu` with the slower server and
+        keeps `r >= 1`, so m1 <= m2 always and `t_ul`'s max() resolves to 1/x1 at every
+        point of the ray. The branch therefore never switches and this is smooth, which
+        is also why differencing `sojourn_time` agrees with it.
+
+        NOT `forkjoin_policy._dt_dm1`: that takes the non-bottleneck branch at m1 == m2
+        and drops the alpha*t_bot term, which is fine for the measure-zero kink inside
+        `_min_on_spend_line` but wrong for pricing dT/d(spend) -- a 17.3% error at
+        spend/floor = 1.05, and r_star = 1 is where tight budgets sit.
+
+        alpha is homogeneous of degree -1 in S, hence the -alpha/S term.
+        """
+        a, b = self.mu, self.mu * self.r      # effective rates: a binds, b >= a
+        m1, m2 = a * S, b * S
+        self._check_stable(m1)
+        x1, x2 = m1 - self.gamma, m2 - self.gamma
+        D = x1 + x2
+        t_ub = 1.0 / x1 + 1.0 / x2 - 1.0 / D
+        t_bot = 1.0 / x1
+        alpha = (self.gamma / m1 + self.gamma / m2) / 8.0
+        d_ub = -a / x1 ** 2 - b / x2 ** 2 + (a + b) / D ** 2
+        d_bot = -a / x1 ** 2
+        return (alpha / S) * (t_ub - t_bot) + (1.0 - alpha) * d_ub + alpha * d_bot
+
     def sim_node(self, S, job_class):
         """The ray's two effective rates as branches joined on "all".
 
