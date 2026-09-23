@@ -558,7 +558,8 @@ The existing `converged` field is retained for backward compatibility;
 
 > **Amended 2026-09-23, post-implementation.** `stop_reason` gained a fourth value,
 > `"analyzer-domain"`: the iteration walked onto a capacity this analyzer refuses to evaluate,
-> so it stopped and rolled back to the last vector that was actually evaluated. `converged` is
+> so it stopped and rolled back to the last vector that was actually evaluated, and to the station
+> policy state it was evaluated under (`Station.policy_state`/`restore_policy`). `converged` is
 > `False` there. Reachable only once a station may be priced at `ρ == 1` analytically while the
 > simulator still refuses it — see §8.7 of
 > `docs/superpowers/specs/2026-09-22-slope-calibrated-zeta-design.md`, which specifies the guard.

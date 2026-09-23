@@ -415,6 +415,13 @@ actually moves those numbers enough to fail that test. If it does not, the spec 
 must say the ordering is *documented but not test-pinned*, rather than claim a pin that does not
 exist. A comment that only looks load-bearing is worse than one that admits its limit.
 
+> **Amended 2026-09-23, post-implementation (review round 5).** Calling `retune` last has a second
+> consequence: every capacity vector an analyzer accepted was evaluated *before* that iteration's
+> retune, so the station the run finally exposes is one retune ahead of the last accepted vector.
+> That is harmless on the exits that return the post-retune vector, and it is exactly the bug on
+> the one exit that returns an earlier vector — see §8.7's amendment for the snapshot/restore pair
+> that closes it.
+
 ---
 
 ## 8. `cov_a` on the simulated path — the new coupling
@@ -590,13 +597,28 @@ about where the domain ends. `Optimizer.run` then checks every candidate against
 
 | refused candidate | behaviour |
 |---|---|
-| warm start | decline it: `RuntimeWarning`, fall back to eq 21 on the initial ζ, `warm_start_iterations = 0` |
+| warm start | decline it: `RuntimeWarning`, reset every station's policy to its constructed value, fall back to eq 21 on the initial ζ, `warm_start_iterations = 0` |
 | the first candidate | `InstabilityError` naming the input, with zero analyzer calls spent |
-| a later iterate | stop before evaluating: `stop_reason="analyzer-domain"`, `converged=False`, roll back to the last vector the analyzer accepted, `RuntimeWarning` carrying the residual |
+| a later iterate | stop before evaluating: `stop_reason="analyzer-domain"`, `converged=False`, roll back to the last vector the analyzer accepted **and to the policy state it accepted it under**, `RuntimeWarning` carrying the residual |
 
 The fallback is a *different* candidate, not a safe one — eq 21 rounds a share away at a lopsided
 weight ratio (1e30 on this same network) and lands on the same boundary — which is what the
 first-candidate arm covers.
+
+> **Amended 2026-09-23, post-implementation (review round 5).** Both roll-backs above are
+> roll-backs of *two* things, because a capacity vector only means something together with the
+> policy state it was priced and evaluated under. `Station.policy_state()` / `restore_policy(state)`
+> carry that: `None` and a no-op by default, `r_star` and `_anchor(state)` on `ForkJoinStation`.
+> `Optimizer.run` snapshots the state beside every capacity vector the analyzer accepts and
+> restores both when it abandons a later candidate, and resets every station before taking the
+> warm-start fallback. Measured on the §8.7 network with a third station, a tuned fork-join:
+> without the reset the fallback allocated at `r* = 1.0002380061` against a cold run's constructed
+> `1.0`, capacities differing in the 5th significant digit; without the paired restore the last
+> accepted evaluation ran at `r* = 1.0002380171` while the final evaluation of the *same*
+> capacities ran at `1.0002380065`, and the reported spend came back `2.4e-09` under a budget eq 21
+> had exhausted (`retune` is spend-preserving, so a stale ray re-prices the same spend onto
+> different capacities). `reset_policy` cannot serve for the second one: it goes to the constructed
+> ray, which is a third point, not the one the reported numbers were measured at.
 
 Nudging a refused capacity onto the nearest interior float is rejected for the reason
 `min_feasible_budget` already gives about nudging a collapsed share: it spends budget the caller
