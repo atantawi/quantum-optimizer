@@ -25,6 +25,8 @@ class SimulationAnalyzer(Analyzer):
     """
 
     is_stochastic = True
+    requires_strict_stability = True
+    """`rho == 1` is outside what this analyzer can simulate; see `evaluate`'s preflight."""
 
     def __init__(self, network, client, *, seed=20260729, seed_policy="fixed",
                  strict=False):
@@ -69,7 +71,12 @@ class SimulationAnalyzer(Analyzer):
             # at the boundary that is a saturated M/D/1, exactly what this guard is for.
             # Relaxing it would need the EMITTED arrival process shown deterministic at that
             # station, which qopt cannot currently conclude from the model dict alone.
-            st.check_stable(Si, strict=True)
+            #
+            # This still has to be checked here, even though `Optimizer.run` now keeps its
+            # candidates inside this domain: `evaluate` is public and is called directly,
+            # and the optimizer's guard reads `requires_strict_stability` rather than
+            # duplicating the test.
+            st.check_stable(Si, strict=self.requires_strict_stability)
 
         request = build_request(
             self.network, S,

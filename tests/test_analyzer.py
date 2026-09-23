@@ -34,6 +34,17 @@ def test_analytic_analyzer_is_not_stochastic():
     assert isinstance(AnalyticAnalyzer(), Analyzer)
 
 
+def test_the_default_analyzer_domain_is_the_full_analytic_one():
+    """`requires_strict_stability` defaults to False on the base class, so a third-party
+    analyzer that prices `rho == 1` -- as the closed forms do for a deterministic station --
+    needs no new attribute, and `Optimizer`'s domain guard stays inert for it. Only an
+    analyzer that cannot evaluate a saturated queue opts in; see
+    `Optimizer._refused_by_analyzer`.
+    """
+    assert Analyzer.requires_strict_stability is False
+    assert AnalyticAnalyzer.requires_strict_stability is False
+
+
 def test_analytic_analyzer_mirrors_sojourn_time_bitwise():
     stations = _stations()
     S = [2.5, 3.5, 3.0]

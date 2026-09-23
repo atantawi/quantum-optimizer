@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 
 from qopt.allocator import allocate, min_feasible_budget, noise_floor
 from qopt.analyzer import AnalyticAnalyzer
-from qopt.exceptions import InfeasibleBudgetError, SimulationQualityError
+from qopt.exceptions import (
+    InfeasibleBudgetError,
+    InstabilityError,
+    SimulationQualityError,
+)
 from qopt.network import Network
 from qopt.zeta import ZETA_SHAPE_TOL, ZETA_SLOPE
 
@@ -41,7 +45,16 @@ class Result:
                                         # a different run than sojourn_ci above whenever a
                                         # final evaluation ran, the same one when it did
                                         # not.
-    stop_reason: str = "tol"           # "tol" | "noise-floor" | "max_iter"
+    stop_reason: str = "tol"
+    """"tol" | "noise-floor" | "max_iter" | "analyzer-domain".
+
+    `converged` is True for the first two only. "analyzer-domain" means the iteration walked
+    onto a capacity the analyzer refuses to evaluate -- `S*mu == gamma` at a station that
+    admits full utilization -- so the loop stopped and `capacities` are the last vector the
+    analyzer did evaluate, with `residual` the step that would have left its domain. The
+    optimum is on that boundary and an AnalyticAnalyzer can price it; a simulated one cannot.
+    See `Optimizer._refused_by_analyzer`.
+    """
     warm_start_iterations: int = 0     # analytic iterations before the simulated phase
     degraded: list = field(default_factory=list)   # per-iteration quality audit (6.8, 7.2)
     system_response_time: object = None           # qsim diagnostic; not optimized
@@ -214,6 +227,41 @@ class Optimizer:
             ).run()
             S = list(pre.capacities)
             warm_start_iterations = pre.iterations
+            # ...but it solves against the ANALYTIC domain, which is wider than a stochastic
+            # analyzer's by exactly the boundary `S*mu == gamma` of a station that admits
+            # full utilization. Where the analytic optimum sits on that boundary the warm
+            # start is not merely a poor guess, it is a capacity the next `evaluate` refuses:
+            # measured on two stations at gamma = (0.6, 1.2), a cov = 0 slope station at
+            # mu = 1, weight = 1 against an M/M/1 at mu = 3, weight = 3e5, and
+            # C = 1.01 * min_feasible_budget, where the pre-solve returns S_dd = 0.6 exactly
+            # and the run died with InstabilityError after ZERO POSTs.
+            #
+            # A warm start is an optimization, so the answer is to decline it rather than to
+            # move it: fall back to eq 21 on the validated `zeta`, which is where the loop
+            # would have started without `warm_start`. On that same network it leaves that
+            # station x = 3.2e-05 of spare capacity. It is NOT interior in general -- eq 21
+            # rounds a share away at a lopsided weight ratio, 1e30 on this very network, and
+            # lands on the same boundary -- so the fallback is a different candidate and not
+            # a safe one, and the first-candidate check below is what covers that case.
+            # Nudging the analytic answer
+            # off the boundary instead was rejected for the reason `min_feasible_budget`
+            # gives about nudging a collapsed share: the nearest interior float is a
+            # saturated queue whose simulated E[T] means nothing, so it would buy a number
+            # rather than an answer. Pinned by
+            # test_a_warm_start_outside_the_analyzers_domain_falls_back_to_the_cold_one.
+            refused = self._refused_by_analyzer(stations, S)
+            if refused:
+                warnings.warn(
+                    f"analytic warm start puts {', '.join(refused)} at exactly "
+                    f"S*mu == gamma, which this analyzer refuses to evaluate; starting "
+                    f"from eq 21 on the initial zeta instead. The simulated optimum for "
+                    f"this network lies on that boundary, so expect the loop to stop "
+                    f"short of it.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                S = allocate(stations, self.budget, zeta)
+                warm_start_iterations = 0
         else:
             S = allocate(stations, self.budget, zeta)  # S^(1)
 
@@ -227,9 +275,20 @@ class Optimizer:
         stop_reason = "max_iter"
         evaluation = None
 
+        S_accepted = None      # last capacity vector the analyzer actually evaluated
+
         for _ in range(self.max_iter):
+            # Eq 21 answers against the analytic domain, so an iterate can walk onto a
+            # boundary this analyzer refuses -- see `_refused_by_analyzer`. Tested before
+            # `evaluate` rather than caught after it, because the POST is the expensive part
+            # and because a refusal is not an error here: the loop has converged onto a point
+            # outside the analyzer's reach, which is a result to report, not a failure.
+            if self._refused_by_analyzer(stations, S):
+                stop_reason = "analyzer-domain"
+                break
             iterations += 1
             evaluation = self.analyzer.evaluate(stations, S)
+            S_accepted = list(S)
             if stochastic:
                 sim_calls += 1
             degraded.extend(evaluation.degraded)
@@ -383,12 +442,50 @@ class Optimizer:
                 stop_reason = "noise-floor" if step >= self.tol else "tol"
                 break
 
-        converged = stop_reason != "max_iter"
-        if not converged:
+        # The loop breaks on its stopping rule AFTER the step, so the converged iterate is
+        # one the analyzer has never seen: a step that lands exactly on the refused boundary
+        # and is itself below tol exits here rather than through the guard above, and the
+        # final evaluation would be the one to raise. Both exits are therefore handled in one
+        # place, and on the analytic path `_refused_by_analyzer` returns [] so neither moves.
+        refused = self._refused_by_analyzer(stations, S)
+        if refused and stop_reason != "analyzer-domain":
+            stop_reason = "analyzer-domain"
+        if stop_reason == "analyzer-domain":
+            if S_accepted is None:
+                # Nothing to fall back to: the FIRST candidate is already outside. Eq 21 on
+                # a validated zeta does not land there by itself -- this needs a share to
+                # round away entirely, which `min_feasible_budget` documents -- so the
+                # diagnosis is the input, and a bare preflight message from inside
+                # `evaluate` would not say so.
+                raise InstabilityError(
+                    f"the first capacity vector is already outside this analyzer's domain: "
+                    f"{', '.join(refused)} at exactly S*mu == gamma, which it refuses to "
+                    f"evaluate. Eq 21 reaches that point only by rounding a station's whole "
+                    f"share away, so scale the budget further off min_feasible_budget or "
+                    f"narrow the weight ratio; an AnalyticAnalyzer can price it as it is."
+                )
+            # Report the last capacity the analyzer accepted, not the one it refused. That
+            # vector was evaluated, so `evaluation`, `residual` and the reported metrics all
+            # describe a feasible point; `residual` is the step that left the domain, which
+            # is the useful number -- it says how much further the loop wanted to go.
+            S = S_accepted
+
+        converged = stop_reason in ("tol", "noise-floor")
+        if stop_reason == "max_iter":
             warnings.warn(
                 f"Optimizer did not converge in {iterations} iterations "
                 f"(max_iter={self.max_iter}, tol={self.tol}, final residual={residual:g}); "
                 f"returned capacities are the last iterate and may be sub-optimal.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        elif stop_reason == "analyzer-domain":
+            warnings.warn(
+                f"stopped after {iterations} iterations because the next capacity vector "
+                f"put {', '.join(refused)} at exactly S*mu == gamma, which this analyzer "
+                f"refuses to evaluate (residual={residual:g}): eq 21 at the reported zeta "
+                f"puts it there, so the loop cannot advance without leaving the analyzer's "
+                f"domain. Returned capacities are the last vector it did evaluate.",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -442,6 +539,30 @@ class Optimizer:
             zeta_mode=zeta_mode,
             zeta_shape_flags=zeta_shape_flags,
         )
+
+    def _refused_by_analyzer(self, stations, S):
+        """Names of stations whose capacity the analyzer will not evaluate but eq 21 may pick.
+
+        Exactly one state qualifies: `S*mu == gamma` at a station whose
+        `admits_full_utilization` is True, which the analytic model prices (`E[T] = 1/(S*mu)`
+        is finite there) and a stochastic analyzer refuses (`cov_a` never reaches the
+        simulator, so the emitted queue is saturated -- see
+        `SimulationAnalyzer.evaluate`). Empty for every analyzer whose
+        `requires_strict_stability` is False, which keeps the analytic path bit-for-bit
+        unchanged and costs it one attribute read per iteration.
+
+        Deliberately NOT a general stability test. `S*mu < gamma` is a real instability and
+        stays the analyzer's error to raise: this predicate answers "can the analyzer price
+        what eq 21 just chose", and the two disagree about one boundary and nothing else.
+        Anything wider would convert genuine failures into quiet early stops.
+        """
+        if not getattr(self.analyzer, "requires_strict_stability", False):
+            return []
+        return [
+            st.name
+            for st, Si in zip(stations, S)
+            if st.admits_full_utilization and Si * st.mu == st.gamma
+        ]
 
     def _noise_floor(self, stations, S, zeta, ci):
         """Propagate CI half-widths into zeta and measure the spread in S (spec 6.4).
