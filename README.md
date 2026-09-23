@@ -85,7 +85,8 @@ st = GG1Station(0.6, 1.5, c=2.0, cov_a=2.0, cov_s=2.0, zeta_mode=ZETA_SLOPE)
 
 `φ ≡ 1` for M/M/1, so the two calibrations agree exactly there and an all-M/M/1 network is
 bit-for-bit unaffected. The gain tracks `|φ − 1|`: 0.0002–0.039% where only fork-join
-stations deviate, up to 0.515% once single-server stations are not M/M/1. `Result.zeta`
+stations deviate, up to 0.515% once single-server stations are not M/M/1, and 1.59% on the
+stress network of `docs/slope-calibrated-zeta/findings.md` §7. `Result.zeta`
 reports the ζ that actually drove the allocation, with `Result.zeta_phi` and
 `Result.zeta_mode` alongside it, so eq 22's value is recoverable as `zeta[i]/zeta_phi[i]`.
 

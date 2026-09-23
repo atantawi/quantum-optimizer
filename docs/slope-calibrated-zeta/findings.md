@@ -2,8 +2,10 @@
 
 **Status: implemented** (2026-09-22) as a per-station opt-in; the default is still eq 22's level
 calibration, and the paper is unchanged. What follows is the argument as it was made, in its own
-tense: it argues for *replacing* the default, which is not what was built. Read its "would" as
-conditional on a decision that landed narrower -- an opt-in, not a swap.
+conditional tense -- read its "would" and "if it proceeds" as the proposal's, not as a
+description of shipped behaviour. Both its analysis and its rollout survived: §8 step 3 proposed
+exactly the per-station opt-in that was built. What §8 step 2 left open was the paper question,
+answered by documenting a deliberate divergence rather than amending eq 22.
 
 Equation numbers follow [`../paper-map.md`](../paper-map.md): `eq 21` (the allocation rule) and
 `eq 22` (the ζ inversion) mean `docs/analysis.pdf`, the snapshot committed in `37a3a11`. Every

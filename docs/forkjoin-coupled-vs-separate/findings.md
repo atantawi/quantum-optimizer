@@ -18,8 +18,9 @@ service). That claim is enforced, not just stated:
 [`../quotes-selfcheck.py`](../quotes-selfcheck.py) requires every fenced quote below to match that
 file exactly.
 
-**Status: analysis only.** Nothing here proposes a code change. The follow-on proposal it
-motivates is [`../slope-calibrated-zeta/`](../slope-calibrated-zeta/findings.md).
+**Status: analysis only.** Nothing here proposes a code change. The follow-on work it motivates
+is [`../slope-calibrated-zeta/`](../slope-calibrated-zeta/findings.md), implemented 2026-09-22 as
+a per-station opt-in.
 
 ## 1. The three formulations
 
