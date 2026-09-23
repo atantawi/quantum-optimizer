@@ -268,6 +268,16 @@ result = Optimizer(
 print(result.capacities, result.sojourn_ci, result.sim_calls, result.stop_reason)
 ```
 
+A simulated run has one more way to stop than an analytic one. A station with
+`cov_a == cov_s == 0` may be priced at `S*mu == gamma` analytically — `E[T] = 1/(S*mu)` is
+finite there — but the simulator takes its arrival process from the network's `arrival_scv`
+and the routing rather than from the station's `cov_a`, so at the default `arrival_scv=1.0`
+that station is a saturated M/D/1 and `SimulationAnalyzer` refuses the capacity. When the iteration
+walks onto it, `run()` stops before evaluating it, reports `stop_reason="analyzer-domain"`
+with `converged=False`, warns, and returns the last capacities the analyzer actually
+evaluated. The same check declines an analytic warm start that lands there, falling back to
+the cold eq-21 allocation.
+
 Runnable versions: `examples/simulated_tandem.py`,
 `examples/simulated_mixed_network.py`, and `examples/qcsc_network.py` — the paper's
 14-station QCSC network under three workloads (balanced, quantum-dominant,

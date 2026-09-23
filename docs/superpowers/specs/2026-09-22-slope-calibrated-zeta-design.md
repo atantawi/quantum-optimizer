@@ -561,6 +561,49 @@ consume it to close the loop? Worth asking rather than guessing — `MEASURES` i
 and adding to it has known fork-join hazards (two of qsim's own defaults come back as
 join-station numbers with `success: true` and no warning).
 
+### 8.7 The analyzer's domain is narrower than the model's
+
+*Amended 2026-09-23, post-implementation, after the fourth review of PR #26.*
+
+`3bb34d6` opened the analytic domain at `S·μ == γ` for a `k == 0` G/G/1, and §8's table shows
+the slope map's fixed point there **is** that boundary. The simulated path does not follow it:
+`Network.to_model_dict` builds the arrival process from `Network.arrival_scv` and the routing, so
+a station's own `cov_a` never reaches the simulator, and at the default `arrival_scv == 1.0` a
+`cov_a == 0` station emits exponential arrivals against deterministic service — at the boundary a
+saturated M/D/1. `SimulationAnalyzer.evaluate`'s preflight refuses it (§7.3 of the simulation
+spec), correctly.
+
+Two candidates reach that point. Both measured on γ = (0.6, 1.2) — a cov = 0 slope station at
+μ = 1, w = 1 against an M/M/1 at μ = 3, w = 3e5, `C = 1.01 · min_feasible_budget`:
+
+- **The warm start.** It solves against the wider domain and returns `S_dd = 0.6` exactly, so the
+  run died with `InstabilityError` after **zero** POSTs.
+- **A later iterate.** Undamped (`damping=1.0`) the fourth candidate is exactly `γ/μ` and
+  `evaluate` raised after 3 POSTs. At the stochastic default `damping=0.5` that run stalled one
+  ulp above instead — x holds at `ulp(0.6)` from iteration 39 and it stops on `tol` — so the
+  in-loop case is pinned undamped and, separately, through a collapsed eq-21 share.
+
+The analyzer now **declares** its domain, rather than the optimizer re-deriving it:
+`Analyzer.requires_strict_stability`, `False` on the base class and on `AnalyticAnalyzer`, `True`
+on `SimulationAnalyzer` — which reads its own flag in the preflight, so the two cannot disagree
+about where the domain ends. `Optimizer.run` then checks every candidate against it:
+
+| refused candidate | behaviour |
+|---|---|
+| warm start | decline it: `RuntimeWarning`, fall back to eq 21 on the initial ζ, `warm_start_iterations = 0` |
+| the first candidate | `InstabilityError` naming the input, with zero analyzer calls spent |
+| a later iterate | stop before evaluating: `stop_reason="analyzer-domain"`, `converged=False`, roll back to the last vector the analyzer accepted, `RuntimeWarning` carrying the residual |
+
+The fallback is a *different* candidate, not a safe one — eq 21 rounds a share away at a lopsided
+weight ratio (1e30 on this same network) and lands on the same boundary — which is what the
+first-candidate arm covers.
+
+Nudging a refused capacity onto the nearest interior float is rejected for the reason
+`min_feasible_budget` already gives about nudging a collapsed share: it spends budget the caller
+did not allocate, and the simulated `E[T]` of a queue that close to saturation means nothing. The
+guard is deliberately **not** a general stability test — `S·μ < γ` is a real instability and stays
+the analyzer's error to raise.
+
 ---
 
 ## 9. Testing

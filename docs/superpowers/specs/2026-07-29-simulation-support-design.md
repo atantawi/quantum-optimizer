@@ -547,7 +547,7 @@ All new fields are defaulted, so existing construction sites are unaffected.
 |---|---|
 | `sojourn_ci` | per-station `(lower, upper)`; `None` on the analytic path |
 | `noise_floor` | final `ΔS` attributable to simulation noise; `None` analytically |
-| `stop_reason` | `"tol"` \| `"noise-floor"` \| `"max_iter"` |
+| `stop_reason` | `"tol"` \| `"noise-floor"` \| `"max_iter"` \| `"analyzer-domain"` |
 | `warm_start_iterations` | analytic iterations consumed before the simulated phase |
 | `degraded` | per-iteration audit of weak measures and γ-conservation misses (§6.8) |
 | `system_response_time` | qsim diagnostic; not optimized |
@@ -555,6 +555,13 @@ All new fields are defaulted, so existing construction sites are unaffected.
 
 The existing `converged` field is retained for backward compatibility;
 `stop_reason` is the finer-grained signal.
+
+> **Amended 2026-09-23, post-implementation.** `stop_reason` gained a fourth value,
+> `"analyzer-domain"`: the iteration walked onto a capacity this analyzer refuses to evaluate,
+> so it stopped and rolled back to the last vector that was actually evaluated. `converged` is
+> `False` there. Reachable only once a station may be priced at `ρ == 1` analytically while the
+> simulator still refuses it — see §8.7 of
+> `docs/superpowers/specs/2026-09-22-slope-calibrated-zeta-design.md`, which specifies the guard.
 
 ### 6.8 The γ-conservation check
 
