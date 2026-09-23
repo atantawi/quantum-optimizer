@@ -275,7 +275,7 @@ even a 100% overcorrection (`f=2`) beats doing nothing. An approximate `φ` is s
   `E[T] = 1/m` with no queueing term, so extra capacity buys it little.
 - `zeta_from` stays **linear in T**, so `Optimizer._noise_floor` keeps working unchanged: it
   propagates a CI half-width through the same hook, and `φ` is noise-free.
-- Convergence is unaffected: 13 budgets from `1.0001×` to `1e4×` the floor, iterations 5–18 vs
+- Convergence is unaffected: 13 budgets from `1.0001×` to `1e4×` the floor, iterations 5–17 vs
   6–18, **0 failures and 0 off-optimum rows**.
 
 **What it costs**

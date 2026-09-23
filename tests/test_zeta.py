@@ -826,7 +826,10 @@ def test_the_shape_tolerance_is_a_relative_disagreement_not_an_absolute_time():
     # This is _mixed_pair with gamma AND mu scaled by 100. Scaling mu alone would not
     # do it -- the budget is the same multiple of a floor that scales with mu, so S
     # absorbs the change and S*mu, rho and E[T] all come out unmoved. Scaling both
-    # leaves every rho and every capacity bit-identical while dividing E[T] by 100. So
+    # leaves every rho and every capacity ANALYTICALLY unmoved while dividing E[T] by
+    # 100 -- measured, they agree to 1-2 ulp rather than bitwise, since eq 21 divides by
+    # a sqrt(mu) that is 100x larger. Nothing here rests on that: the test needs only
+    # the flag and the small absolute difference below. So
     # _ScaledAnalyzer(4.0) injects the same 300% disagreement a relative tolerance must
     # still fire on, while the absolute difference shrinks to ~0.016.
     stations = [
