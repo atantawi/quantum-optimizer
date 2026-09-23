@@ -62,9 +62,12 @@ def resolve_zeta_mode(mode):
     """
     if mode is None:
         return ZETA_LEVEL
-    # `is not str` rather than a truthiness or equality test: True == 1 and both would
-    # otherwise slip past an `in ZETA_MODES` check only by luck of not being "level".
-    if type(mode) is not str or mode not in ZETA_MODES:
+    # Membership against the two string constants is the whole check: nothing that is not
+    # a string equals "level" or "slope", so a bool, a number, a list or an arbitrary
+    # object is rejected here with no separate type test -- which is what
+    # test_a_non_string_mode_is_rejected documents. A `str` SUBCLASS carrying a valid
+    # value is accepted deliberately: it compares and behaves as the string it is.
+    if mode not in ZETA_MODES:
         raise ValueError(
             f"zeta_mode must be one of {ZETA_MODES!r} (or None for "
             f"{ZETA_LEVEL!r}), got {mode!r}"

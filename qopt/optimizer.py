@@ -243,6 +243,10 @@ class Optimizer:
                         continue
                     T_model = st.sojourn_time(Si)
                     if abs(T / T_model - 1.0) > self.zeta_shape_tol:
+                        # Mark on FLAG, not on check: an unflagged slope station is
+                        # re-examined every iteration, because on a stochastic path one
+                        # can cross the tolerance only on a later iterate and must still
+                        # be reported. Hoisting this above the `if` would silence those.
                         shape_checked.add(id(st))
                         message = (
                             f"station {st.name!r}: measured E[T]={T:g} disagrees with "

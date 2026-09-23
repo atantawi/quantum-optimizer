@@ -8,7 +8,7 @@ import pytest
 from qopt.allocator import min_feasible_budget
 from qopt.exceptions import InstabilityError
 from qopt.optimizer import Optimizer, Result
-from qopt.station import ForkJoinStation, GG1Station
+from qopt.station import ForkJoinStation, GG1Station, Station
 from qopt.zeta import (
     ZETA_LEVEL,
     ZETA_MODES,
@@ -146,30 +146,32 @@ def test_phi_is_strictly_positive_for_every_station_kind():
         assert st.phi(3.0) > 0.0, st.name
 
 
+# Module scope, not nested in one test: EVERY test below that means to exercise the base
+# class's finite difference has to build a station with no dT_dS override, and the two
+# that once used GG1Station.mm1 for it silently reached its closed form instead.
+class QuadraticStation(Station):
+    """E[T] = 1/x**2 -- not a queue qopt ships, which is the point."""
+
+    def sojourn_time(self, S):
+        m = S * self.mu
+        self._check_stable(m)
+        return 1.0 / (m - self.gamma) ** 2
+
+    def sim_node(self, S, job_class):
+        raise NotImplementedError
+
+    @property
+    def alloc_cost(self):
+        return 1.0
+
+    @property
+    def default_zeta(self):
+        return 1.0
+
+
 def test_the_finite_difference_default_serves_a_subclass_with_no_closed_form():
     # The base implementation is deliberately concrete, not abstract, so slope
     # calibration works for a user station whose derivative qopt has never seen.
-    from qopt.station import Station
-
-    class QuadraticStation(Station):
-        """E[T] = 1/x**2 -- not a queue qopt ships, which is the point."""
-
-        def sojourn_time(self, S):
-            m = S * self.mu
-            self._check_stable(m)
-            return 1.0 / (m - self.gamma) ** 2
-
-        def sim_node(self, S, job_class):
-            raise NotImplementedError
-
-        @property
-        def alloc_cost(self):
-            return 1.0
-
-        @property
-        def default_zeta(self):
-            return 1.0
-
     st = QuadraticStation(gamma=0.5, mu=1.0)
     # T = x**-2 so dT/dx = -2 x**-3 and phi = -dT/dS * x/(mu T) = 2, at every S.
     for S in (0.6, 1.0, 4.0):
@@ -177,10 +179,30 @@ def test_the_finite_difference_default_serves_a_subclass_with_no_closed_form():
 
 
 def test_dt_ds_refuses_an_unstable_capacity():
-    # Review Focus 2. At S == gamma/mu the step h is 0; below it h is NEGATIVE, so
-    # S - h is the MORE stable side and only S + h raises. An abs(h), or evaluating
-    # S - h first and returning early, would hand back a derivative for a station that
-    # has no sojourn time at all.
+    # Review Focus 2, on QuadraticStation so that the BASE finite difference is what
+    # runs. GG1Station.mm1 would route to its closed form instead -- which is a real but
+    # SEPARATE property, kept in test_the_gg1_closed_form_dt_ds_refuses_an_unstable_capacity.
+    #
+    # What this pins is "no derivative for a station that has no sojourn time", and
+    # nothing more. At and below the boundary every evaluation the difference makes is
+    # unstable, so the subclass's own _check_stable raises whichever of the two calls
+    # runs first: the sign of h and their order cannot be distinguished by any input. At
+    # S == gamma/mu the step is 0, and sojourn_time(S) raises before the division by
+    # 2*h can. The step property that IS pinnable is its scaling -- next test.
+    st = QuadraticStation(gamma=0.5, mu=1.0)
+    boundary = st.gamma / st.mu           # 0.5
+    for S in (boundary, boundary * 0.5, boundary - 1e-12):
+        with pytest.raises(InstabilityError):
+            st.dT_dS(S)
+        with pytest.raises(InstabilityError):
+            st.phi(S)
+
+
+def test_the_gg1_closed_form_dt_ds_refuses_an_unstable_capacity():
+    # GG1Station.dT_dS never calls sojourn_time, so it needs a _check_stable of its own
+    # or it would hand back a finite number for a capacity with no sojourn time at all.
+    # This test exists because the mm1 version of the assertion above was pinning THIS,
+    # not the base finite difference -- which is covered separately, on QuadraticStation.
     st = GG1Station.mm1(0.6, 1.0, c=2.0)
     boundary = st.gamma / st.mu           # 0.6
     for S in (boundary, boundary * 0.5, boundary - 1e-12):
@@ -191,10 +213,19 @@ def test_dt_ds_refuses_an_unstable_capacity():
 
 
 def test_the_finite_difference_step_stays_inside_the_stability_region():
-    # Scaling h to SPARE CAPACITY rather than to S is what guarantees S - h > gamma/mu.
-    # A fixed step would fall off the boundary for a station run close to it.
-    st = GG1Station.mm1(0.6, 1.0, c=2.0)
-    assert st.dT_dS(0.6 + 1e-9) < 0.0          # a hair above the boundary, still fine
+    # QuadraticStation, again because GG1Station.mm1 overrides dT_dS: the previous
+    # version of this test asserted `mm1.dT_dS(0.6 + 1e-9) < 0.0`, which is true by
+    # inspection of a closed form whose every term is negative and involves no step.
+    #
+    # The kill set, measured: scaling h to SPARE CAPACITY, `S - gamma/mu`, is what keeps
+    # S - h inside the stability region. A hair above the boundary the spare capacity is
+    # 1e-9, so h = _FD_STEP * S (1e-7 * 0.5) and a fixed h = _FD_STEP (1e-7) both put
+    # S - h BELOW gamma/mu and raise InstabilityError from inside a derivative that is
+    # perfectly well defined. Only the shipped scaling returns a number here.
+    st = QuadraticStation(gamma=0.5, mu=1.0)
+    boundary = st.gamma / st.mu                      # 0.5
+    slope = st.dT_dS(boundary + 1e-9)                # a hair above it, still fine
+    assert math.isfinite(slope) and slope < 0.0, slope
 
 
 def test_phi_on_an_unbound_gamma_names_the_station():
@@ -771,6 +802,33 @@ def test_the_cross_check_fires_above_the_tolerance_and_names_the_station():
     assert len(res.zeta_shape_flags) == 1       # only the SLOPE station is checked
     assert "md1" in res.zeta_shape_flags[0]
     assert "cov" in res.zeta_shape_flags[0]     # the message points at the likely cause
+
+
+def test_the_shape_tolerance_is_a_relative_disagreement_not_an_absolute_time():
+    # The check compares `abs(T / T_model - 1.0)`, a FRACTION. Swapping that for
+    # `abs(T - T_model)`, a TIME, leaves every other cross-check test green: their
+    # stations have E[T] of order 0.3-1.0, where 0.25 happens to fall the same way
+    # under either reading.
+    #
+    # This is _mixed_pair with gamma AND mu scaled by 100. Scaling mu alone would not
+    # do it -- the budget is the same multiple of a floor that scales with mu, so S
+    # absorbs the change and S*mu, rho and E[T] all come out unmoved. Scaling both
+    # leaves every rho and every capacity bit-identical while dividing E[T] by 100. So
+    # _ScaledAnalyzer(4.0) injects the same 300% disagreement a relative tolerance must
+    # still fire on, while the absolute difference shrinks to ~0.016.
+    stations = [
+        GG1Station.md1(60.0, 150.0, c=2.0, name="md1", zeta_mode=ZETA_SLOPE),
+        GG1Station.mm1(120.0, 300.0, c=0.5, name="mm1", zeta_mode=ZETA_LEVEL),
+    ]
+    C = 4.0 * min_feasible_budget(stations)
+    with pytest.warns(RuntimeWarning, match="md1"):
+        res = Optimizer(stations, C, analyzer=_ScaledAnalyzer(4.0)).run()
+    assert len(res.zeta_shape_flags) == 1
+    # Anti-vacuity, and the whole point: under an ABSOLUTE reading the slope station
+    # would not have been flagged at all. Without this the test would pass under the
+    # very mutation it exists to kill, so do NOT delete it.
+    st, Si, T = stations[0], res.capacities[0], res.sojourn_times[0]
+    assert abs(T - st.sojourn_time(Si)) < ZETA_SHAPE_TOL, st.name
 
 
 def test_the_cross_check_warns_once_per_station_not_once_per_iteration():

@@ -181,8 +181,13 @@ class Station(ABC):
         fixed step does not: `S - h` is inside the stability region by construction for
         any stable S, and at `S == gamma/mu` the step is 0 so `sojourn_time` raises
         InstabilityError rather than this dividing by zero. Below the boundary h is
-        negative, and the `S + h` evaluation is the one that raises -- so do not reorder
-        these two calls or take an absolute value.
+        negative -- but that costs nothing, because BOTH evaluations are then unstable
+        and this raises whichever of the two runs first. Reordering the calls or taking
+        `abs(h)` is therefore indistinguishable from what is written here at every S
+        (probed at six capacities under five variants of the step). The load-bearing
+        property is the SCALING to spare capacity: scaling to `S`, or a fixed step,
+        raises a hair above the boundary where this returns a derivative. Pinned by
+        test_the_finite_difference_step_stays_inside_the_stability_region.
 
         For a fork-join this differences along the station's FIXED CURRENT RAY, because
         `sojourn_time` scales both servers with S. That is the radial derivative slope
