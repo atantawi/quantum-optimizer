@@ -116,6 +116,9 @@ def test_phi_is_identically_one_for_mm1():
     # slope-correct. Any closed form that breaks this is wrong.
     st = GG1Station.mm1(0.6, 1.0, c=2.0)
     for S in (0.61, 0.8, 1.0, 2.5, 10.0, 1e4):
+        # Tolerance is set by cancellation in S*mu - gamma (x) at small x/S, not by
+        # derivative accuracy: for x=0.01, relative error is ~1e-14 in x, ~1e-12 in T,
+        # ~7e-8 in the finite-difference numerator (verified independent of S).
         assert st.phi(S) == pytest.approx(1.0, abs=1e-7), S
 
 
