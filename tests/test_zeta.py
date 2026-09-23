@@ -431,6 +431,37 @@ def test_a_non_positive_phi_is_refused_and_the_message_names_the_station():
     assert ok.zeta_from(1.0, 2.0) == 1.5      # T*x = 1.0 * (2.0*1.0 - 0.5)
 
 
+def test_an_infinite_phi_is_refused_and_the_message_names_the_station():
+    # The isfinite half of the guard, pinned on its own: a station whose derivative is
+    # unbounded has no finite slope to calibrate to, even though phi > 0.0 holds here --
+    # +inf passes that comparison, so it is only the isfinite half that catches it.
+    from qopt.station import Station
+
+    class UnboundedSlopeStation(Station):
+        def sojourn_time(self, S):
+            self._check_stable(S * self.mu)
+            return 1.0
+
+        def dT_dS(self, S):
+            self._check_stable(S * self.mu)
+            return -math.inf            # phi = -dT_dS * x / (mu * T) = +inf
+
+        def sim_node(self, S, job_class):
+            raise NotImplementedError
+
+        @property
+        def alloc_cost(self):
+            return 1.0
+
+        @property
+        def default_zeta(self):
+            return 1.0
+
+    st = UnboundedSlopeStation(gamma=0.5, mu=1.0, name="unbounded", zeta_mode=ZETA_SLOPE)
+    with pytest.raises(ValueError, match="unbounded"):
+        st.zeta_from(1.0, 2.0)
+
+
 def test_a_tiny_phi_still_produces_a_usable_zeta():
     # Review Focus 4. A cov = 0 station has phi = 1 - rho exactly, so at extreme load
     # zeta_slope is ~1e-6 of zeta_level. ZETA_FLOOR is local to noise_floor and clamps

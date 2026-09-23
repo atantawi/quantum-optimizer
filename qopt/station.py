@@ -239,15 +239,18 @@ class Station(ABC):
             if not (math.isfinite(phi) and phi > 0.0):
                 raise ValueError(
                     f"station {self.name!r}: slope-calibrated zeta needs a finite, "
-                    f"strictly positive phi, got {phi} at S={S}. E[T] must strictly "
-                    f"decrease in capacity for there to be a slope to calibrate to."
+                    f"strictly positive phi, got {phi} at S={S}: phi is non-positive "
+                    f"when E[T] does not strictly decrease in capacity, and non-finite "
+                    f"when its derivative is unbounded or undefined."
                 )
             return phi * T * x
         return T * x
 
     def zeta(self, S):
-        """This station's own calibration -- level (eq 22) or slope, per its mode --
-        evaluated at its own analytic sojourn time."""
+        """This station's own calibration, evaluated at its own analytic sojourn time.
+
+        Level (eq 22) or slope, whichever `zeta_from` selects for this station's mode.
+        """
         return self.zeta_from(self.sojourn_time(S), S)
 
     def retune(self, S):
