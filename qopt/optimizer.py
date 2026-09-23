@@ -259,6 +259,18 @@ class Optimizer:
             # than converging -- measured on ~2% of budgets in the first 24 ulps above a
             # tuned station's floor. Loud, never silent, and `min_feasible_budget` is
             # documented as a floor to scale away from rather than to sit on.
+            #
+            # That ordering is tidiness for the LEVEL calibration and correctness for the
+            # slope one (qopt/zeta.py): slope-calibrated zeta prices a fork-join by the
+            # derivative along its CURRENT ray, and that equals the true marginal only on
+            # the optimal ray -- 3.3e-08 agreement on it, against 20.4% and 12.3%
+            # disagreement at r* = 1.0 and 4.0. Retuning last is what leaves the next
+            # iteration's zeta_from looking at an already-optimal ray.
+            #
+            # DOCUMENTED BUT NOT TEST-PINNED: moving this retune before eq 21 does not
+            # move the converged objective far enough for any assertion to catch, because
+            # the fixed point closes the ray one iteration later either way. Treat the
+            # reason above as the constraint, not the suite.
             S_new = [st.retune(s) for st, s in zip(stations, S_new)]
 
             residual = max(abs(a - b) for a, b in zip(S_new, S))

@@ -355,7 +355,8 @@ class GG1Station(SingleServerStation):
             dT/dS = -mu * [ 1/m^2 + k*gamma*(2m - gamma)/(m*x)^2 ]
 
         Every term is negative, so no sign can cancel silently. At k = 1 this gives
-        phi == 1 exactly, which is the M/M/1 invariant; at k = 0 it gives phi = 1 - rho.
+        phi == 1 algebraically exactly, and to within one ulp in floating point --
+        the M/M/1 invariant; at k = 0 it gives phi = 1 - rho.
         """
         m = S * self.mu
         self._check_stable(m)

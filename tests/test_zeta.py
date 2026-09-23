@@ -544,3 +544,182 @@ def test_the_reported_zeta_is_the_one_that_drove_the_allocation():
     again = allocate(stations, C, res.zeta)
     for a, b in zip(again, res.capacities):
         assert a == pytest.approx(b, rel=1e-8)
+
+
+# Station specs and objectives from docs/slope-calibrated-zeta/probe-output.txt section 3.
+# The WEIGHTS are part of the data: eq 21 combines w and zeta under one square root, so a
+# dropped weight is indistinguishable from a phi error in the objective alone.
+
+def _net_fj_mm1(mode):
+    return [
+        ForkJoinStation(0.45, 1.0, 1.0, r=4.0, c1=4.0, c2=1.0, r_star="tuned",
+                        name="FJ-A", zeta_mode=mode),
+        ForkJoinStation(0.80, 2.0, 2.0, r=2.0, c1=1.0, c2=3.0, r_star="tuned",
+                        name="FJ-B", zeta_mode=mode),
+        GG1Station(0.60, 1.5, 1.0, c=2.0, cov_a=1.0, cov_s=1.0, name="SS-1",
+                   zeta_mode=mode),
+        GG1Station(1.20, 3.0, 1.5, c=0.5, cov_a=1.0, cov_s=1.0, name="SS-2",
+                   zeta_mode=mode),
+    ]
+
+
+def _net_mixed_cov(mode):
+    return [
+        ForkJoinStation(0.45, 1.0, 1.0, r=4.0, c1=4.0, c2=1.0, r_star="tuned",
+                        name="FJ-A", zeta_mode=mode),
+        GG1Station(0.60, 1.5, 1.0, c=2.0, cov_a=1.0, cov_s=0.0, name="M/D/1",
+                   zeta_mode=mode),
+        GG1Station(1.20, 3.0, 1.5, c=0.5, cov_a=2.0, cov_s=2.0, name="cov2",
+                   zeta_mode=mode),
+        GG1Station(0.90, 2.0, 1.0, c=1.0, cov_a=1.0, cov_s=1.0, name="M/M/1",
+                   zeta_mode=mode),
+    ]
+
+
+_MULTS = (1.01, 1.05, 1.2, 1.5, 2, 5, 20)
+
+_FJ_MM1_LEVEL = (845.653557502, 169.433928883, 42.584355698, 17.147817304,
+                 8.624738064, 2.176046247, 0.459984473)
+_FJ_MM1_SLOPE = (845.326602738, 169.374048331, 42.572541019, 17.144312750,
+                 8.623541689, 2.175978022, 0.459983404)
+_MIXED_LEVEL = (672.781044226, 132.897962166, 32.456697879, 12.821589655,
+                6.396010744, 1.600929447, 0.336149757)
+_MIXED_SLOPE = (672.409070110, 132.736738624, 32.343754976, 12.755896143,
+                6.364185455, 1.598169104, 0.336090106)
+
+
+def _objectives(build, mode):
+    out = []
+    for mult in _MULTS:
+        # A FRESH network per row: a tuned fork-join is mutated by retune, and
+        # min_spend must be read before any run has moved the ray.
+        stations = build(mode)
+        C = mult * min_feasible_budget(stations)
+        out.append(Optimizer(stations, C).run().objective)
+    return out
+
+
+@pytest.mark.parametrize("build,expected", [
+    (_net_fj_mm1, _FJ_MM1_LEVEL),
+    (_net_mixed_cov, _MIXED_LEVEL),
+])
+def test_level_objectives_reproduce_the_reference_probe_run(build, expected):
+    # Review Focus 1. Today's code path already produces these, so this test fails if
+    # the station specs were ported wrongly -- a dropped weight, a swapped cov, the
+    # wrong r_star -- BEFORE slope mode is exercised at all. Do not loosen the
+    # tolerance to make it pass; fix the specs.
+    got = _objectives(build, ZETA_LEVEL)
+    for mult, g, e in zip(_MULTS, got, expected):
+        assert g == pytest.approx(e, rel=1e-9), mult
+
+
+@pytest.mark.parametrize("build,expected", [
+    (_net_fj_mm1, _FJ_MM1_SLOPE),
+    (_net_mixed_cov, _MIXED_SLOPE),
+])
+def test_slope_objectives_reproduce_the_reference_probe_run(build, expected):
+    # rel AND abs: the reference table is printed to nine decimal places, so its own
+    # absolute precision is only ~5e-10. At the smallest magnitude row (mult=20, ~0.336)
+    # that caps the achievable relative precision at ~1.5e-9 -- measured at 1.28e-9 on
+    # _MIXED_SLOPE there, which a rel-only tolerance of 1e-9 would reject even though the
+    # port is correct. `rel` pins the large rows to nine significant figures; `abs` pins
+    # the small rows at the reference's own printed precision.
+    got = _objectives(build, ZETA_SLOPE)
+    for mult, g, e in zip(_MULTS, got, expected):
+        assert g == pytest.approx(e, rel=1e-9, abs=1e-9), mult
+
+
+@pytest.mark.parametrize("build", [_net_fj_mm1, _net_mixed_cov])
+def test_slope_never_loses_to_level_on_the_reference_networks(build):
+    # From LIVE runs, not from the reference tuples above: the objective is a weighted
+    # sum of sojourn times, so lower is better, and slope calibration is exact, so it
+    # cannot be beaten by the level approximation. Asserting this over the frozen
+    # reference numbers instead would be arithmetic on constants -- a test that passes
+    # whatever the code does.
+    level = _objectives(build, ZETA_LEVEL)
+    slope = _objectives(build, ZETA_SLOPE)
+    for mult, l, s in zip(_MULTS, level, slope):
+        assert s <= l, mult
+
+
+def test_the_mixed_network_gain_reaches_the_documented_half_percent():
+    # findings.md section 4: up to 0.515%, at C/floor = 1.5 on the mixed-cov network.
+    # The gain tracks |phi - 1|, so it is the network with an M/D/1 and a cov = 2
+    # station that shows it, not the fork-join pair. Measured live for the same reason
+    # as the test above.
+    i = _MULTS.index(1.5)
+    mixed_l = _objectives(_net_mixed_cov, ZETA_LEVEL)
+    mixed_s = _objectives(_net_mixed_cov, ZETA_SLOPE)
+    gain = (mixed_l[i] - mixed_s[i]) / mixed_l[i]
+    assert gain == pytest.approx(0.00515, rel=0.02)
+    # And the fork-join-only network gains far less, for the same reason.
+    fj_l = _objectives(_net_fj_mm1, ZETA_LEVEL)
+    fj_s = _objectives(_net_fj_mm1, ZETA_SLOPE)
+    fj_gain = (fj_l[i] - fj_s[i]) / fj_l[i]
+    assert fj_gain < 0.0005
+
+
+def test_slope_calibration_needs_the_retune_to_run_last():
+    # The radial derivative equals the true marginal only ON the optimal ray, so
+    # zeta_from must see a station whose ray is already optimal for the spend it holds.
+    # The Optimizer guarantees that by calling retune LAST in each iteration.
+    #
+    # This test pins the CONSEQUENCE rather than the ordering: at convergence every
+    # tuned fork-join must be sitting on the ray that is locally optimal for its own
+    # spend. Reordering the retune leaves the station one iteration stale, and on a
+    # network that is still moving that shows up here.
+    from qopt.forkjoin_policy import optimal_ray
+
+    stations = _net_mixed_cov(ZETA_SLOPE)
+    C = 1.5 * min_feasible_budget(stations)
+    res = Optimizer(stations, C).run()
+    fj = stations[0]
+    spend = res.capacities[0] * fj.alloc_cost
+    assert fj.r_star == pytest.approx(
+        optimal_ray(fj.gamma, fj.mu_base, fj.r_base, fj.c1, fj.c2, spend), rel=1e-9
+    )
+
+
+def test_slope_mode_on_an_all_mm1_network_matches_level_mode_to_machine_precision():
+    # Review Focus 5, and the cheapest witness that phi is right: phi is 1 on M/M/1 --
+    # algebraically exactly, and to within one ulp in floating point, since the
+    # cancellation in its closed form does not round exactly. So every capacity must
+    # agree to machine precision. A stray factor anywhere in the slope arm moves this
+    # by vastly more than 1e-12.
+    def net(mode):
+        return [
+            GG1Station.mm1(0.6, 1.5, 1.0, c=2.0, name="a", zeta_mode=mode),
+            GG1Station.mm1(1.2, 3.0, 1.5, c=0.5, name="b", zeta_mode=mode),
+            GG1Station.mm1(0.9, 2.0, 0.2, c=1.0, name="c", zeta_mode=mode),
+        ]
+
+    level = net(ZETA_LEVEL)
+    slope = net(ZETA_SLOPE)
+    C = 3.0 * min_feasible_budget(level)
+    r_l = Optimizer(level, C).run()
+    r_s = Optimizer(slope, C).run()
+    for a, b in zip(r_s.capacities, r_l.capacities):
+        assert a == pytest.approx(b, rel=1e-12)
+    assert r_s.objective == pytest.approx(r_l.objective, rel=1e-12)
+    assert r_s.iterations == r_l.iterations
+
+
+def test_a_slope_run_converges_on_a_network_with_a_very_small_phi():
+    # Review Focus 4, end to end. A cov = 0 station's phi falls toward 1 - rho, so its
+    # converged zeta is orders of magnitude below its level value while its neighbours'
+    # are not. default_zeta is unchanged at 1.0, so the run starts far from the answer
+    # and must still converge rather than stall at max_iter.
+    #
+    # Measured, not predicted: at this budget the allocation starves the cov=0 station
+    # until it sits at rho = 1 - 1e-10, where phi = 1 - rho is itself ~8.7e-11 and the
+    # resulting zeta is ~7.6e-21 -- "a few percent" is off by nine orders of magnitude.
+    # All four assertions below hold at that measured point.
+    stations = [
+        GG1Station(0.6, 1.0, 1.0, c=1.0, cov_a=0.0, cov_s=0.0, name="dd1",
+                   zeta_mode=ZETA_SLOPE),
+        GG1Station.mm1(1.2, 3.0, 1.0, c=0.5, name="mm1", zeta_mode=ZETA_SLOPE),
+    ]
+    res = Optimizer(stations, 1.05 * min_feasible_budget(stations)).run()
+    assert res.converged, res.stop_reason
+    assert all(z > 0.0 for z in res.zeta)
+    assert 0.0 < res.zeta_phi[0] < 0.5
