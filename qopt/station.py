@@ -246,7 +246,8 @@ class Station(ABC):
         return T * x
 
     def zeta(self, S):
-        """Eq 22 evaluated at this station's own analytic sojourn time."""
+        """This station's own calibration -- level (eq 22) or slope, per its mode --
+        evaluated at its own analytic sojourn time."""
         return self.zeta_from(self.sojourn_time(S), S)
 
     def retune(self, S):
