@@ -212,7 +212,8 @@ def test_all_stations_stable_under_feasible_budget():
 
 def test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacity():
     """A lopsided weight vector rounds the light station's share away at budgets FAR above
-    the floor, and the contract is that this is an error, not a number.
+    the floor, and for a station that cannot be priced at rho == 1 the contract is that this
+    is an error, not a number.
 
     `min_feasible_budget` once described this as happening only "within a few ulps of the
     floor". It is really set by the share-to-base ratio, so weight skew reaches it at any
@@ -224,21 +225,16 @@ def test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacit
     where the two modes are bit-identical -- phi == 1, so slope's `phi*T*x` IS level's `T*x`.
     Both then need a weight ratio of 1e30 AND a budget at 1.01x the floor; from 2x upwards the
     share survives, down to x = 2.0e-15. Two calibrations failing on exactly the same cell is
-    what rules the calibration out as the cause.
+    what rules the calibration out as the cause. This is the arm that pins the FAILS-LOUDLY
+    contract: an M/M/1 at `S*mu == gamma` has no sojourn time, so the run names the station it
+    could not keep stable instead of reporting an objective computed there.
 
-    The cov = 0 ZETA DEGENERACY is a different thing, and it is a genuine slope-mode effect.
-    For every k > 0, `zeta -> k*rho` as x -> 0 in BOTH modes -- measured 1.0e-02 at k = 0.01,
-    i.e. bounded away from zero even for near-deterministic traffic -- because the
-    Allen-Cunneen term `k*gamma/(m*x)` diverges at exactly the rate `zeta = T*x` divides out.
-    At k = 0 that term is absent, T = 1/m is finite at the boundary, and the two modes part:
-    `zeta_level = T*x ~ x` while `zeta_slope = phi*T*x ~ x^2`, since phi is exactly `1 - rho`
-    there. A share goes as sqrt(zeta), so it is ~sqrt(x) under level and ~x under slope --
-    and only the linear map contracts onto x = 0. That is why slope reaches the boundary here
-    at a weight ratio ten orders of magnitude smaller than level does, and it is a property of
-    the k = 0 station, not of an arbitrary G/G/1.
-
-    What this pins either way is the FAILS-LOUDLY half: the run names the station it could not
-    keep stable instead of reporting an objective computed at `S*mu == gamma`.
+    The cov = 0 collapse used to raise here too and no longer does, deliberately: such a
+    station's E[T] is finite at rho == 1 and the boundary is a capacity it can be priced at,
+    so the same collapse is a legitimate answer rather than a failure. That half moved to
+    test_a_deterministic_station_may_sit_exactly_on_its_boundary, which also covers why the
+    collapse reaches so much further under slope calibration. What stays here is the check
+    that opening the domain for k = 0 did NOT open it for k > 0.
     """
     from qopt.exceptions import InstabilityError
     from qopt.optimizer import Optimizer
@@ -253,28 +249,20 @@ def test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacit
         C = multiple * min_feasible_budget(stations)
         return stations, Optimizer(stations, C).run()
 
-    # Eq 21's rounding, at cov = 1 where the two calibrations are the same arithmetic. Only
-    # the knife-edge budget reaches it, and it takes a ratio of 1e30 to do so.
     for mode in (ZETA_SLOPE, ZETA_LEVEL):
+        # Eq 21's rounding at cov = 1, where the two calibrations are the same arithmetic.
+        # k = 1, so `admits_full_utilization` is False and the boundary is still refused.
         with pytest.raises(InstabilityError, match="light"):
             run(1.0, 1e30, 1.01, mode)
         # One doubling of the budget is enough to save the share -- barely.
         stations, res = run(1.0, 1e30, 2.0, mode)
         x = res.capacities[0] * stations[0].mu - stations[0].gamma
         assert 0.0 < x < 1e-14, x
-
-    # The cov = 0 degeneracy under slope, which is NOT a knife-edge budget: two orders of
-    # magnitude above the floor, and again four orders above that.
-    for multiple in (100.0, 10000.0):
-        with pytest.raises(InstabilityError, match="light"):
-            run(0.0, 1e20, multiple, ZETA_SLOPE)
-
-    # Level mode on the same cov = 0 station survives that ratio at those budgets, which is
-    # the sqrt(x)-versus-x difference above and not a tolerance: it needs 1e30 to fail.
-    stations, res = run(0.0, 1e20, 10000.0, ZETA_LEVEL)
-    assert res.capacities[0] * stations[0].mu > stations[0].gamma
-    with pytest.raises(InstabilityError, match="light"):
-        run(0.0, 1e30, 10000.0, ZETA_LEVEL)
+        # A ratio of 1e20 does not reach it at the three budgets checked here -- the point
+        # being that the ratio, not the budget, is what this arm is about.
+        for multiple in (1.01, 100.0, 10000.0):
+            stations, res = run(1.0, 1e20, multiple, mode)
+            assert res.capacities[0] * stations[0].mu > stations[0].gamma
 
     # The same networks with a sane weight ratio are fine under both calibrations, so the
     # test is about the ratio and not about these stations being unservable.
@@ -282,7 +270,175 @@ def test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacit
         for cov in (0.0, 1.0):
             stations, res = run(cov, 10.0, 100.0, mode)
             for st, Si in zip(stations, res.capacities):
-                assert Si * st.mu > st.gamma
+                st.check_stable(Si)
+
+
+def test_a_deterministic_station_may_sit_exactly_on_its_boundary():
+    """`S*mu == gamma` is a point of a cov = 0 station's domain, not its boundary, and eq 21
+    is allowed to put it there.
+
+    A deterministic station has `E[T] = 1/(S*mu)` exactly -- k multiplies the whole
+    Allen-Cunneen congestion term, so at k = 0 there is no `1/(1-rho)` left to diverge. E[T] is
+    finite and smooth at rho == 1 with a bounded derivative. The stability guard used to refuse
+    the point anyway, and that refusal cost an OPTIMUM rather than a corner case: E[T] is
+    strictly decreasing with no asymptote, so a weighted objective's infimum over a budget
+    simplex can lie exactly there, and slope-calibrated zeta converges onto it.
+
+    Reference network, from the review that found this: a deterministic station at
+    gamma=0.6/mu=1.0/weight=1 against an M/M/1 at gamma=1.2/mu=3.0/weight=3e5/c=0.5, budget
+    1.01x the floor. The infimum is 6250001.666666654, attained AT the boundary. Slope
+    calibration returns exactly that. Level calibration stops 2.5e-9 short of the boundary and
+    reports 6250003.607; the gap is 3e-7 relative here and worth 1.9% further out
+    (test_slope_beats_level_on_a_deterministic_station).
+
+    Slope gets there and level does not because of the ORDER in which zeta vanishes: phi is
+    exactly `1 - rho` at k = 0, so `zeta_slope = phi*T*x` goes as x^2 while
+    `zeta_level = T*x` goes as x. Shares go as sqrt(zeta), so slope's share map is linear in x
+    -- a contraction whose fixed point IS the boundary -- and level's goes as sqrt(x), whose
+    fixed point is a small positive x. For any k > 0 neither collapses, because zeta tends to
+    `k*rho` instead of to zero
+    (test_zeta_is_bounded_away_from_zero_at_the_boundary_unless_k_is_zero).
+
+    Zero is also what `zeta_from` reports there, and that is load-bearing: it makes x = 0 an
+    exact fixed point of the loop. Clamping to ZETA_FLOOR instead was measured and rejected --
+    it buys 3.6e-11 of spare capacity whose own zeta clamps again, and the map enters a
+    period-3 cycle (0 -> 3.6e-11 -> 2.1e-15 -> 0) that the loop stops on by tolerance, at
+    whichever point it happens to reach.
+    """
+    import math
+
+    from qopt.optimizer import Optimizer
+    from qopt.station import Station
+    from qopt.zeta import ZETA_LEVEL, ZETA_SLOPE
+
+    dd = GG1Station(0.6, 1.0, 1.0, c=1.0, cov_a=0.0, cov_s=0.0, name="dd")
+    mm = GG1Station.mm1(1.2, 3.0, 3e5, c=0.5, name="mm")
+    assert dd.admits_full_utilization is True
+    assert mm.admits_full_utilization is False
+    # Not a GG1-only opt-in: the base class refuses by default, and the fork-join inherits
+    # that refusal because both its branches are M/M/1.
+    assert Station.admits_full_utilization.fget(mm) is False
+    assert ForkJoinStation(gamma=0.5, mu=1.0, r=2.0, c1=1.0,
+                           c2=1.0).admits_full_utilization is False
+
+    # The boundary is priceable, and priced by the closed form rather than by a limit.
+    boundary = dd.gamma / dd.mu
+    dd.check_stable(boundary)                       # does not raise
+    assert dd.sojourn_time(boundary) == 1.0 / (boundary * dd.mu)
+    assert dd.dT_dS(boundary) == -dd.mu / (boundary * dd.mu) ** 2
+    assert dd.phi(boundary) == 0.0                  # phi carries the factor x
+    # ... and still refused one ulp BELOW it, where E[T] would price a capacity the station
+    # cannot serve. Opening the domain must not open it past rho == 1.
+    from qopt.exceptions import InstabilityError
+    with pytest.raises(InstabilityError, match="dd"):
+        dd.check_stable(math.nextafter(boundary, 0.0))
+
+    def net(mode):
+        return [GG1Station(0.6, 1.0, 1.0, c=1.0, cov_a=0.0, cov_s=0.0, zeta_mode=mode,
+                           name="dd"),
+                GG1Station.mm1(1.2, 3.0, 3e5, c=0.5, zeta_mode=mode, name="mm")]
+
+    stations = net(ZETA_SLOPE)
+    C = 1.01 * min_feasible_budget(stations)
+    res = Optimizer(stations, C).run()
+    assert res.converged
+    assert res.capacities[0] * stations[0].mu == stations[0].gamma      # exactly on it
+    assert res.zeta[0] == 0.0
+    assert res.zeta_phi[0] == 0.0
+    assert res.sojourn_times[0] == pytest.approx(1.0 / 0.6, rel=1e-15)
+    assert res.objective == pytest.approx(6250001.666666654, rel=1e-12)
+
+    # Level reaches a strictly interior point, and a worse one. Both halves matter: the
+    # sqrt(x) share map is why it does not collapse, and the objective is why that is not
+    # something to prefer.
+    lvl_stations = net(ZETA_LEVEL)
+    lvl = Optimizer(lvl_stations, C).run()
+    assert lvl.capacities[0] * lvl_stations[0].mu > lvl_stations[0].gamma
+    assert lvl.objective > res.objective
+
+    # Zero zeta is accepted from this station and from no other, so the silent-instability
+    # hole `allocate`'s check closed stays closed.
+    from qopt.allocator import allocate
+    S = allocate(stations, C, [0.0, 1.0])
+    assert S[0] == stations[0].gamma / stations[0].mu
+    with pytest.raises(ValueError, match="strictly positive"):
+        allocate(stations, C, [1.0, 0.0])           # the M/M/1 in position 1
+
+    # x = 0 is an exact FIXED POINT of the loop map, not a cycle the tolerance hides.
+    z = [0.0, 1.0]
+    for _ in range(5):
+        S = allocate(stations, C, z)
+        assert S[0] * stations[0].mu == stations[0].gamma
+        z = [st.zeta_from(st.sojourn_time(Si), Si) for st, Si in zip(stations, S)]
+        assert z[0] == 0.0
+
+
+def test_slope_beats_level_on_a_deterministic_station():
+    """Why the domain was opened rather than slope mode restricted: slope is the ACCURATE one.
+
+    The review that found the boundary collapse read it as a slope-mode regression, on the
+    grounds that level mode succeeds where slope raises. It does, but by stopping short of the
+    optimum -- the collapse was slope converging onto a true infimum that the guard forbade.
+    Brute-forced against a 400k-point grid on S_dd over the budget line, on the review's own
+    network at three budgets:
+
+        C = 1.01x floor, w = 3e5:  infimum 6250001.667   slope 6250001.667   level 6250003.607
+        C = 3x    floor, w = 1e3:  infimum     105.8333  slope     105.8333  level     107.3484
+        C = 10x   floor, w = 1e3:  infimum      24.81481 slope      24.81481 level      25.29338
+
+    Level's excess is 1.43% and 1.93% on the last two, and it gets there by over-allocating the
+    zero-variability station -- 0.912 against the optimal 0.600 at 10x -- because eq 22's level
+    zeta overstates how much a deterministic station gains from capacity. That is the whole
+    point of calibrating on the slope instead.
+
+    Slope does NOT attain the infimum exactly at every budget, and the assertions below say so:
+    across the six cells its relative excess runs from -5.8e-15 to 1.1e-10, the largest miss
+    being the one cell where it stops 6.3e-09 of capacity short of the boundary rather than on
+    it. Level's smallest excess over the same cells is 3.1e-07, so the two are separated by
+    more than three orders of magnitude even at their closest.
+    """
+    from qopt.optimizer import Optimizer
+    from qopt.zeta import ZETA_LEVEL, ZETA_SLOPE
+
+    def net(mode, w):
+        return [GG1Station(0.6, 1.0, 1.0, c=1.0, cov_a=0.0, cov_s=0.0, zeta_mode=mode,
+                           name="dd"),
+                GG1Station.mm1(1.2, 3.0, w, c=0.5, zeta_mode=mode, name="mm")]
+
+    def infimum(C, w):
+        """The objective at S_dd = gamma/mu, which is where E[T]_dd is minimised on the line."""
+        S1 = 0.6
+        S2 = (C - S1) / 0.5
+        m = 3.0 * S2
+        rho = 1.2 / m
+        return 1.0 / S1 + w * (1.0 / m) * (1.0 + rho / (1.0 - rho))
+
+    cells = (
+        # multiple, weight, level's measured relative excess over the infimum
+        (1.01, 3e5, 3.1042e-07),
+        (1.01, 1e3, 8.0020e-05),
+        (3.0, 3e5, 5.3313e-05),
+        (3.0, 1e3, 1.4316e-02),
+        (10.0, 3e5, 2.3851e-04),
+        (10.0, 1e3, 1.9285e-02),
+    )
+    for mult, w, level_excess in cells:
+        C = mult * min_feasible_budget(net(ZETA_LEVEL, w))
+        best = infimum(C, w)
+        slope = Optimizer(net(ZETA_SLOPE, w), C).run()
+        level = Optimizer(net(ZETA_LEVEL, w), C).run()
+        # Slope reaches the infimum to floating-point noise. Two-sided and NOT exact: the
+        # largest measured miss is 1.1e-10 (at 10x/1e3, where it stops 6.3e-09 short of the
+        # boundary) and the smallest is -5.8e-15, the infimum being recomputed here by a
+        # different expression than the optimizer uses. 1e-09 gives one decade of headroom
+        # over the worst cell while sitting two and a half decades below level's smallest
+        # excess (3.1e-07), so no cell can pass both this assertion and the next.
+        assert abs(slope.objective / best - 1.0) < 1e-09, (mult, w, slope.objective, best)
+        # Level overshoots, by the margin measured for that cell.
+        assert level.objective / best - 1.0 == pytest.approx(level_excess, rel=0.02), (
+            mult, w, level.objective / best - 1.0
+        )
+        assert level.capacities[0] > slope.capacities[0]
 
 
 def test_a_collapsed_share_can_land_on_a_technically_stable_capacity():

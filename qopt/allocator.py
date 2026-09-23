@@ -8,6 +8,13 @@ from qopt.exceptions import InfeasibleBudgetError
 def min_feasible_budget(stations):
     """Minimum budget to keep every station stable: sum_j alloc_cost_j * gamma_j / mu_j.
 
+    "Stable" is `S*mu > gamma`, except for a deterministic G/G/1, which is priceable AT
+    `S*mu == gamma` and so is stable at exactly its own term in this sum -- see
+    `Station.admits_full_utilization`. `allocate` still requires a budget strictly above this
+    total, because the slack it distributes has to be positive for anything else to move; a
+    network of nothing but deterministic stations is therefore the one case where this floor
+    is feasible in the model but still refused by eq 21.
+
     A budget strictly greater than this makes eq 21's slack term positive. That is an
     AGGREGATE statement and does not promise each station a margin: eq 21 distributes the
     slack, so a station's share can round away entirely and leave `S_i * mu_i == gamma_i`
@@ -26,18 +33,28 @@ def min_feasible_budget(stations):
         phi == 1: the light station rounds onto its boundary at a weight ratio of 1e30 and a
         budget 1.01x this floor, under BOTH modes, and survives from 2x upwards (x = 2.0e-15
         there). At a ratio of 1e20 it survives every multiple from 1.01x up.
-      * The k = 0 zeta degeneracy, which is specific to deterministic stations and reaches
-        much further. For any k = (cov_a^2+cov_s^2)/2 > 0, zeta tends to `k*rho` as the spare
-        capacity x tends to 0 -- 1.0e-02 at k = 0.01 -- so it stays bounded away from zero
-        and the share cannot round away for budget reasons alone. At k = 0 the congestion
-        term is absent and zeta tends to 0 instead: as x, under level, and as x^2 under
-        slope. Shares go as sqrt(zeta), so slope's share map is linear in x and contracts
-        onto the stability boundary. A cov = 0 light station therefore hits it under slope at
-        a ratio of 1e20 at 1.01x, 2x, 100x AND 10000x this floor, where level needs 1e30.
+      * The k = 0 zeta degeneracy, which is specific to deterministic stations, reaches much
+        further, and is NOT a failure. For any k = (cov_a^2+cov_s^2)/2 > 0, zeta tends to
+        `k*rho` as the spare capacity x tends to 0 -- 1.0e-02 at k = 0.01 -- so it stays
+        bounded away from zero and the share cannot round away for budget reasons alone. At
+        k = 0 the congestion term is absent and zeta tends to 0 instead: as x under level, and
+        as x^2 under slope. Shares go as sqrt(zeta), so slope's share map is linear in x and
+        contracts onto the station's own `gamma/mu`. A cov = 0 light station therefore lands
+        there under slope at a ratio of 1e20 at 1.01x, 2x, 100x AND 10000x this floor, where
+        level needs 1e30.
 
-    Both are pinned by
-    test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacity, which
-    keeps the cov = 1 and cov = 0 arms separate for exactly this reason.
+        That outcome is CORRECT rather than tolerated: `E[T] = 1/(S*mu)` is finite at rho == 1,
+        so `gamma/mu` is a capacity such a station can be priced at, and it is frequently the
+        optimal one -- on the reference network of
+        test_a_deterministic_station_may_sit_exactly_on_its_boundary the objective's infimum
+        lies exactly there and slope calibration attains it, while level stops 2.5e-09 short
+        and pays up to 1.9%. `Station.admits_full_utilization` is what makes the point
+        reachable, and it is the only station that gets it.
+
+    The first is pinned by
+    test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacity, which keeps
+    its cov = 1 arms separate from the k = 0 case for exactly this reason, and the second by
+    test_a_deterministic_station_may_sit_exactly_on_its_boundary.
 
     What happens next depends on how `gamma_i/mu_i` itself rounds, and only one of the two
     outcomes is loud. Where `b * mu == gamma` exactly -- gamma=0.5, mu=1.0 -- the station is
@@ -106,10 +123,21 @@ def allocate(stations, C, zeta_vec):
         raise ValueError(
             f"zeta_vec length {len(zeta_vec)} must match the {len(stations)} stations"
         )
-    if not all(math.isfinite(z) and z > 0.0 for z in zeta_vec):
-        raise ValueError(
-            f"zeta values must be finite and strictly positive, got {zeta_vec}"
+    for st, z in zip(stations, zeta_vec):
+        # Zero is admissible from exactly one kind of station: one whose E[T] is finite at
+        # rho == 1. Its share is then zero, leaving it at `gamma/mu`, which for that station
+        # is a priceable capacity and generally the optimal one -- see
+        # Station.admits_full_utilization. For every other station a zero zeta means a zero
+        # share on a DIVERGENT E[T], which is the silent-instability hole this check closed,
+        # so the strict test still applies to them.
+        usable = math.isfinite(z) and (
+            z >= 0.0 if st.admits_full_utilization else z > 0.0
         )
+        if not usable:
+            raise ValueError(
+                f"zeta values must be finite and strictly positive, got {zeta_vec} -- "
+                f"zero is accepted only from a station whose E[T] is finite at rho == 1"
+            )
     base = [st.gamma / st.mu for st in stations]
     floor = sum(st.alloc_cost * b for st, b in zip(stations, base))
     slack = C - floor

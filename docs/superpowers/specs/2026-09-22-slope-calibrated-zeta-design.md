@@ -295,14 +295,32 @@ is no such term, and the two modes separate by one power of `x`:
 | slope | `φ·T·x ~ x²/γ²` | `~ x` |
 
 Only the second is a contraction onto `x = 0`: the slope share map's fixed point *is* the
-stability boundary. So a `cov = 0` station can walk onto its own boundary under slope
-calibration at budgets four orders of magnitude above the floor, where level does not. This is
-a real restriction on slope mode's domain, it is confined to `k = 0` exactly, and it is pinned
-by `test_zeta_is_bounded_away_from_zero_at_the_boundary_unless_k_is_zero` together with the
-`cov = 0` arms of
-`test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacity`. The failure is
-loud (`InstabilityError` naming the station) rather than a wrong number — see `min_feasible_budget`
-for the one configuration where the same collapse is silent instead.
+stability boundary. So a `cov = 0` station walks onto its own boundary under slope calibration
+at budgets four orders of magnitude above the floor, where level does not.
+
+**This was first read as a restriction on slope mode's domain. It is the opposite.** At `k = 0`
+there is no congestion term to diverge, `E[T] = 1/(S·mu)` is finite and smooth at `ρ = 1` with
+a bounded derivative, and since it is strictly decreasing with no asymptote a weighted
+objective's infimum over the budget simplex can lie *exactly* on `S·mu = γ`. The share map is
+converging onto a true optimum, and the stability guard — which exists for the `k·γ/(m·x)`
+singularity, absent here — was refusing the answer. On the reference network (a deterministic
+station at `γ=0.6, μ=1.0, w=1` against an M/M/1 at `γ=1.2, μ=3.0, w=3e5, c=0.5`, budget
+`1.01×` floor) the infimum is `6250001.667` at the boundary: slope attains it, level stops
+`2.5e-09` short and reports `6250003.607`. Further out the same gap is worth **1.43% and 1.93%**
+of the objective, level over-allocating the zero-variability station to `0.912` against an
+optimal `0.600`.
+
+So `Station.admits_full_utilization` opens the domain at `k = 0` and nowhere else, and
+`zeta_from` returns `ζ = 0` there rather than clamping — zero is the honest value *and* an exact
+fixed point of the loop, where clamping to `ZETA_FLOOR` was measured to produce a period-3 cycle
+(`x = 0 → 3.6e-11 → 2.1e-15 → 0`) that the loop resolves only by tolerance. `allocate` accepts
+a zero ζ from such a station and from no other, so the silent-instability hole its ζ check
+closed stays closed. Pinned by
+`test_zeta_is_bounded_away_from_zero_at_the_boundary_unless_k_is_zero`,
+`test_a_deterministic_station_may_sit_exactly_on_its_boundary` and
+`test_slope_beats_level_on_a_deterministic_station`; the `k > 0` half, where the boundary
+remains an error, stays pinned by
+`test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacity`.
 
 ---
 

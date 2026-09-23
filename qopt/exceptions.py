@@ -10,7 +10,13 @@ class InfeasibleBudgetError(QOptError):
 
 
 class InstabilityError(QOptError):
-    """Raised when a capacity leaves a station unstable (S*mu <= gamma)."""
+    """Raised when a capacity leaves a station unstable.
+
+    `S*mu < gamma` always, and `S*mu == gamma` unless the station reports
+    `admits_full_utilization` -- true only for a G/G/1 with `cov_a == cov_s == 0`, whose
+    `E[T] = 1/(S*mu)` is finite at rho == 1 and for which the boundary is a priceable
+    capacity rather than an asymptote.
+    """
 
 
 class TopologyError(QOptError):

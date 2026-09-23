@@ -141,7 +141,8 @@ class Station(ABC):
     def sojourn_time(self, S):
         """Expected sojourn time E[T] under capacity S.
 
-        Raises InstabilityError if S*mu <= gamma. Raises ValueError first if gamma is
+        Raises InstabilityError if S*mu < gamma, and if S*mu == gamma unless this station
+        reports `admits_full_utilization`. Raises ValueError first if gamma is
         unbound (no explicit gamma at construction and not yet bound by a Network) —
         the gamma property itself raises before the stability check can run.
         """
@@ -313,6 +314,27 @@ class Station(ABC):
         x = S * self.mu - self.gamma
         if self._zeta_mode == ZETA_SLOPE:
             phi = self.phi(S)
+            if phi == 0.0 and self.admits_full_utilization and S * self.mu == self.gamma:
+                # The one place phi is legitimately zero, and the honest zeta there is zero
+                # too. A station whose E[T] is finite at rho == 1, sitting exactly there:
+                # `phi = -dT/dS * x / (mu*T)` carries the factor x, so it vanishes with the
+                # spare capacity even though the slope `-mu/(S*mu)^2` does not.
+                #
+                # Returning 0 is not a degradation, it is the FIXED POINT. Eq 21 gives this
+                # station a share of exactly zero, putting it back on the boundary it is
+                # already optimally on, so the loop stops moving. `allocate` accepts a zero
+                # zeta from a station that admits full utilization, and only from one -- for
+                # any other station a zero share lands on an unstable capacity, which is the
+                # hole its check was added to close.
+                #
+                # The alternative considered was clamping to `ZETA_FLOOR`, and it was
+                # rejected on measurement, not taste: a floored zeta buys this station
+                # 3.6e-11 of spare capacity, whose own zeta floors again, and the map enters
+                # a period-3 CYCLE (x = 0 -> 3.6e-11 -> 2.1e-15 -> 0). The loop then stops
+                # on tolerance at whichever point of the cycle it reaches, which is the same
+                # history-dependence `Station.min_spend` exists to prevent. Pinned by
+                # test_a_deterministic_station_may_sit_exactly_on_its_boundary.
+                return 0.0
             if not (math.isfinite(phi) and phi > 0.0):
                 raise ValueError(
                     f"station {self.name!r}: slope-calibrated zeta needs a finite, "
@@ -368,11 +390,47 @@ class Station(ABC):
         Public counterpart to `_check_stable`, which takes the already-computed
         effective rate. Lets a caller fail fast before spending an expensive
         evaluation (spec 7.3) without reimplementing the check or its message.
+
+        "Unstable" is `S*mu < gamma`, plus `S*mu == gamma` for every station whose E[T]
+        diverges there -- which is every station except a G/G/1 parameterised with
+        `cov_a == cov_s == 0`. See
+        `admits_full_utilization`; the strict half is never relaxed.
         """
         self._check_stable(S * self.mu)
 
+    @property
+    def admits_full_utilization(self):
+        """Whether rho == 1 is a point of this station's domain rather than its boundary.
+
+        False for every queue that has a congestion term, which in this library is every
+        station except a G/G/1 parameterised with `cov_a == cov_s == 0`: E[T]
+        carries a `1/(1-rho)` factor and diverges, so `S*mu == gamma` is not a capacity the
+        model can price. True only where that factor is multiplied by zero -- a G/G/1 with
+        `cov_a == cov_s == 0`, for which `E[T] = 1/(S*mu)` exactly, finite and smooth at
+        rho == 1 with a bounded derivative `-mu/(S*mu)^2`.
+
+        That distinction is not pedantry, it decides an OPTIMUM. For a deterministic station
+        E[T] is strictly decreasing with no asymptote, so a weighted objective's infimum over
+        a budget simplex can sit exactly on `S*mu == gamma`; refusing the point makes the
+        infimum unattained and the optimizer fails on the answer instead of returning it.
+        Measured on a two-station network (dd at gamma=0.6/mu=1.0/cov=0, an M/M/1 at weight
+        3e5): the infimum is 6250001.667 AT the boundary, and slope-calibrated zeta converges
+        onto it -- because zeta_slope goes as x^2 there, making eq 21's share map a
+        contraction whose fixed point IS the boundary. Level calibration stops 2.5e-9 short
+        and reports 6250003.607; further out the same gap is worth 1.9% of the objective
+        (test_a_deterministic_station_may_sit_exactly_on_its_boundary).
+
+        Kept as a property rather than a `k == 0` test inside `_check_stable` because the
+        base class has no k, and because a subclass with a bounded E[T] of its own should be
+        able to say so without touching this guard. ForkJoinStation does not: it has no cov
+        parameters, both its branches are M/M/1, so it inherits False.
+        """
+        return False
+
     def _check_stable(self, mu_eff):
-        if mu_eff <= self.gamma:
+        if mu_eff < self.gamma or (
+            mu_eff == self.gamma and not self.admits_full_utilization
+        ):
             raise InstabilityError(
                 f"station {self.name!r} unstable: S*mu={mu_eff} <= gamma={self.gamma}"
             )
@@ -415,11 +473,42 @@ class GG1Station(SingleServerStation):
         self.cov_a = cov_a
         self.cov_s = cov_s
 
+    @property
+    def admits_full_utilization(self):
+        """True exactly when k == 0, i.e. `cov_a == cov_s == 0` (D/D/1).
+
+        `k = (cov_a^2 + cov_s^2)/2` multiplies the whole Allen-Cunneen congestion term, so at
+        k == 0 there is no `1/(1-rho)` left to diverge and `E[T] = 1/(S*mu)` is finite at
+        Written as a test on k rather than on `cov_a == 0 and cov_s == 0`. The constructor
+        validates both covs as non-negative, so for this class the two are equivalent; k is
+        preferred because k is the quantity the licence actually depends on -- it is what
+        multiplies the divergent term -- so the condition sits next to its own reason.
+
+        Compared to 0.0 exactly rather than against a tolerance: k is what appears in the
+        formula, and a k of 1e-300 really does diverge, just further out. The band of
+        near-deterministic stations is not a problem to paper over here -- for every k > 0,
+        zeta tends to `k*rho` rather than to zero, so no such station's share is driven to
+        zero BY THE CALIBRATION (measured 1.0e-02 at k = 0.01,
+        test_zeta_is_bounded_away_from_zero_at_the_boundary_unless_k_is_zero). Eq 21's own
+        rounding can still lose one, and for those stations that remains an error -- which is
+        the point of keeping this property false for them.
+        """
+        return (self.cov_a ** 2 + self.cov_s ** 2) / 2.0 == 0.0
+
     def sojourn_time(self, S):
         mu_eff = S * self.mu
         self._check_stable(mu_eff)
-        rho = self.gamma / mu_eff
         k = (self.cov_a ** 2 + self.cov_s ** 2) / 2.0
+        if k == 0.0:
+            # D/D/1: no congestion term at all, so E[T] is just the service time -- finite
+            # and smooth right up to rho == 1, which `admits_full_utilization` lets through.
+            # Written as a branch rather than folded into the expression below because that
+            # expression evaluates `k * rho / (1.0 - rho)` as `(k*rho) / (1-rho)`, which is
+            # 0.0/0.0 at the boundary and raised ZeroDivisionError there. Bit-exact against
+            # the shipped expression for k == 0 at every one of 14406 (gamma, mu, S) points
+            # tested, since `(1/m) * (1.0 + 0.0)` is `1/m`.
+            return 1.0 / mu_eff
+        rho = self.gamma / mu_eff
         return (1.0 / mu_eff) * (1.0 + k * rho / (1.0 - rho))
 
     def dT_dS(self, S):
@@ -437,8 +526,14 @@ class GG1Station(SingleServerStation):
         """
         m = S * self.mu
         self._check_stable(m)
-        x = m - self.gamma
         k = (self.cov_a ** 2 + self.cov_s ** 2) / 2.0
+        if k == 0.0:
+            # Same short-circuit as `sojourn_time`, for the same reason: the k term below
+            # divides by `(m*x)**2`, which is 0.0 at the boundary this station is allowed to
+            # reach. Bit-exact against the shipped expression for k == 0 on the same 14406
+            # points, since `1.0/m**2 + 0.0` is `1.0/m**2`.
+            return -self.mu * (1.0 / m ** 2)
+        x = m - self.gamma
         return -self.mu * (
             1.0 / m ** 2 + k * self.gamma * (2.0 * m - self.gamma) / (m * x) ** 2
         )
