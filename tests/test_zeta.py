@@ -247,8 +247,11 @@ def test_gg1_phi_matches_the_documented_sensitivity_table():
     #
     # It is here because under slope calibration `cov_a` stops being decorative on the
     # simulated path -- it is never sent to qsim and never measured back, so it enters
-    # the allocation only through phi. Understating it drives phi toward 1 and degrades
-    # to level calibration; OVERSTATING it can land worse than the incumbent.
+    # the allocation only through phi. Every row below is at cov_s = 1, where
+    # k = (cov_a**2 + 1)/2 and phi == 1 at cov_a == 1. In general it is k, not cov_a,
+    # that controls phi -- phi is strictly increasing in k and equals 1 exactly at
+    # k == 1 -- so the cov_a that reproduces level calibration is sqrt(2 - cov_s**2),
+    # which is 1 only here at cov_s = 1. See README.md's zeta-calibration subsection.
     #
     # NOTE: three of the seven rows below were corrected from the task brief's literal
     # text (1.240030 -> 1.240326 at rho=0.67/cov_a=3; 1.039697 -> 1.039583 at

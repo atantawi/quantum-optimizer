@@ -253,7 +253,9 @@ class Optimizer:
                             f"station's parameters -- most often cov_a, which is never "
                             f"sent to the simulator and must describe the arrival process "
                             f"the station actually sees, internal traffic included. "
-                            f"cov_a=1 is the safe assumption when it is unknown."
+                            f"When it is unknown, the assumption that reproduces level "
+                            f"calibration is cov_a**2 + cov_s**2 == 2 -- which is cov_a=1 "
+                            f"only for cov_s=1."
                         )
                         zeta_shape_flags.append(message)
                         warnings.warn(message, RuntimeWarning, stacklevel=2)

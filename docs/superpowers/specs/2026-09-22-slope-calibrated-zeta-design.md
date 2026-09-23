@@ -375,6 +375,11 @@ Two consequences, the first of which corrects how `findings.md` §6 applies here
 2. **The error is one-directional in a useful way.** Understating `cov_a` drives φ toward 1, which
    degrades gracefully to level-mode behaviour: no gain, no loss. Overstating it is the dangerous
    direction. The error is worst at low load and self-limiting at high load (+4.0% at ρ = 0.95).
+   [**Correction (2026-09-23, final review I-1):** every row of the table above is computed at
+   `cov_s = 1`, and the one-directional claim holds in `k = (cov_a² + cov_s²)/2`, not in `cov_a`
+   alone. φ is strictly increasing in `k` and equals 1 exactly at `k = 1`, so understating `cov_a`
+   drives φ toward 1 only while `k` stays above 1; once `k < 1` it drives φ *past* 1 in the other
+   direction, which is a loss and not a graceful degradation. See §8.3's correction block.]
 
 ### 8.3 The safe-default rule, documented
 
@@ -382,6 +387,19 @@ Two consequences, the first of which corrects how `findings.md` §6 applies here
 rather than overshooting past it. Goes in the `zeta_mode` docstring and the README, together with
 the statement that in slope mode `cov_a` must describe the arrival process the station *actually*
 sees, internal traffic included.
+
+**Correction (2026-09-23, final review I-1):** the rule above is wrong whenever `cov_s ≠ 1`, and
+the shipped wording in `README.md`'s ζ-calibration subsection is the corrected one. φ depends on
+the two coefficients of variation only through `k = (cov_a² + cov_s²)/2`, is strictly increasing
+in `k`, and equals 1 exactly at `k = 1`. The assumption that reproduces level calibration — and
+so forfeits the gain rather than overshooting past it — is therefore `k = 1`, i.e.
+`cov_a = √(2 − cov_s²)`; `cov_a = 1` is level-equivalent only at `cov_s = 1`, which is the
+`cov_s` §8.2's table is computed at and where this rule was generalised from. For a
+deterministic-service station (`cov_s = 0`) assuming `cov_a = 1` gives `k = 0.5` and φ < 1 at
+every load (≈ 0.833 at ρ = 0.5) — the far side of 1 from any truth with `k > 1`, and measured
+worse than eq 22 rather than degrading to it. When `cov_s > √2` no arrival process reaches
+`k = 1` at all and φ > 1 whatever is assumed, so the closest approach to level calibration is
+`cov_a = 0`.
 
 ### 8.4 The measured-vs-analytic `E[T]` cross-check
 

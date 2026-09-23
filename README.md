@@ -98,9 +98,17 @@ station's *analytic* model even when `E[T]` is measured, which is what keeps the
 in control of the allocation's level. That promotes `cov_a` from nearly decorative to a
 live input: it is never sent to the simulator and never measured back, so under slope
 calibration it must describe the arrival process the station *actually* sees, internal
-traffic included. **When it is unknown, `cov_a = 1` is the safe assumption** — it forfeits
-the gain rather than overshooting past it, since understating `cov_a` drives φ toward 1 and
-degrades gracefully to level calibration while overstating it can land worse than eq 22.
+traffic included. **When it is unknown, the assumption that forfeits the gain rather than
+overshooting past it is the one that reproduces level calibration** — and that is *not*
+`cov_a = 1` in general. φ depends on the two coefficients of variation only through
+`k = (cov_a² + cov_s²)/2`, is strictly increasing in `k`, and equals 1 exactly at `k = 1`.
+So the level-equivalent choice is `cov_a = √(2 − cov_s²)` — `1` for an M/M/1-shaped
+service, but `√2 ≈ 1.414` for a deterministic-service station (`cov_s = 0`, the service
+shape of the shipped `md1` preset), where assuming `cov_a = 1` gives `k = 0.5` and φ < 1 at
+every load (≈ 0.833 at ρ = 0.5) — the far side of 1 from any truth with `k > 1`, and
+measurably worse than eq 22 rather than gracefully degraded. When `cov_s > √2` no arrival
+process reaches `k = 1` at all and φ > 1 whatever you assume; `cov_a = 0` is then the
+closest approach. Overstating `k` in either variable is the direction that overshoots.
 `Optimizer` cross-checks measured against analytic `E[T]` for slope stations and reports
 disagreements in `Result.zeta_shape_flags` (tolerance: `zeta_shape_tol`, default 25%). That
 check runs inside the loop, against the iterate that produced each allocation — not after
