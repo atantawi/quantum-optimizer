@@ -10,12 +10,40 @@ def min_feasible_budget(stations):
 
     A budget strictly greater than this makes eq 21's slack term positive. That is an
     AGGREGATE statement and does not promise each station a margin: eq 21 distributes the
-    slack, so within a few ulps of the floor a station's share can round away entirely and
-    leave `S_i * mu_i == gamma_i` exactly -- measured on plain M/M/1 stations, not only on
-    the fork-join policies. `allocate` refuses a non-positive aggregate slack, and
-    `check_stable`/`sojourn_time` refuse the per-station boundary, so the outcome there is
-    an error rather than a wrong number; it is not a budget at which a run is expected to
-    succeed. Scale a budget off this floor, do not sit on it.
+    slack, so a station's share can round away entirely and leave `S_i * mu_i == gamma_i`
+    exactly -- measured on plain M/M/1 stations, not only on the fork-join policies.
+
+    What decides that is the ratio of a station's SHARE to its own base `gamma_i/mu_i`, not
+    the budget's distance from this floor: the share is added to the base, so it vanishes
+    once it falls below half an ulp of it. A lopsided weight vector is therefore enough on
+    its own. Measured on two stations at gamma/mu = 0.5, the light one rounds onto its
+    boundary at 1.01x, 2x, 100x AND 10000x this floor at a weight ratio of 1e20 under slope
+    calibration, and at the same four multiples at 1e30 under level -- so this is eq 21's
+    rounding, not a slope-calibration effect, and level mode only needs a larger ratio to
+    reach it. An earlier version of this note put the effect "within a few ulps of the
+    floor", which understates it: budget proximity and weight skew are two independent
+    ways in, and the second reaches four orders of magnitude above the floor.
+
+    What happens next depends on how `gamma_i/mu_i` itself rounds, and only one of the two
+    outcomes is loud. Where `b * mu == gamma` exactly -- gamma=0.5, mu=1.0 -- the station is
+    unstable and `check_stable`/`sojourn_time` refuse, so the caller gets an error naming the
+    station. Where `b * mu` rounds a hair ABOVE gamma the station is technically stable:
+    gamma=0.1, mu=0.39 leaves x = 1.4e-17, and E[T] comes back as a finite 9.0e+16 with
+    phi = 0.8, with no error anywhere. That second case is a wrong number, not an error, and
+    this note previously claimed otherwise. Both are pinned, the silent one deliberately, by
+    test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacity and
+    test_a_collapsed_share_can_land_on_a_technically_stable_capacity.
+
+    Eq 21 is nevertheless left to round as it rounds, and NOT nudged up to the next
+    representable capacity, for three independent reasons: a nudge spends budget the caller
+    did not allocate, it breaks the bit-exactness the level path is pinned to, and at 1.4e-17
+    of spare capacity the sojourn time is meaningless whichever neighbouring float is used.
+    Making the collapse itself raise is also ruled out, and by an existing invariant rather
+    than by taste: test_the_reported_floor_is_bit_for_bit_the_one_allocate_prices requires
+    the smallest representable budget ABOVE this floor to allocate, and that budget collapses
+    every share by construction. The input is what is wrong. Scale a budget off this floor
+    and keep weights within a few orders of magnitude of each other; do not sit on either
+    edge.
 
     Summed through `Station.min_spend` rather than inline, so that a station carrying a
     free policy parameter reports the floor at the ray a RUN starts from rather than at

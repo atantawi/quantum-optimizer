@@ -208,3 +208,90 @@ def test_all_stations_stable_under_feasible_budget():
     S = allocate(stations, C, [st.default_zeta for st in stations])
     for st, Si in zip(stations, S):
         assert Si * st.mu > st.gamma
+
+
+def test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacity():
+    """A lopsided weight vector rounds the light station's share away at budgets FAR above
+    the floor, and the contract is that this is an error, not a number.
+
+    `min_feasible_budget` once described this as happening only "within a few ulps of the
+    floor". It is really set by the share-to-base ratio, so weight skew reaches it at any
+    budget. Measured grid, both calibrations, light station at gamma/mu = 0.5:
+
+        slope: 1e20 raises at 1.01x, 2x, 100x and 10000x the floor, succeeds at 1e6x
+        level: 1e30 raises at the same four multiples, succeeds at 1e6x
+
+    So it is not a slope-calibration effect -- level mode reaches it too, just at a larger
+    ratio. What this pins is the FAILS-LOUDLY half: the run names the station it could not
+    keep stable instead of reporting an objective computed at `S*mu == gamma`.
+    """
+    from qopt.exceptions import InstabilityError
+    from qopt.optimizer import Optimizer
+    from qopt.zeta import ZETA_LEVEL, ZETA_SLOPE
+
+    def run(weight_ratio, multiple, mode):
+        light = GG1Station(gamma=1.0, mu=2.0, weight=1.0, c=1.0, cov_a=0.0, cov_s=0.0,
+                           name="light", zeta_mode=mode)
+        heavy = GG1Station.mm1(gamma=1.0, mu=2.0, weight=weight_ratio, c=1.0, name="heavy",
+                               zeta_mode=mode)
+        stations = [light, heavy]
+        C = multiple * min_feasible_budget(stations)
+        return stations, Optimizer(stations, C).run()
+
+    # Two orders of magnitude above the floor, and again four orders above that: the
+    # collapse is not a knife-edge artefact of a budget sitting on the floor.
+    for multiple in (100.0, 10000.0):
+        with pytest.raises(InstabilityError, match="light"):
+            run(1e20, multiple, ZETA_SLOPE)
+
+    # Level mode reaches the same place at a larger ratio, so the effect belongs to eq 21's
+    # rounding and not to slope calibration.
+    with pytest.raises(InstabilityError, match="light"):
+        run(1e30, 10000.0, ZETA_LEVEL)
+
+    # The same network with a sane weight ratio is fine under both, so the test is about
+    # the ratio and not about these stations being unservable.
+    for mode in (ZETA_SLOPE, ZETA_LEVEL):
+        stations, res = run(10.0, 100.0, mode)
+        for st, Si in zip(stations, res.capacities):
+            assert Si * st.mu > st.gamma
+
+
+def test_a_collapsed_share_can_land_on_a_technically_stable_capacity():
+    """The same eq 21 collapse, on a station where it does NOT raise -- the silent half.
+
+    test_an_extreme_weight_ratio_raises_rather_than_returning_a_boundary_capacity pins the
+    loud outcome: `b * mu == gamma` exactly, station unstable, `sojourn_time` refuses. That
+    depends on how `gamma/mu` rounds, and for gamma=0.1, mu=0.39 it rounds the other way --
+    `b * mu` lands 1.4e-17 ABOVE gamma. The station is then technically stable, so nothing
+    refuses: E[T] comes back finite and eq 22 calibrates a zeta from it.
+
+    Pinned because `min_feasible_budget` used to promise "an error rather than a wrong
+    number" for this collapse without qualification, and this is the counterexample. It is
+    an accepted limitation, not a latent fix: the capacity is what the caller's budget and
+    weights bought, and both candidate remedies are ruled out -- nudging S up spends budget
+    that was not allocated, and raising on collapse contradicts
+    test_the_reported_floor_is_bit_for_bit_the_one_allocate_prices, which requires the
+    smallest representable budget above the floor to allocate. If a future change makes this
+    raise, that is an improvement and this test should be rewritten to say so, not deleted.
+    """
+    import math
+
+    light = GG1Station.mm1(gamma=0.1, mu=0.39, c=1.0, weight=1e-30, name="light")
+    heavy = GG1Station.mm1(gamma=0.1, mu=0.39, c=1.0, weight=1.0, name="heavy")
+    stations = [light, heavy]
+    base = 0.1 / 0.39
+
+    # The rounding that makes this the silent case rather than the loud one.
+    assert base * light.mu > light.gamma
+    assert base * light.mu - light.gamma == pytest.approx(1.39e-17, rel=1e-2)
+
+    C = 1.01 * min_feasible_budget(stations)
+    S_light, _ = allocate(stations, C, [st.default_zeta for st in stations])
+    assert S_light == base                      # the share rounded away entirely
+    assert S_light - base < math.ulp(base)      # and it was not merely small
+
+    # No exception, and a finite number an unsuspecting caller would use.
+    T = light.sojourn_time(S_light)
+    assert math.isfinite(T) and T > 1e16
+    assert math.isfinite(light.phi(S_light))
