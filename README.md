@@ -95,7 +95,10 @@ single-server stations are not M/M/1, and 1.59% on the stress network of
 fresh-seed FINAL evaluation, a different sample path from the CRN iterate that actually set
 those capacities, and the last loop iterate only when `final_evaluation=False` suppresses
 that run. `Result.zeta_phi` and `Result.zeta_mode` sit alongside it, so eq 22's value
-for the reported `E[T]` is recoverable as `zeta[i]/zeta_phi[i]`.
+for the reported `E[T]` is recoverable as
+`0.0 if zeta_phi[i] == 0.0 else zeta[i]/zeta_phi[i]`. The guard covers exactly one case, a
+station that admits full utilization sitting on `S*mu == gamma`, where eq 22's value is
+`E[T]*x == 0` and `phi` is zero too; see `Result.zeta_phi`.
 
 On convergence: the contraction proof behind `qopt`'s convergence argument is for the
 level map. Slope mode changes that map, so its convergence is so far empirical — across the

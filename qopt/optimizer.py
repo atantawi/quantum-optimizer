@@ -55,7 +55,23 @@ class Result:
     Literally 1.0 for a level-mode station: that path never evaluates a derivative, so
     it neither pays for one nor gains a new way to fail. For a slope station this is the
     phi that produced the reported `zeta`, so `zeta[i]/zeta_phi[i]` recovers eq 22's
-    value up to one rounding.
+    value up to one rounding -- except at one point, where the quotient is 0/0 and the
+    recovered value is 0.0:
+
+        eq22_i = 0.0 if zeta_phi[i] == 0.0 else zeta[i] / zeta_phi[i]
+
+    That is a definition, not a fallback. `phi == 0.0` happens at exactly one capacity: a
+    station that admits full utilization, sitting on `S*mu == gamma`, where `phi` is
+    exactly `1 - rho`. Eq 22's value is `E[T]*x`, so at `x == 0` it is 0.0 outright --
+    confirmed both from the formula and from the same station in level mode, which reports
+    `zeta == 0.0` there with `zeta_phi == 1.0` and so needs no special case. Everywhere
+    else `zeta_from` refuses a non-positive phi rather than reporting one, so the guard
+    above can never mask a real zero. Pinned by
+    test_the_zeta_phi_recovery_contract_holds_at_the_boundary.
+
+    Kept as a documented special case rather than a second `zeta_level` field: the value is
+    a function of the two lists already reported, and a field would have to be populated on
+    the level path too, where it would duplicate `zeta` exactly.
     """
     zeta_mode: list = field(default_factory=list)
     """Per-station calibration (a qopt.ZETA_* constant), so a mixed network stays legible."""

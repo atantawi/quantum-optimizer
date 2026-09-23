@@ -670,6 +670,60 @@ def test_phi_is_reported_for_a_slope_station_and_recovers_the_eq22_value():
     assert res.zeta[0] == pytest.approx(res.zeta_phi[0] * level, rel=1e-12)
 
 
+def test_the_zeta_phi_recovery_contract_holds_at_the_boundary():
+    """`zeta[i]/zeta_phi[i]` is 0/0 at one capacity, and the documented value there is 0.0.
+
+    phi vanishes at exactly one point -- a station that admits full utilization sitting on
+    `S*mu == gamma`, where phi is exactly `1 - rho`. Everywhere else `zeta_from`'s slope arm
+    REFUSES a non-positive phi rather than reporting one, so the guard in the documented
+    expression cannot mask a real zero; this test pins both halves of that.
+
+    The recovered value is 0.0 rather than undefined because eq 22's value is `E[T]*x` and
+    x is 0 there. Cross-checked against the same station in level mode, which computes eq 22
+    directly and needs no special case at all.
+    """
+    def net(mode):
+        return [GG1Station(0.6, 1.0, 1.0, c=1.0, cov_a=0.0, cov_s=0.0, zeta_mode=mode,
+                           name="dd"),
+                GG1Station.mm1(1.2, 3.0, 3e5, c=0.5, zeta_mode=mode, name="mm")]
+
+    stations = net(ZETA_SLOPE)
+    C = 1.01 * min_feasible_budget(stations)
+    res = Optimizer(stations, C).run()
+
+    # The 0/0 the contract used to walk into.
+    assert res.capacities[0] * stations[0].mu == stations[0].gamma
+    assert res.zeta[0] == 0.0 and res.zeta_phi[0] == 0.0
+    with pytest.raises(ZeroDivisionError):
+        res.zeta[0] / res.zeta_phi[0]
+
+    # The documented expression, verbatim from Result.zeta_phi and the README.
+    eq22 = [0.0 if p == 0.0 else z / p for z, p in zip(res.zeta, res.zeta_phi)]
+    assert eq22[0] == 0.0
+
+    # Not merely a convention: eq 22 IS zero there, by its own formula and by the level
+    # station's own arithmetic.
+    x = res.capacities[0] * stations[0].mu - stations[0].gamma
+    assert res.sojourn_times[0] * x == 0.0
+    lvl = net(ZETA_LEVEL)[0]
+    assert lvl.zeta_from(lvl.sojourn_time(0.6), 0.6) == 0.0
+    assert lvl.phi(0.6) == 0.0            # level reports 1.0 in Result, but phi is still 0
+
+    # The other station is untouched: a plain quotient, no guard needed.
+    assert eq22[1] == res.zeta[1] / res.zeta_phi[1]
+    assert eq22[1] == pytest.approx(
+        res.sojourn_times[1] * (res.capacities[1] * stations[1].mu - stations[1].gamma),
+        rel=1e-12,
+    )
+
+    # And phi is zero ONLY there: one ulp above the boundary it is positive, and below it
+    # the station is unstable rather than reporting a zero.
+    dd = net(ZETA_SLOPE)[0]
+    assert dd.phi(math.nextafter(0.6, 1.0)) > 0.0
+    with pytest.raises(InstabilityError):
+        dd.phi(math.nextafter(0.6, 0.0))
+
+
 def test_the_new_result_fields_are_all_defaulted():
     # tests/test_optimizer_loop.py and the example tests construct Result directly.
     res = Result(
