@@ -63,6 +63,51 @@ qsim-service request, issues one `POST /simulate` per optimizer iteration, and t
 the response's measures back into the same `(E[T], ζ)` shape — so the allocator and the loop
 never know which analyzer is running.
 
+### ζ calibration: level (default) or slope
+
+`ζ` is the one free parameter that carries a station's queueing behaviour into eq 21.
+Eq 22 fixes it by matching the *level* of the sojourn-time curve, `ζ = E[T]·(Sμ − γ)`, and
+that is what `qopt` does by default.
+
+Eq 21, though, water-fills on *marginal* returns: it reads the surrogate `T̂ = ζ/x` only
+through its derivative and never evaluates it. Matching the slope instead,
+
+    ζ = φ·E[T]·x,    φ = |dE[T]/dS|·x/(μ·E[T])
+
+makes the loop's fixed point the coupled optimum exactly rather than an approximation of
+it. Select it per station:
+
+```python
+from qopt import GG1Station, ZETA_SLOPE
+
+st = GG1Station(0.6, 1.5, c=2.0, cov_a=2.0, cov_s=2.0, zeta_mode=ZETA_SLOPE)
+```
+
+`φ ≡ 1` for M/M/1, so the two calibrations agree exactly there and an all-M/M/1 network is
+bit-for-bit unaffected. The gain tracks `|φ − 1|`: 0.0002–0.039% where only fork-join
+stations deviate, up to 0.515% once single-server stations are not M/M/1. `Result.zeta`
+reports the ζ that actually drove the allocation, with `Result.zeta_phi` and
+`Result.zeta_mode` alongside it, so eq 22's value is recoverable as `zeta[i]/zeta_phi[i]`.
+
+This is a deliberate divergence from eq 22, not an amendment to it — see
+`docs/slope-calibrated-zeta/` for the derivation and the measurements.
+
+**One caveat worth reading before switching a simulated run.** φ is computed from the
+station's *analytic* model even when `E[T]` is measured, which is what keeps the simulator
+in control of the allocation's level. That promotes `cov_a` from nearly decorative to a
+live input: it is never sent to the simulator and never measured back, so under slope
+calibration it must describe the arrival process the station *actually* sees, internal
+traffic included. **When it is unknown, `cov_a = 1` is the safe assumption** — it forfeits
+the gain rather than overshooting past it, since understating `cov_a` drives φ toward 1 and
+degrades gracefully to level calibration while overstating it can land worse than eq 22.
+`Optimizer` cross-checks measured against analytic `E[T]` for slope stations and reports
+disagreements in `Result.zeta_shape_flags` (tolerance: `zeta_shape_tol`, default 25%). That
+check runs inside the loop, against the iterate that produced each allocation — not after
+the final fresh-seeded evaluation — so on a stochastic run `zeta_shape_flags` warrants the
+trajectory that set the capacities, not the `E[T]` values `Result` goes on to report. If
+you know the true arrival variability but cannot express it as a `cov_a`, override `phi(S)`
+on a subclass.
+
 ## Scope & limitations
 
 By default, each station is analyzed **independently** (`AnalyticAnalyzer`) from its own
@@ -222,9 +267,9 @@ See also:
 - `docs/paper-map.md` — which paper `eq N` refers to, and the crosswalk to the newer draft.
 - `docs/forkjoin-coupled-vs-separate/findings.md` — why each fork-join station's `r*` is solved
   on its own rather than as one coupled problem. Analysis only; no change proposed.
-- `docs/slope-calibrated-zeta/findings.md` — a proposal to calibrate ζ to the slope of E[T]
-  rather than its level, which would make the eq-21 fixed point exactly optimal. Not
-  implemented.
+- `docs/slope-calibrated-zeta/findings.md` — the derivation behind `zeta_mode=ZETA_SLOPE`
+  and the measurements backing it: exact recovery of the coupled optimum, gains up to
+  0.515%, and why the default stays level-calibrated.
 
 ## License
 

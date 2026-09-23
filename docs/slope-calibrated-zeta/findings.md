@@ -1,6 +1,7 @@
 # Slope-calibrated ζ
 
-**Status: proposal. Not implemented.** `main` ships eq 22's level calibration; this argues for
+**Status: implemented** (2026-09-22) as a per-station opt-in; the default is still eq 22's level
+calibration and the paper is unchanged. `main` ships eq 22's level calibration; this argues for
 replacing it and records what that would cost.
 
 Equation numbers follow [`../paper-map.md`](../paper-map.md): `eq 21` (the allocation rule) and
@@ -356,6 +357,7 @@ merely compatible with it — worth knowing before anyone reorders that loop.
 
 1. Land this directory as analysis only — no behaviour change. (This PR.)
 2. Decide the paper question: is eq 22 amended, or does qopt document a deliberate divergence?
-3. If it proceeds: implement behind a per-station opt-in so the default path stays bit-for-bit
-   identical, with the two closed forms and a test that pins `φ ≡ 1` for M/M/1.
+3. ~~If it proceeds: implement behind a per-station opt-in so the default path stays bit-for-bit
+   identical, with the two closed forms and a test that pins `φ ≡ 1` for M/M/1.~~ **Done** —
+   `qopt/zeta.py`, `Station.dT_dS`/`phi`, `tests/test_zeta.py`.
 4. Redo the contraction argument for the new map.
