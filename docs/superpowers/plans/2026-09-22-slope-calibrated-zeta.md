@@ -20,6 +20,7 @@
 - **Do not modify the paper.** `docs/analysis.pdf` is not edited, and no task changes it. qopt documents a deliberate divergence from eq 22 instead.
 - **Baseline suite: 464 passed, 10 skipped in ~0.55s** (`python3 -m pytest -q` from the repo root, no `PYTHONPATH` needed). Every task ends with the full suite green, with 464 as a floor that only grows.
 - **Every new assertion is mutation-checked**, and every mutation/restore cycle clears `__pycache__`. A same-second, same-size restore otherwise reuses the perturbed `.pyc` and both runs report identical counts, which looks like a vacuous test but is a broken harness.
+- **A mutation check runs BEFORE the commit step, so `git checkout -- <file>` is not a restore — it is a delete.** At that point the implementation under test is uncommitted, so HEAD does not contain it and checking out the file discards the whole task's work, not just the perturbation. Each mutation block therefore writes the pristine text to `/tmp/qopt-mutation-backup` before perturbing and restores with `cp` from it. Do not substitute `git stash -u` either: this repo carries three untracked local-only doc directories that it would sweep away.
 - **No fenced code block in `docs/slope-calibrated-zeta/findings.md` may change.** `docs/quotes-selfcheck.py` requires every fenced quote there to match `probe-output.txt` verbatim. Task 10 edits prose only.
 - **`docs/audit-selfcheck.py` needs `PYTHONPATH=.`** to run (`PYTHONPATH=. python3 docs/audit-selfcheck.py`). This is pre-existing.
 - **Commit messages** end with `Co-Authored-By: Claude <209825114+claude[bot]@users.noreply.github.com>`.
@@ -1267,6 +1268,7 @@ python3 - <<'PY'
 import pathlib
 p = pathlib.Path("qopt/station.py")
 s = p.read_text()
+pathlib.Path("/tmp/qopt-mutation-backup").write_text(s)   # restore point -- see the note below
 # Mutation 1: divide by phi instead of multiplying. Still positive, still linear in T,
 # and still equal to level for M/M/1 -- only the non-unit-phi tests can see it.
 s = s.replace("            return phi * T * x", "            return T * x / phi", 1)
@@ -1274,19 +1276,20 @@ p.write_text(s)
 PY
 find . -name '__pycache__' -type d -exec rm -rf {} +
 python3 -m pytest tests/test_zeta.py -q     # EXPECT: the phi-times-level and x^2 tests fail
-git checkout -- qopt/station.py
+cp /tmp/qopt-mutation-backup qopt/station.py
 
 python3 - <<'PY'
 import pathlib
 p = pathlib.Path("qopt/station.py")
 s = p.read_text()
+pathlib.Path("/tmp/qopt-mutation-backup").write_text(s)   # restore point -- see the note below
 # Mutation 2: apply phi in BOTH modes, breaking the bit-for-bit default.
 s = s.replace("        if self._zeta_mode == ZETA_SLOPE:", "        if True:", 1)
 p.write_text(s)
 PY
 find . -name '__pycache__' -type d -exec rm -rf {} +
 python3 -m pytest -q                        # EXPECT: many pre-existing failures
-git checkout -- qopt/station.py
+cp /tmp/qopt-mutation-backup qopt/station.py
 find . -name '__pycache__' -type d -exec rm -rf {} +
 python3 -m pytest -q                        # EXPECT: 501 passed, 10 skipped
 ```
@@ -1478,6 +1481,7 @@ python3 - <<'PY'
 import pathlib
 p = pathlib.Path("qopt/optimizer.py")
 s = p.read_text()
+pathlib.Path("/tmp/qopt-mutation-backup").write_text(s)   # restore point -- see the note below
 # Mutation: compute phi for every station, including level ones.
 s = s.replace("            st.phi(Si) if st.zeta_mode == ZETA_SLOPE else 1.0",
               "            st.phi(Si)", 1)
@@ -1485,7 +1489,7 @@ p.write_text(s)
 PY
 find . -name '__pycache__' -type d -exec rm -rf {} +
 python3 -m pytest tests/test_zeta.py -q     # EXPECT: test_phi_is_literally_one_for_a_level_station fails
-git checkout -- qopt/optimizer.py
+cp /tmp/qopt-mutation-backup qopt/optimizer.py
 find . -name '__pycache__' -type d -exec rm -rf {} +
 python3 -m pytest -q                        # EXPECT: 506 passed, 10 skipped
 ```
@@ -1677,6 +1681,7 @@ python3 - <<'PY'
 import pathlib
 p = pathlib.Path("qopt/optimizer.py")
 s = p.read_text()
+pathlib.Path("/tmp/qopt-mutation-backup").write_text(s)   # restore point -- see the note below
 # Mutation: retune BEFORE eq 21 instead of after, so zeta_from sees a stale ray.
 s = s.replace("            S_new = [st.retune(s) for st, s in zip(stations, S_new)]",
               "            pass  # retune moved", 1)
@@ -1687,7 +1692,7 @@ p.write_text(s)
 PY
 find . -name '__pycache__' -type d -exec rm -rf {} +
 python3 -m pytest tests/test_zeta.py -q     # RECORD the result
-git checkout -- qopt/optimizer.py
+cp /tmp/qopt-mutation-backup qopt/optimizer.py
 find . -name '__pycache__' -type d -exec rm -rf {} +
 python3 -m pytest -q                        # EXPECT: back to green
 ```
@@ -2031,6 +2036,7 @@ python3 - <<'PY'
 import pathlib
 p = pathlib.Path("qopt/optimizer.py")
 s = p.read_text()
+pathlib.Path("/tmp/qopt-mutation-backup").write_text(s)   # restore point -- see the note below
 # Mutation 1: check every station, not only slope ones.
 s = s.replace("                    if st.zeta_mode != ZETA_SLOPE or id(st) in shape_checked:",
               "                    if id(st) in shape_checked:", 1)
@@ -2038,12 +2044,13 @@ p.write_text(s)
 PY
 find . -name '__pycache__' -type d -exec rm -rf {} +
 python3 -m pytest tests/test_zeta.py -q     # EXPECT: the level-only and one-flag tests fail
-git checkout -- qopt/optimizer.py
+cp /tmp/qopt-mutation-backup qopt/optimizer.py
 
 python3 - <<'PY'
 import pathlib
 p = pathlib.Path("qopt/optimizer.py")
 s = p.read_text()
+pathlib.Path("/tmp/qopt-mutation-backup").write_text(s)   # restore point -- see the note below
 # Mutation 2: route the flag through `degraded`, which makes strict=True raise.
 s = s.replace("                        zeta_shape_flags.append(message)",
               "                        zeta_shape_flags.append(message)\n"
@@ -2052,7 +2059,7 @@ p.write_text(s)
 PY
 find . -name '__pycache__' -type d -exec rm -rf {} +
 python3 -m pytest tests/test_zeta.py -q     # EXPECT: test_a_shape_flag_does_not_make_a_strict_run_raise fails
-git checkout -- qopt/optimizer.py
+cp /tmp/qopt-mutation-backup qopt/optimizer.py
 find . -name '__pycache__' -type d -exec rm -rf {} +
 python3 -m pytest -q                        # EXPECT: 524 passed, 10 skipped
 ```
