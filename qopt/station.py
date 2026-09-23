@@ -376,8 +376,11 @@ class GG1Station(SingleServerStation):
             zeta_mode=ZETA_LEVEL):
         """M/M/1 preset (cov_a = cov_s = 1); zeta is identically 1.
 
-        phi is identically 1 too, so `zeta_mode` makes no difference on this station --
-        the two calibrations agree exactly. It is accepted so a network can be switched
+        phi is identically 1 too, so `zeta_mode` makes almost no difference on this
+        station -- the two calibrations agree algebraically exactly, and to within one ulp
+        in floating point (phi measures 1.0000000000000004 at some S, which can move a
+        capacity in its last bit; "bit-for-bit" is reserved for the DEFAULT path, where no
+        derivative is evaluated at all). It is accepted so a network can be switched
         wholesale without special-casing its M/M/1 members.
         """
         return cls(gamma, mu, weight, c=c, cov_a=1.0, cov_s=1.0, name=name,

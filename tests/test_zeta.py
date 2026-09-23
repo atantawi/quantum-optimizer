@@ -569,8 +569,19 @@ def test_the_new_result_fields_are_all_defaulted():
     assert res.zeta_shape_flags == []
 
 
-def test_the_reported_zeta_is_the_one_that_drove_the_allocation():
+def test_the_reported_zeta_closes_the_eq_21_round_trip_on_the_analytic_path():
     # Re-running allocate on the reported zeta must reproduce the reported capacities.
+    #
+    # ANALYTIC path only, and that is the whole scope of this test. `Result.zeta` is
+    # recomputed from the REPORTED sojourn times; on the analytic path the final
+    # evaluation is deterministic at the converged S, so those are the same numbers the
+    # last allocate saw and the round trip closes. On a stochastic analyzer they come
+    # from the fresh-seeded final evaluation -- a different sample path from the CRN
+    # iterate that set the capacities -- and the round trip does NOT close: measured at
+    # +8.28% / -17.71% with a station-dependent perturbation. (A UNIFORM perturbation
+    # leaves it closing to ~1e-10, because eq 21 is a share rule, so no test that scales
+    # all stations alike can see the gap.) README's `Result.zeta` sentence states which
+    # E[T] the reported zeta belongs to; do not read this test as promising more.
     from qopt.allocator import allocate
 
     stations = _mixed_pair(ZETA_SLOPE, ZETA_SLOPE)
@@ -725,8 +736,10 @@ def test_slope_mode_on_an_all_mm1_network_matches_level_mode_to_machine_precisio
     # Review Focus 5, and the cheapest witness that phi is right: phi is 1 on M/M/1 --
     # algebraically exactly, and to within one ulp in floating point, since the
     # cancellation in its closed form does not round exactly. So every capacity must
-    # agree to machine precision. A stray factor anywhere in the slope arm moves this
-    # by vastly more than 1e-12.
+    # agree to machine precision -- and what that catches is a NON-UNIFORM error in phi:
+    # eq 21 is a share rule, so a stray factor applied to every station alike cancels out
+    # of the capacities by construction and is invisible here. Any phi error that varies
+    # across the three stations moves them by vastly more than 1e-12.
     def net(mode):
         return [
             GG1Station.mm1(0.6, 1.5, 1.0, c=2.0, name="a", zeta_mode=mode),

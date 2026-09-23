@@ -188,7 +188,7 @@ so the check exists.
 
 The gain tracks how far `φ` is from 1, not the station type: **0.0002–0.039%** where only
 fork-join stations deviate, **up to 0.515%** once the single-server stations are not M/M/1, and
-**1.59%** on the §7 stress network. It is largest at moderate load and vanishes as the budget
+**1.59%** on the §6 stress network. It is largest at moderate load and vanishes as the budget
 loosens.
 
 ## 5. φ, and where the existing derivative helper cannot be used

@@ -33,7 +33,7 @@ machine precision at all 27 rows tested, with iteration counts essentially uncha
 
 `φ ≡ 1` for M/M/1, which is why this was invisible: it is the station type most of the suite uses.
 The gain tracks `|φ − 1|`, not station type — `0.0002–0.039%` where only fork-join stations
-deviate, up to `0.515%` once single-server stations are not M/M/1, and `1.59%` on the §7 stress
+deviate, up to `0.515%` once single-server stations are not M/M/1, and `1.59%` on the §6 stress
 network.
 
 ### 1.1 What does not change

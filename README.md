@@ -83,12 +83,26 @@ from qopt import GG1Station, ZETA_SLOPE
 st = GG1Station(0.6, 1.5, c=2.0, cov_a=2.0, cov_s=2.0, zeta_mode=ZETA_SLOPE)
 ```
 
-`φ ≡ 1` for M/M/1, so the two calibrations agree exactly there and an all-M/M/1 network is
-bit-for-bit unaffected. The gain tracks `|φ − 1|`: 0.0002–0.039% where only fork-join
-stations deviate, up to 0.515% once single-server stations are not M/M/1, and 1.59% on the
-stress network of `docs/slope-calibrated-zeta/findings.md` §7. `Result.zeta`
-reports the ζ that actually drove the allocation, with `Result.zeta_phi` and
-`Result.zeta_mode` alongside it, so eq 22's value is recoverable as `zeta[i]/zeta_phi[i]`.
+`φ ≡ 1` for M/M/1 — algebraically exactly, and to within one ulp in floating point, so an
+all-M/M/1 network under slope mode reproduces level mode to machine precision rather than
+bitwise. (The *default* path's guarantee is the bitwise one, and narrower: the level arm
+computes `E[T]·(Sμ − γ)` in exactly today's operations and order, so a run with no
+`zeta_mode` set returns the same floats as before this existed.) The gain tracks
+`|φ − 1|`: 0.0002–0.039% where only fork-join stations deviate, up to 0.515% once
+single-server stations are not M/M/1, and 1.59% on the stress network of
+`docs/slope-calibrated-zeta/findings.md` §6. `Result.zeta` is the ζ implied by the
+*reported* `E[T]` at the converged capacities — on a stochastic run that means the
+fresh-seed FINAL evaluation, a different sample path from the CRN iterate that actually set
+those capacities, and the last loop iterate only when `final_evaluation=False` suppresses
+that run. `Result.zeta_phi` and `Result.zeta_mode` sit alongside it, so eq 22's value
+for the reported `E[T]` is recoverable as `zeta[i]/zeta_phi[i]`.
+
+On convergence: the contraction proof behind `qopt`'s convergence argument is for the
+level map. Slope mode changes that map, so its convergence is so far empirical — across the
+13 budgets of `docs/slope-calibrated-zeta/findings.md` §7, from `1.0001×` to `1e4×` the
+floor, both modes converge in at most 18 iterations and never more than three apart, with
+0 failures and 0 off-optimum rows. Redoing the proof for the new map is tracked as step 4
+of that file's §8.
 
 This is a deliberate divergence from eq 22, not an amendment to it — see
 `docs/slope-calibrated-zeta/` for the derivation and the measurements.
