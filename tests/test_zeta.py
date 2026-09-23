@@ -664,15 +664,21 @@ def test_slope_calibration_needs_the_retune_to_run_last():
     # zeta_from must see a station whose ray is already optimal for the spend it holds.
     # The Optimizer guarantees that by calling retune LAST in each iteration.
     #
-    # This test pins the CONSEQUENCE rather than the ordering: at convergence every
-    # tuned fork-join must be sitting on the ray that is locally optimal for its own
-    # spend. Reordering the retune leaves the station one iteration stale, and on a
-    # network that is still moving that shows up here.
+    # This test pins the CONSEQUENCE rather than the ordering: every tuned fork-join
+    # must sit on the ray that is locally optimal for the spend it actually holds.
+    # Deliberately stopped SHORT of convergence, which is what gives the test its
+    # teeth. Retuning last makes the property hold bit-for-bit at EVERY iterate, so
+    # nothing is lost by stopping early; retuning before eq 21 leaves the ray one
+    # allocation stale, and the gap is then the size of the remaining step -- 2.8e-4
+    # relative at max_iter=3, against the 1e-9 asserted below. At convergence that
+    # same gap collapses to 8.5e-12 and this assertion would no longer see it, which
+    # is why the iterate matters here and the tolerance does not.
     from qopt.forkjoin_policy import optimal_ray
 
     stations = _net_mixed_cov(ZETA_SLOPE)
     C = 1.5 * min_feasible_budget(stations)
-    res = Optimizer(stations, C).run()
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        res = Optimizer(stations, C, max_iter=3).run()
     fj = stations[0]
     spend = res.capacities[0] * fj.alloc_cost
     assert fj.r_star == pytest.approx(
