@@ -620,6 +620,32 @@ first-candidate arm covers.
 > different capacities). `reset_policy` cannot serve for the second one: it goes to the constructed
 > ray, which is a third point, not the one the reported numbers were measured at.
 
+> **Amended 2026-09-23, post-implementation (review round 6).** Both diagnostics above are
+> scoped to what actually established them. The warm-start warning names the **analytic**
+> optimum: the pre-solve is what located it, and the analyzer refusing that point is exactly
+> why the point cannot be *that* analyzer's optimum — at the default `arrival_scv` the emitted
+> queue there is a saturated M/D/1 with no finite `E[T]` at all. The later-iterate warning
+> attributes the stop to the **loop's last** ζ, not to `Result.ζ`: the reported ζ is recomputed
+> from the fresh-seeded final evaluation, so on a stochastic path re-running eq 21 on it need
+> not reach the boundary. Measured with a strict analyzer that mirrors the analytic `E[T]` in
+> the loop and scales the deterministic station's by 1e12 on `fresh_seed=True`: the stop was
+> caused by `ζ_dd = 2.131434e-26`, whose eq-21 share rounds away entirely, while the reported
+> `ζ_dd = 2.131434e-14` allocates `S_dd` **4.6e-12 above** the boundary, strictly inside the
+> analyzer's domain. The old claim is nevertheless *accidentally* true in two regimes, which is
+> why no earlier test caught it: under `final_evaluation=False` the reported ζ is the loop's ζ
+> to the bit, and at a plausible few-percent skew (factor 1.05) the reported ζ does move
+> — `2.238006e-26` — but its eq-21 share still collapses, so the round trip lands back on the
+> boundary at `x = 0.0` exactly. Only a skew large enough for the share to survive exposes it.
+>
+> No new `Result` field carries the triggering ζ: the refused point is already fully determined
+> by the warning, which names each station sitting at exactly its own `γ/μ`, and `residual`
+> already reports how far the loop wanted to move. Pinned by
+> `test_the_reported_zeta_need_not_reproduce_the_refused_candidate`, the stochastic counterpart
+> to the deterministic round trip in
+> `test_the_loop_stops_rather_than_evaluating_a_capacity_the_analyzer_refuses` — whose closing
+> assertion holds only because `StrictFake` returns the same `E[T]` on both calls, and whose
+> comment now says so.
+
 Nudging a refused capacity onto the nearest interior float is rejected for the reason
 `min_feasible_budget` already gives about nudging a collapsed share: it spends budget the caller
 did not allocate, and the simulated `E[T]` of a queue that close to saturation means nothing. The
