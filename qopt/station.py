@@ -389,6 +389,38 @@ class Station(ABC):
         nothing -- this hook costs every other station type exactly nothing.
         """
 
+    def policy_state(self):
+        """Opaque snapshot of every mutable policy parameter, for `restore_policy`.
+
+        A capacity vector only means something together with the policy state it was
+        priced and evaluated under: `retune` rewrites the coefficients `allocate`,
+        `sojourn_time` and `zeta_from` all read, so a capacity carried back across a
+        retune describes a station that no longer exists. `reset_policy` is not the tool
+        for that -- it goes to the CONSTRUCTED value, which is a different point again.
+
+        The Optimizer pairs one of these with every capacity vector the analyzer accepts,
+        so that abandoning a later candidate rolls the station back to the state its
+        reported numbers were measured at.
+
+        A station with no free parameter has no state, so the default returns None and
+        `restore_policy(None)` is a no-op -- this hook costs every other station type
+        exactly nothing.
+        """
+        return None
+
+    def restore_policy(self, state):
+        """Put this station back on the state `policy_state` returned earlier.
+
+        Raises rather than ignoring a state it cannot apply: a subclass that snapshots
+        something and does not restore it would otherwise silently keep the mutation,
+        which is exactly the failure this pair exists to prevent.
+        """
+        if state is not None:
+            raise ValueError(
+                f"{type(self).__name__} has no mutable policy state, so it cannot "
+                f"restore {state!r}; override restore_policy alongside policy_state"
+            )
+
     def check_stable(self, S, *, strict=False):
         """Raise InstabilityError if capacity S leaves this station unstable.
 
@@ -740,6 +772,25 @@ class ForkJoinStation(Station):
         can serve, and a descending budget sweep breaks partway down.
         """
         self._anchor(self._initial_r_star)
+
+    def policy_state(self):
+        """The ray this station is currently on.
+
+        `r_star` is the whole of the mutable state: `_anchor` derives `mu` and `r` from it
+        by the same expressions `__init__` used, so restoring the ray restores the
+        station bit-for-bit -- pinned by
+        test_a_policy_snapshot_restores_the_station_bit_for_bit.
+        """
+        return self.r_star
+
+    def restore_policy(self, state):
+        """Move back onto the ray `policy_state` recorded, undoing later retunes.
+
+        Unlike `reset_policy` this is not a return to the constructed ray: it is a return
+        to a ray the run itself passed through, which is what the Optimizer needs when it
+        abandons a candidate whose retune has already been applied.
+        """
+        self._anchor(state)
 
     def _spend_floor_on(self, r_star):
         """`alloc_cost * gamma / mu` for the ray `r_star`, without moving onto it.

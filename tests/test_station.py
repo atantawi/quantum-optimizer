@@ -95,6 +95,28 @@ def test_min_spend_is_the_stations_own_term_in_the_feasibility_floor():
     assert st.min_spend == 1.2
 
 
+def test_a_station_without_policy_state_snapshots_as_none_and_refuses_a_state():
+    """`policy_state`/`restore_policy` are the pair the Optimizer uses to roll a station
+    back to the state a reported capacity vector was evaluated under -- a DIFFERENT target
+    from `reset_policy`, which goes to the constructed value.
+
+    A station with no free parameter must snapshot as None and restore inertly, so the
+    Optimizer can call both unconditionally. The base restore RAISES on a non-None state
+    rather than ignoring it: a subclass that snapshots something and forgets to restore it
+    would otherwise keep the mutation silently, which is the exact failure the pair exists
+    to prevent.
+    """
+    st = GG1Station.mm1(gamma=0.6, mu=1.0, c=2.0, name="q")
+    before = (st.mu, st.alloc_cost)
+    assert st.policy_state() is None
+    assert st.restore_policy(None) is None
+    assert (st.mu, st.alloc_cost) == before
+
+    with pytest.raises(ValueError, match="no mutable policy state") as exc:
+        st.restore_policy(1.5)
+    assert "restore_policy" in str(exc.value)
+
+
 def test_reset_policy_is_a_no_op_for_a_station_with_no_free_policy_parameter():
     """The other half of the same hook pair: the Optimizer restores every station's policy
     parameter before it checks feasibility, so this must also be callable unconditionally

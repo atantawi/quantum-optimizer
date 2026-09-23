@@ -280,6 +280,45 @@ def test_reset_policy_returns_a_tuned_station_to_its_starting_ray():
     assert (st.r_star, st.mu, st.r, st.alloc_cost) == start
 
 
+def test_a_policy_snapshot_restores_the_station_bit_for_bit():
+    """`restore_policy` returns to a ray the run PASSED THROUGH, which is what the
+    Optimizer needs when it abandons a candidate whose retune has already been applied.
+    `reset_policy` cannot serve: it goes to the constructed ray, a third point.
+
+    `r_star` is claimed to be the whole of the mutable state -- `_anchor` re-derives `mu`
+    and `r` from it by the expressions `__init__` used -- so the round trip is required
+    bit-for-bit rather than approximate. The tuple below is what that is checked on: the
+    ray itself, the two coefficients `_anchor` derives, and the three derived quantities
+    the allocator and the analyzer read back (`alloc_cost`, `min_spend`, `sojourn_time`).
+    """
+    st = ForkJoinStation(**FJ, r_star=R_STAR_TUNED)
+    st.retune(6.0)
+    mid = st.policy_state()
+    snapshot = (st.r_star, st.mu, st.r, st.alloc_cost, st.min_spend,
+                st.sojourn_time(6.0))
+    assert mid != 1.0                             # a ray the run reached, not the start
+
+    st.retune(9.0)                                # a later candidate moves it again
+    assert st.r_star != mid
+    st.restore_policy(mid)
+    assert (st.r_star, st.mu, st.r, st.alloc_cost, st.min_spend,
+            st.sojourn_time(6.0)) == snapshot
+
+    # And it is genuinely not `reset_policy`: that lands somewhere else again.
+    st.reset_policy()
+    assert st.r_star == 1.0 != mid
+
+
+def test_a_policy_snapshot_round_trips_on_every_policy_but_tuned():
+    """Nothing but `tuned` moves, so for a fixed ray the snapshot must restore the ray the
+    station was constructed with -- and must not quietly snap a float ray to 1."""
+    for r_star in (None, R_STAR_INVARIANT_R, R_STAR_EQUAL_RATE, 0.3, 2.32):
+        st = ForkJoinStation(**FJ, r_star=r_star)
+        before = (st.r_star, st.mu, st.r, st.alloc_cost)
+        st.restore_policy(st.policy_state())
+        assert (st.r_star, st.mu, st.r, st.alloc_cost) == before
+
+
 def test_alloc_cost_is_exactly_c1_plus_c2_on_the_default_ray():
     """`alloc_cost` is written `c1 + c2 * (r_star / r_base)` so that the default ray divides
     to exactly 1.0 and the cost is bit-for-bit `c1 + c2`, which is what makes the default
