@@ -214,3 +214,71 @@ def test_strict_also_raises_on_a_degraded_measure(sim_response):
     with pytest.warns(RuntimeWarning, match="completed=false"):
         with pytest.raises(SimulationQualityError, match="completed=false"):
             analyzer.evaluate(network.stations, S_OK)
+
+
+def test_the_simulation_preflight_refuses_the_boundary_a_deterministic_station_admits(
+    sim_response,
+):
+    """`admits_full_utilization` is a statement about the ANALYTIC model, and stops there.
+
+    A `cov_a == cov_s == 0` G/G/1 has `E[T] = 1/(S*mu)`, finite at rho == 1, so
+    `Station.check_stable` prices `S*mu == gamma` for it. The simulator is given no such
+    station: `Network.to_model_dict` builds the arrival distribution from
+    `Network.arrival_scv` and the routing, and only `cov_s` reaches the service node, so
+    `cov_a` is never emitted at all. With the default `arrival_scv == 1.0` the model that
+    would go over the wire at that capacity is a SATURATED M/D/1 -- exponential arrivals at
+    0.6 against deterministic service with mean 1/0.6 -- which is exactly the shape spec 7.3
+    added this guard to refuse before spending minutes on it.
+
+    So `evaluate` passes `strict=True` and the boundary is refused here while the analytic
+    path keeps it. The message says which of the two domains rejected the point, because the
+    same station at the same capacity is legal one call away.
+
+    Relaxing this would take showing the EMITTED arrival process deterministic at that
+    station, which is a property of `arrival_scv` and the routing together and is not
+    currently derived anywhere in qopt.
+    """
+    import math
+
+    dd = GG1Station(mu=1.0, c=1.0, cov_a=0.0, cov_s=0.0, name="dd")
+    network = Network(
+        [dd],
+        [Route(Network.SOURCE, "dd", 1.0), Route("dd", Network.SINK, 1.0)],
+        arrival_rate=0.6,
+        name="dd-net",
+    )
+    assert dd.gamma == 0.6
+    boundary = dd.gamma / dd.mu
+
+    # The analytic side admits it, and is unchanged by this test's subject.
+    assert dd.admits_full_utilization is True
+    dd.check_stable(boundary)
+    assert dd.sojourn_time(boundary) == 1.0 / (boundary * dd.mu)
+
+    # What the simulator would be sent there: arrivals from arrival_scv, not from cov_a.
+    assert network.arrival_scv == 1.0
+    nodes = network.to_model_dict([boundary])["nodes"]
+    assert nodes[0]["arrivals"]["jobs"]["distribution"] == {
+        "type": "exponential", "rate": 0.6
+    }
+    assert nodes[1]["service"]["jobs"]["distribution"] == {
+        "type": "deterministic", "value": 1.0 / 0.6
+    }
+
+    response = sim_response(
+        sojourn={"dd": 1.9}, throughput={"dd": 0.6}, system=1.9, model_name="dd-net"
+    )
+    analyzer, transport = _analyzer(network, response)
+    with pytest.raises(InstabilityError) as exc:
+        analyzer.evaluate(network.stations, [boundary])
+    assert "ANALYTIC" in str(exc.value)          # names which domain refused it
+    assert transport.requests == []              # no simulation time was spent
+
+    # Strict means strict only AT the boundary: one ulp above it still runs.
+    analyzer.evaluate(network.stations, [math.nextafter(boundary, 1.0)])
+    assert len(transport.requests) == 1
+
+    # And the relaxation is still available to a caller that asks for the analytic domain.
+    assert dd.check_stable(boundary, strict=False) is None
+    with pytest.raises(InstabilityError):
+        dd.check_stable(boundary, strict=True)

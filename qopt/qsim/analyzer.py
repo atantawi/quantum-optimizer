@@ -58,8 +58,18 @@ class SimulationAnalyzer(Analyzer):
             )
         for st, Si in zip(stations, S):
             # Fail before spending minutes of simulation on a saturated network (7.3).
-            # Same guard and message sojourn_time uses.
-            st.check_stable(Si)
+            # Same guard and message sojourn_time uses, but STRICT: `S*mu == gamma` is
+            # refused here even for a station that admits full utilization analytically.
+            # `Station.admits_full_utilization` is a statement about `E[T] = 1/(S*mu)` at
+            # `k = (cov_a^2 + cov_s^2)/2 == 0`, and `cov_a` never reaches the simulator --
+            # `Network.to_model_dict` takes the arrival distribution from
+            # `Network.arrival_scv` and the routing, and only `cov_s` goes into the service
+            # node. So a `cov_a == 0` station in a network with the default
+            # `arrival_scv == 1.0` emits exponential arrivals against deterministic service:
+            # at the boundary that is a saturated M/D/1, exactly what this guard is for.
+            # Relaxing it would need the EMITTED arrival process shown deterministic at that
+            # station, which qopt cannot currently conclude from the model dict alone.
+            st.check_stable(Si, strict=True)
 
         request = build_request(
             self.network, S,

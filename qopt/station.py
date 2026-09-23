@@ -389,7 +389,7 @@ class Station(ABC):
         nothing -- this hook costs every other station type exactly nothing.
         """
 
-    def check_stable(self, S):
+    def check_stable(self, S, *, strict=False):
         """Raise InstabilityError if capacity S leaves this station unstable.
 
         Public counterpart to `_check_stable`, which takes the already-computed
@@ -400,8 +400,19 @@ class Station(ABC):
         diverges there -- which is every station except a G/G/1 parameterised with
         `cov_a == cov_s == 0`. See
         `admits_full_utilization`; the strict half is never relaxed.
+
+        `strict=True` refuses `S*mu == gamma` for EVERY station, including one that admits
+        full utilization, and says so in the message. It exists for callers whose own model
+        is not the one `admits_full_utilization` describes. The only such caller today is
+        `SimulationAnalyzer.evaluate`: `cov_a` is an input to the analytic formula and is
+        never emitted to the simulator, where the arrival process comes from
+        `Network.arrival_scv` and the routing instead -- so a `cov_a == 0` station in a
+        network with the default `arrival_scv == 1.0` would send qsim a saturated M/D/1, and
+        the guard that exists to fail before spending minutes on one would have passed it.
+        Pinned by test_the_simulation_preflight_refuses_the_boundary_a_deterministic_station_
+        admits.
         """
-        self._check_stable(S * self.mu)
+        self._check_stable(S * self.mu, strict=strict)
 
     @property
     def admits_full_utilization(self):
@@ -432,12 +443,20 @@ class Station(ABC):
         """
         return False
 
-    def _check_stable(self, mu_eff):
+    def _check_stable(self, mu_eff, strict=False):
+        at_boundary = mu_eff == self.gamma
         if mu_eff < self.gamma or (
-            mu_eff == self.gamma and not self.admits_full_utilization
+            at_boundary and (strict or not self.admits_full_utilization)
         ):
+            detail = ""
+            if at_boundary and strict and self.admits_full_utilization:
+                detail = (
+                    " -- rho == 1 is a point of this station's ANALYTIC domain, but this"
+                    " caller requires strict stability"
+                )
             raise InstabilityError(
                 f"station {self.name!r} unstable: S*mu={mu_eff} <= gamma={self.gamma}"
+                f"{detail}"
             )
 
 
