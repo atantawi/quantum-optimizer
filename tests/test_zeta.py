@@ -4,7 +4,9 @@ import math
 
 import pytest
 
+from qopt.allocator import min_feasible_budget
 from qopt.exceptions import InstabilityError
+from qopt.optimizer import Optimizer, Result
 from qopt.station import ForkJoinStation, GG1Station
 from qopt.zeta import (
     ZETA_LEVEL,
@@ -477,3 +479,68 @@ def test_a_tiny_phi_still_produces_a_usable_zeta():
     partner = GG1Station.mm1(0.6, 1.0, c=1.0)
     caps = allocate([st, partner], 10.0, [z, partner.zeta(2.0)])
     assert all(math.isfinite(c) and c > 0 for c in caps)
+
+
+def _mixed_pair(mode_a, mode_b):
+    return [
+        GG1Station.md1(0.6, 1.5, c=2.0, name="md1", zeta_mode=mode_a),
+        GG1Station.mm1(1.2, 3.0, c=0.5, name="mm1", zeta_mode=mode_b),
+    ]
+
+
+def test_result_reports_the_mode_of_each_station():
+    stations = _mixed_pair(ZETA_SLOPE, ZETA_LEVEL)
+    res = Optimizer(stations, 4.0 * min_feasible_budget(stations)).run()
+    assert res.zeta_mode == [ZETA_SLOPE, ZETA_LEVEL]
+
+
+def test_phi_is_literally_one_for_a_level_station():
+    # Not a computed phi: level calibration never consults the derivative, so the
+    # default path must neither start paying for one nor acquire a new way to fail.
+    # A level station whose phi would RAISE still reports 1.0.
+    class BrokenDerivative(GG1Station):
+        def dT_dS(self, S):
+            raise AssertionError("a level-mode run must never evaluate the derivative")
+
+    stations = [
+        BrokenDerivative(0.6, 1.5, c=2.0, cov_a=1.0, cov_s=0.0, name="level"),
+        GG1Station.mm1(1.2, 3.0, c=0.5, name="mm1"),
+    ]
+    res = Optimizer(stations, 4.0 * min_feasible_budget(stations)).run()
+    assert res.zeta_phi == [1.0, 1.0]
+
+
+def test_phi_is_reported_for_a_slope_station_and_recovers_the_eq22_value():
+    stations = _mixed_pair(ZETA_SLOPE, ZETA_LEVEL)
+    res = Optimizer(stations, 4.0 * min_feasible_budget(stations)).run()
+    # An M/D/1 station's phi is strictly below 1.
+    assert 0.0 < res.zeta_phi[0] < 1.0
+    assert res.zeta_phi[1] == 1.0
+    # zeta is the value that actually drove the allocation, so dividing out phi gives
+    # back eq 22's level calibration.
+    level = res.sojourn_times[0] * (res.capacities[0] * stations[0].mu - stations[0].gamma)
+    assert res.zeta[0] / res.zeta_phi[0] == pytest.approx(level, rel=1e-12)
+    assert res.zeta[0] == pytest.approx(res.zeta_phi[0] * level, rel=1e-12)
+
+
+def test_the_new_result_fields_are_all_defaulted():
+    # tests/test_optimizer_loop.py and the example tests construct Result directly.
+    res = Result(
+        capacities=[1.0], sojourn_times=[2.0], zeta=[1.0], objective=2.0,
+        iterations=1, converged=True, residual=0.0,
+    )
+    assert res.zeta_phi == []
+    assert res.zeta_mode == []
+    assert res.zeta_shape_flags == []
+
+
+def test_the_reported_zeta_is_the_one_that_drove_the_allocation():
+    # Re-running allocate on the reported zeta must reproduce the reported capacities.
+    from qopt.allocator import allocate
+
+    stations = _mixed_pair(ZETA_SLOPE, ZETA_SLOPE)
+    C = 4.0 * min_feasible_budget(stations)
+    res = Optimizer(stations, C).run()
+    again = allocate(stations, C, res.zeta)
+    for a, b in zip(again, res.capacities):
+        assert a == pytest.approx(b, rel=1e-8)

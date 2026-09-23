@@ -8,6 +8,7 @@ from qopt.allocator import allocate, min_feasible_budget, noise_floor
 from qopt.analyzer import AnalyticAnalyzer
 from qopt.exceptions import InfeasibleBudgetError, SimulationQualityError
 from qopt.network import Network
+from qopt.zeta import ZETA_SLOPE
 
 
 @dataclass
@@ -45,6 +46,26 @@ class Result:
     degraded: list = field(default_factory=list)   # per-iteration quality audit (6.8, 7.2)
     system_response_time: object = None           # qsim diagnostic; not optimized
     sim_calls: int = 0                            # POSTs issued — the real cost meter
+
+    # ζ calibration diagnostics (qopt/zeta.py). Defaulted, so direct construction is
+    # unchanged.
+    zeta_phi: list = field(default_factory=list)
+    """Per-station phi -- the factor by which `zeta` above exceeds eq 22's level value.
+
+    Literally 1.0 for a level-mode station: that path never evaluates a derivative, so
+    it neither pays for one nor gains a new way to fail. For a slope station this is the
+    phi that produced the reported `zeta`, so `zeta[i]/zeta_phi[i]` recovers eq 22's
+    value up to one rounding.
+    """
+    zeta_mode: list = field(default_factory=list)
+    """Per-station calibration (a qopt.ZETA_* constant), so a mixed network stays legible."""
+    zeta_shape_flags: list = field(default_factory=list)
+    """Slope-mode stations whose measured E[T] disagrees with their analytic model.
+
+    A MODEL-SPECIFICATION signal, kept out of `degraded` deliberately: `degraded` is the
+    simulation-quality audit and `strict=True` raises on any entry, which would abort
+    runs whose simulation was fine. See `Optimizer.zeta_shape_tol`.
+    """
 
 
 class Optimizer:
@@ -303,6 +324,15 @@ class Optimizer:
         zeta = [
             st.zeta_from(T, Si) for st, T, Si in zip(stations, sojourn_times, S)
         ]
+        # Recomputed HERE rather than captured in the loop: this runs after the last
+        # retune, at the same S and the same station state as the zeta_from call above,
+        # so it is the phi that produced the reported zeta bit-for-bit. A level station
+        # reports the literal 1.0 -- no derivative is evaluated on the default path.
+        zeta_phi = [
+            st.phi(Si) if st.zeta_mode == ZETA_SLOPE else 1.0
+            for st, Si in zip(stations, S)
+        ]
+        zeta_mode = [st.zeta_mode for st in stations]
         objective = sum(st.weight * T for st, T in zip(stations, sojourn_times))
 
         if self.strict and degraded:
@@ -323,6 +353,8 @@ class Optimizer:
             degraded=degraded,
             system_response_time=evaluation.extras.get("system_response_time"),
             sim_calls=sim_calls,
+            zeta_phi=zeta_phi,
+            zeta_mode=zeta_mode,
         )
 
     def _noise_floor(self, stations, S, zeta, ci):
