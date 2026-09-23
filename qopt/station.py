@@ -23,6 +23,16 @@ def distribution_dict(rate, scv):
     return {"mean": 1.0 / rate, "scv": scv}
 
 
+_FD_STEP = 1e-7
+"""Central-difference step for `Station.dT_dS`, as a FRACTION OF SPARE CAPACITY.
+
+Scaled to spare capacity rather than to S, which is what keeps `S - h` strictly inside the
+stability region for a station run arbitrarily close to its boundary. 1e-7 is near the
+cube-root-of-epsilon optimum for a central difference and is measured to agree with the
+closed forms to 6.7e-09 relative (docs/slope-calibrated-zeta/probe-output.txt section 1).
+"""
+
+
 class Station(ABC):
     """A node in the queueing network.
 
@@ -156,6 +166,52 @@ class Station(ABC):
         test_the_reported_floor_is_bit_for_bit_the_one_allocate_prices.
         """
         return self.alloc_cost * (self.gamma / self.mu)
+
+    def dT_dS(self, S):
+        """dE[T]/dS at capacity S -- negative, since capacity cannot lengthen a queue.
+
+        Only slope-calibrated ζ reads this, so a level-mode station never pays for it.
+
+        Deliberately concrete rather than abstract: slope calibration then works for ANY
+        station, including a user subclass qopt has never seen, and no existing subclass
+        breaks. `GG1Station` and `ForkJoinStation` override it with closed forms, which
+        this default is tested against.
+
+        The step is a fraction of SPARE CAPACITY, `S - gamma/mu`, which buys two things a
+        fixed step does not: `S - h` is inside the stability region by construction for
+        any stable S, and at `S == gamma/mu` the step is 0 so `sojourn_time` raises
+        InstabilityError rather than this dividing by zero. Below the boundary h is
+        negative, and the `S + h` evaluation is the one that raises -- so do not reorder
+        these two calls or take an absolute value.
+
+        For a fork-join this differences along the station's FIXED CURRENT RAY, because
+        `sojourn_time` scales both servers with S. That is the radial derivative slope
+        calibration needs (see ForkJoinStation.dT_dS), so the default cannot accidentally
+        reproduce the `forkjoin_policy._dt_dm1` defect.
+        """
+        h = _FD_STEP * (S - self.gamma / self.mu)
+        return (self.sojourn_time(S + h) - self.sojourn_time(S - h)) / (2.0 * h)
+
+    def phi(self, S):
+        """Elasticity of E[T] in spare capacity: -d log T / d log x, with x = S*mu - gamma.
+
+        The ratio of the true slope to the one eq 22's level calibration implies, so
+        `phi == 1` means eq 22 is already slope-correct at S and the two calibrations
+        agree. Identically 1 for M/M/1; exactly `1 - rho` for a cov = 0 station; up to
+        1.64 for G/G/1 with cov = 5.
+
+        Uses this station's ANALYTIC `sojourn_time`, always -- including on the simulated
+        path, where `zeta_from` receives a MEASURED E[T] and this supplies only the shape.
+        That hybrid is load-bearing in both directions (spec section 4.4): a fully
+        analytic slope ζ cancels T and would cut the simulator out of the allocation
+        entirely, while a secant slope from consecutive loop iterates degenerates to 0/0
+        as they converge. It also costs no simulation calls.
+
+        Overridable: a user who knows the true arrival variability but cannot express it
+        as a constructor `cov_a` should override this rather than reach for a new API.
+        """
+        x = S * self.mu - self.gamma
+        return -self.dT_dS(S) * x / (self.mu * self.sojourn_time(S))
 
     def zeta_from(self, T, S):
         """Invert the functional form (eq 22) for an externally supplied E[T].

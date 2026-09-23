@@ -4,6 +4,8 @@ import math
 
 import pytest
 
+from qopt.exceptions import InstabilityError
+from qopt.station import ForkJoinStation, GG1Station
 from qopt.zeta import (
     ZETA_LEVEL,
     ZETA_MODES,
@@ -48,9 +50,6 @@ def test_the_shape_tolerance_default_is_a_fraction_not_a_percentage():
     # 0.25 means 25%. A value > 1 would mean the cross-check never fires.
     assert ZETA_SHAPE_TOL == 0.25
     assert math.isfinite(ZETA_SHAPE_TOL) and 0.0 < ZETA_SHAPE_TOL < 1.0
-
-
-from qopt.station import ForkJoinStation, GG1Station, Station
 
 
 def _every_station_kind(**kwargs):
@@ -109,3 +108,95 @@ def test_the_mode_survives_a_forkjoin_retune_and_reset():
     assert st.zeta_mode == ZETA_SLOPE
     st.reset_policy()
     assert st.zeta_mode == ZETA_SLOPE
+
+
+def test_phi_is_identically_one_for_mm1():
+    # THE invariant that explains why the two calibrations were never distinguished:
+    # M/M/1 is the station type most of the suite uses, and there eq 22 is already
+    # slope-correct. Any closed form that breaks this is wrong.
+    st = GG1Station.mm1(0.6, 1.0, c=2.0)
+    for S in (0.61, 0.8, 1.0, 2.5, 10.0, 1e4):
+        assert st.phi(S) == pytest.approx(1.0, abs=1e-7), S
+
+
+def test_phi_is_one_minus_rho_for_a_zero_cov_station():
+    # cov_a = cov_s = 0 gives E[T] = 1/m with no queueing term, so spare capacity buys
+    # almost nothing and phi collapses toward 0 -- exactly 1 - rho.
+    st = GG1Station(0.6, 1.0, c=1.0, cov_a=0.0, cov_s=0.0)
+    for S in (0.7, 1.0, 2.0, 12.0):
+        rho = st.gamma / (S * st.mu)
+        assert st.phi(S) == pytest.approx(1.0 - rho, abs=1e-8), S
+
+
+def test_dt_ds_is_negative_for_every_station_kind():
+    # More capacity cannot lengthen the sojourn time. A positive derivative would make
+    # phi negative and eq 21's sqrt(zeta) complex.
+    for st in _every_station_kind():
+        assert st.dT_dS(3.0) < 0.0, st.name
+
+
+def test_phi_is_strictly_positive_for_every_station_kind():
+    for st in _every_station_kind():
+        assert st.phi(3.0) > 0.0, st.name
+
+
+def test_the_finite_difference_default_serves_a_subclass_with_no_closed_form():
+    # The base implementation is deliberately concrete, not abstract, so slope
+    # calibration works for a user station whose derivative qopt has never seen.
+    from qopt.station import Station
+
+    class QuadraticStation(Station):
+        """E[T] = 1/x**2 -- not a queue qopt ships, which is the point."""
+
+        def sojourn_time(self, S):
+            m = S * self.mu
+            self._check_stable(m)
+            return 1.0 / (m - self.gamma) ** 2
+
+        def sim_node(self, S, job_class):
+            raise NotImplementedError
+
+        @property
+        def alloc_cost(self):
+            return 1.0
+
+        @property
+        def default_zeta(self):
+            return 1.0
+
+    st = QuadraticStation(gamma=0.5, mu=1.0)
+    # T = x**-2 so dT/dx = -2 x**-3 and phi = -dT/dS * x/(mu T) = 2, at every S.
+    for S in (0.6, 1.0, 4.0):
+        assert st.phi(S) == pytest.approx(2.0, rel=1e-6), S
+
+
+def test_dt_ds_refuses_an_unstable_capacity():
+    # Review Focus 2. At S == gamma/mu the step h is 0; below it h is NEGATIVE, so
+    # S - h is the MORE stable side and only S + h raises. An abs(h), or evaluating
+    # S - h first and returning early, would hand back a derivative for a station that
+    # has no sojourn time at all.
+    st = GG1Station.mm1(0.6, 1.0, c=2.0)
+    boundary = st.gamma / st.mu           # 0.6
+    for S in (boundary, boundary * 0.5, boundary - 1e-12):
+        with pytest.raises(InstabilityError):
+            st.dT_dS(S)
+        with pytest.raises(InstabilityError):
+            st.phi(S)
+
+
+def test_the_finite_difference_step_stays_inside_the_stability_region():
+    # Scaling h to SPARE CAPACITY rather than to S is what guarantees S - h > gamma/mu.
+    # A fixed step would fall off the boundary for a station run close to it.
+    st = GG1Station.mm1(0.6, 1.0, c=2.0)
+    assert st.dT_dS(0.6 + 1e-9) < 0.0          # a hair above the boundary, still fine
+
+
+def test_phi_on_an_unbound_gamma_names_the_station():
+    # Review Focus 3. A station built bare for a Network has no gamma until bind_gamma.
+    # The canonical ValueError must survive -- not AttributeError, and certainly not a
+    # number computed from a None.
+    st = GG1Station(mu=1.0, c=1.0, cov_a=1.0, cov_s=1.0, name="unbound")
+    with pytest.raises(ValueError, match="unbound"):
+        st.phi(2.0)
+    with pytest.raises(ValueError, match="unbound"):
+        st.dT_dS(2.0)
