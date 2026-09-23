@@ -150,6 +150,41 @@ def allocate(stations, C, zeta_vec):
         math.sqrt(st.weight * z * st.alloc_cost / st.mu)
         for st, z in zip(stations, zeta_vec)
     )
+    # Every other factor in that sum is validated positive -- weight and mu by the Station
+    # constructor, alloc_cost by each subclass -- so in exact arithmetic the sum is zero
+    # exactly when EVERY zeta is zero, which the per-station loop above now lets through for a
+    # network of nothing but full-utilization stations. Eq 21 has no answer there and neither
+    # does its limit: the formula is invariant under uniform positive scaling of zeta, so
+    # zeta = (eps, eps) tends to shares proportional to sqrt(w/(c*mu)), while (eps, eps^2)
+    # tends to giving the first station everything. The limit is path-dependent, so there is
+    # no value to return and this raises instead of picking one.
+    #
+    # In floating point one more input reaches the same place: every zeta positive but every
+    # `w*zeta*c/mu` UNDERFLOWING to zero, which a denormal zeta does as soon as `w*c/mu < 1`
+    # -- zeta = 5e-324 with w = 1e-300, c = 1e-10 and mu = 1.0 measured. That is not a
+    # degenerate limit, it is a lost product, so the message names the denominator and lists
+    # both causes rather than asserting the zetas are zero. Both arms are pinned by
+    # test_allocate_rejects_an_all_zero_zeta_vector.
+    #
+    # Not reachable from `Optimizer.run()` on anything we can construct, though the argument
+    # is a floating-point one and not the exact-arithmetic `sum_i c_i*x_i == slack > 0`: the
+    # shares are what round away, so what matters is whether EVERY station can lose its own.
+    # Collapsing station i needs its share below `ulp(base_i)/2 <= base_i * 2^-53`, so all of
+    # them collapsing needs `slack <= floor * 2^-53`, while the smallest representable budget
+    # above the floor gives `slack >= ulp(floor) > floor * 2^-53`. The two cannot hold at
+    # once, and the margin is a factor of about 2 rather than orders of magnitude: measured
+    # at n = 2, 4, 8 and 16 identical deterministic stations with `base = 1e16` and the
+    # minimum representable slack, every station keeps `x = 2.0` against a collapse threshold
+    # of 1.0. The summation itself rounds, so this is an argument plus a measurement rather
+    # than a proof. Checked anyway -- this function is root-exported and a caller can hand it
+    # any vector at all.
+    if not denom > 0.0:
+        raise ValueError(
+            f"eq 21's share denominator is {denom}, got zeta {zeta_vec} -- either every zeta "
+            f"is zero, where eq 21 has no allocation because its limit depends on the path "
+            f"the zetas take to zero, or every w*zeta*c/mu underflowed. At least one station "
+            f"must carry a zeta large enough to survive that product."
+        )
     capacities = []
     for st, b, z in zip(stations, base, zeta_vec):
         num = math.sqrt(st.weight * z / (st.alloc_cost * st.mu))

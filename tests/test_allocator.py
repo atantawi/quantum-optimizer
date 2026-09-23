@@ -107,6 +107,114 @@ def test_allocate_rejects_a_zeta_vector_it_cannot_use(zeta, match):
         allocate(stations, 10.0, zeta)
 
 
+def test_allocate_rejects_an_all_zero_zeta_vector():
+    """Zero from a full-utilization station is admissible; zero from EVERY station is not.
+
+    Opening the domain at `k == 0` let a zero zeta through the per-station check, and with
+    nothing but such stations the eq-21 denominator `sum_j sqrt(w_j zeta_j c_j / mu_j)` is
+    then zero -- a bare `ZeroDivisionError` from inside the capacity loop, with no station
+    named. There is also no value to fall back to: eq 21 is invariant under uniform positive
+    scaling of zeta, so the limit depends on the path. `(eps, eps)` tends to shares in
+    proportion to `sqrt(w/(c*mu))`, while `(eps, eps^2)` tends to giving the first station
+    everything -- both computed below, from the shipped function.
+
+    Not reachable from `Optimizer.run()` on anything constructible, but the reason is a
+    floating-point one, not the exact-arithmetic `sum_i c_i x_i == slack > 0`: all-zero zeta
+    needs every station to lose its share to rounding, which needs `slack <= floor * 2^-53`,
+    while the smallest representable budget above the floor gives `slack > floor * 2^-53`.
+    The margin is a factor of about two, not orders of magnitude -- at n = 2, 4, 8, 16
+    identical `base = 1e16` deterministic stations on the minimum representable slack, every
+    station keeps `x = 2.0` against a collapse threshold of 1.0, pinned below. `allocate` is
+    root-exported and checks regardless.
+
+    A zero denominator does NOT imply the zetas are zero, which is why the guard reports the
+    denominator rather than the vector: a denormal zeta whose `w*zeta*c/mu` underflows reaches
+    the same division with every zeta strictly positive. Pinned below on the vector the
+    per-station check passes untouched.
+    """
+    import math
+
+    from qopt.zeta import ZETA_SLOPE
+
+    stations = [
+        GG1Station(0.6, 1.0, 1.0, c=1.0, cov_a=0.0, cov_s=0.0, zeta_mode=ZETA_SLOPE,
+                   name="d1"),
+        GG1Station(1.2, 3.0, 5.0, c=0.5, cov_a=0.0, cov_s=0.0, zeta_mode=ZETA_SLOPE,
+                   name="d2"),
+    ]
+    assert all(st.admits_full_utilization for st in stations)
+    C = 2.0 * min_feasible_budget(stations)
+
+    # One zero is fine and leaves that station on its boundary.
+    S = allocate(stations, C, [0.0, 1.0])
+    assert S[0] * stations[0].mu == stations[0].gamma
+    # All zeros is not, and says which condition failed rather than dividing by zero.
+    with pytest.raises(ValueError, match="denominator") as all_zero:
+        allocate(stations, C, [0.0, 0.0])
+    # Including the single-station case the reviewer reported.
+    with pytest.raises(ValueError, match="denominator"):
+        allocate(stations[:1], 1.0, [0.0])
+    assert "every zeta is zero" in str(all_zero.value)
+
+    # The other way into that division: a POSITIVE zeta whose w*zeta*c/mu underflows. The
+    # per-station check passes it -- it is finite and strictly positive -- so the guard has to
+    # describe the denominator and not the vector.
+    tiny = GG1Station(0.6, 1.0, 1e-300, c=1e-10, cov_a=0.0, cov_s=0.0,
+                      zeta_mode=ZETA_SLOPE, name="tiny")
+    denormal = 5e-324
+    assert denormal > 0.0 and math.isfinite(denormal)
+    assert tiny.weight * denormal * tiny.alloc_cost / tiny.mu == 0.0
+    with pytest.raises(ValueError, match="underflow") as lost:
+        allocate([tiny], 10.0, [denormal])
+    assert "5e-324" in str(lost.value)
+
+    # The limit really is path-dependent, so there is nothing to return. Eq 21 is invariant
+    # under uniform positive scaling of zeta, so the uniform family is the SAME allocation at
+    # every eps -- it splits the slack by sqrt(w/(c*mu)) and stays there:
+    base = [st.gamma / st.mu for st in stations]
+    slack = C - sum(st.alloc_cost * b for st, b in zip(stations, base))
+    uniform = [allocate(stations, C, [e, e]) for e in (1e-8, 1e-12, 1e-16)]
+    for got in uniform[1:]:
+        assert got == pytest.approx(uniform[0], rel=1e-15)
+    assert uniform[0][0] > base[0] and uniform[0][1] > base[1]
+
+    # The skewed family walks to a different limit: the whole slack to station 0. It
+    # CONVERGES rather than sitting there, measured gaps 7.3e-05 / 7.3e-07 / 7.3e-09 at
+    # eps = 1e-8 / 1e-12 / 1e-16, so the two paths disagree about the value at (0, 0).
+    corner = base[0] + slack / stations[0].alloc_cost
+    skewed = [allocate(stations, C, [e, e ** 2])[0] for e in (1e-8, 1e-12, 1e-16)]
+    gaps = [abs(v - corner) for v in skewed]
+    assert gaps[0] > gaps[1] > gaps[2]
+    assert gaps[0] == pytest.approx(7.3e-05, rel=0.05)
+    assert gaps[2] < 1e-08
+    assert uniform[0][0] != pytest.approx(corner, rel=1e-3)
+
+    # The margin against every share rounding away at once, at the tightest budget there is.
+    for n in (2, 4, 8, 16):
+        wide = [GG1Station(1e16, 1.0, 1.0, c=1.0, cov_a=0.0, cov_s=0.0,
+                           zeta_mode=ZETA_SLOPE, name=f"w{i}") for i in range(n)]
+        floor = min_feasible_budget(wide)
+        tightest = math.nextafter(floor, math.inf)
+        caps = allocate(wide, tightest, [1.0] * n)
+        assert {Si - 1e16 for Si in caps} == {2.0}           # threshold is ulp(1e16)/2 == 1.0
+        assert math.ulp(1e16) / 2.0 == 1.0
+        zs = [st.zeta_from(st.sojourn_time(Si), Si) for st, Si in zip(wide, caps)]
+        assert all(z > 0.0 for z in zs)
+
+    # And a run never lands there, at any budget.
+    from qopt.optimizer import Optimizer
+
+    for mult in (1.0001, 1.01, 2.0, 100.0):
+        fresh = [
+            GG1Station(0.6, 1.0, 1.0, c=1.0, cov_a=0.0, cov_s=0.0, zeta_mode=ZETA_SLOPE,
+                       name="d1"),
+            GG1Station(1.2, 3.0, 5.0, c=0.5, cov_a=0.0, cov_s=0.0, zeta_mode=ZETA_SLOPE,
+                       name="d2"),
+        ]
+        res = Optimizer(fresh, mult * min_feasible_budget(fresh)).run()
+        assert any(z > 0.0 for z in res.zeta), (mult, res.zeta)
+
+
 def test_allocate_rejects_a_non_finite_budget():
     """`allocate` is root-exported, so it cannot rely on the Optimizer's budget guard. The
     slack test is written `not slack > 0.0` rather than `slack <= 0.0` for exactly this: a
