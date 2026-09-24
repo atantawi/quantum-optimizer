@@ -1,9 +1,10 @@
 import math
+import warnings
 
 import pytest
 
-from qopt.allocator import min_feasible_budget
-from qopt.exceptions import InfeasibleBudgetError
+from qopt.allocator import allocate, min_feasible_budget
+from qopt.exceptions import InfeasibleBudgetError, InstabilityError
 from qopt.analyzer import AnalyticAnalyzer, Analyzer, Evaluation
 from qopt.network import Network, Route
 from qopt.optimizer import Optimizer, Result
@@ -14,6 +15,7 @@ from qopt.forkjoin_policy import (
     optimal_ray,
 )
 from qopt.station import ForkJoinStation, GG1Station
+from qopt.zeta import ZETA_SLOPE
 
 
 def _stations():
@@ -749,3 +751,423 @@ def test_tuned_and_fixed_at_the_tuned_ray_reach_the_same_answer():
     frozen = Optimizer(frozen_stations, C).run()
     assert frozen.capacities == pytest.approx(tuned.capacities, rel=1e-8)
     assert frozen.objective == pytest.approx(tuned.objective, rel=1e-9)
+
+
+# --- the analyzer's domain, which is narrower than the model's -------------------------
+
+
+class StrictFake(DeterministicFake):
+    """`DeterministicFake` with a stochastic analyzer's domain: no `rho == 1`.
+
+    Same preflight as `SimulationAnalyzer.evaluate`, reached through the same flag, so
+    these tests pin the Optimizer's half of the contract without a transport. The qsim
+    half -- that the flag really is set there, and that a default `run()` now reaches the
+    POST -- is pinned in tests/test_qsim_analyzer.py.
+    """
+
+    requires_strict_stability = True
+
+    def evaluate(self, stations, S, *, fresh_seed=False):
+        for st, Si in zip(stations, S):
+            st.check_stable(Si, strict=True)
+        return super().evaluate(stations, S, fresh_seed=fresh_seed)
+
+
+def _boundary_pair(weight=3e5):
+    """A network whose analytic optimum sits exactly on the light station's boundary.
+
+    The deterministic station is the one that admits full utilization; the M/M/1 carries
+    the weight, so eq 21 spends on it and leaves the other at `gamma/mu`.
+    """
+    return [
+        GG1Station(0.6, mu=1.0, weight=1.0, c=1.0, cov_a=0.0, cov_s=0.0,
+                   zeta_mode=ZETA_SLOPE, name="dd"),
+        GG1Station.mm1(gamma=1.2, mu=3.0, c=1.0, weight=weight, name="mm"),
+    ]
+
+
+def test_a_warm_start_outside_the_analyzers_domain_falls_back_to_the_cold_one():
+    """The analytic pre-solve answers against a WIDER domain than a stochastic analyzer's.
+
+    `admits_full_utilization` opens the analytic domain at `S*mu == gamma`, and on this
+    network that is where the ANALYTIC optimum is -- so the free pre-solve returns S_dd = 0.6
+    exactly and the first simulated `evaluate` refuses it. The whole run then died before
+    issuing a single POST, which is what this guards: a warm start is an optimization, so
+    a warm start the analyzer cannot honour is declined, not repaired.
+
+    The fallback is the same eq-21 allocation the loop would have started from with
+    `warm_start=False` -- strictly interior, x = 3.2e-05 here -- and nothing about the
+    stopping rule changes. Nudging the analytic answer to the next float instead was
+    rejected for the reason `min_feasible_budget` gives for not nudging a collapsed share:
+    at that distance the queue is saturated and its simulated E[T] means nothing.
+
+    The warning's wording is pinned too, because it is easy to overstate: the pre-solve
+    locates the ANALYTIC optimum, and the analyzer refusing that point is precisely why it
+    cannot be the analyzer's own optimum (round 6).
+    """
+    stations = _boundary_pair()
+    C = 1.01 * min_feasible_budget(stations)
+
+    # The premise: the pre-solve really does land on the boundary, and the analyzer really
+    # does refuse that vector. Both are asserted, so this test fails if either stops being
+    # true rather than passing for a new reason.
+    pre = Optimizer(stations, C).run()
+    assert pre.capacities[0] * stations[0].mu == stations[0].gamma
+    with pytest.raises(InstabilityError, match="ANALYTIC"):
+        StrictFake().evaluate(stations, pre.capacities)
+
+    stations = _boundary_pair()
+    analyzer = StrictFake()
+    with pytest.warns(RuntimeWarning, match="warm start") as caught:
+        result = Optimizer(stations, C, analyzer=analyzer).run()
+
+    # The warning may not promote the pre-solve's finding into a claim about this analyzer.
+    # What the pre-solve established is where the ANALYTIC optimum is; at that same point the
+    # analyzer refuses to return a value at all -- asserted above -- so it has no objective
+    # value there and cannot have its optimum there. Review round 6.
+    message = str(caught[0].message)
+    assert "ANALYTIC optimum" in message
+    assert "simulated optimum" not in message
+
+    assert analyzer.calls > 0
+    assert result.warm_start_iterations == 0        # declined, so nothing to report
+    cold = allocate(_boundary_pair(), C, [st.default_zeta for st in stations])
+    assert cold[0] - stations[0].gamma / stations[0].mu == pytest.approx(3.15e-05, rel=0.01)
+    assert result.capacities[0] * stations[0].mu > stations[0].gamma
+
+    # And with the warm start disabled there is nothing to decline, so no warning.
+    stations = _boundary_pair()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        Optimizer(stations, C, analyzer=StrictFake(), warm_start=False).run()
+
+
+def test_the_loop_stops_rather_than_evaluating_a_capacity_the_analyzer_refuses():
+    """The same domain gap reached from inside the loop, one iterate at a time.
+
+    At `k == 0` the slope map contracts onto the station's own boundary, so the iterates
+    walk there: undamped (`damping=1.0`) the fourth candidate is exactly `gamma/mu` and
+    `evaluate` used to raise after 3 POSTs. The loop now stops instead, because a candidate
+    the analyzer cannot price is a result -- the analytic optimum for this network IS that
+    boundary, and a strict analyzer refuses it -- and not a malfunction.
+
+    `converged` is False and `stop_reason` says which of the four stops happened. The
+    reported capacities are the last vector the analyzer accepted, so every reported metric
+    describes a point that was actually evaluated; `residual` is the step that would have
+    left the domain.
+
+    At the stochastic default `damping=0.5` contraction alone did not get there: the damped
+    average of the iterate and a boundary target stalled one ulp above it -- measured, x
+    holds at 1.1102230246251565e-16 == ulp(0.6) from iteration 39 on and the run stops on
+    `tol` with a zero step. That is one measured run on one network, not a proof that
+    damping excludes the boundary. Undamped, and a collapsed share at any damping, are the
+    two ways in that ARE pinned here.
+    """
+    stations = _boundary_pair()
+    C = 1.01 * min_feasible_budget(stations)
+    analyzer = StrictFake()
+    with pytest.warns(RuntimeWarning, match="refuses to evaluate"):
+        result = Optimizer(stations, C, analyzer=analyzer, damping=1.0,
+                           tol=5e-324, max_iter=200).run()
+
+    assert result.stop_reason == "analyzer-domain"
+    assert result.converged is False
+    assert result.iterations == 3
+    assert analyzer.calls == 4                   # 3 loop iterations + the final evaluation
+    assert result.capacities[0] * stations[0].mu > stations[0].gamma
+    assert result.capacities[0] - 0.6 == pytest.approx(8.76e-14, rel=0.01)
+
+    # The stop is exactly where the next candidate leaves the domain, and with THIS analyzer
+    # eq 21 on the reported zeta reproduces that candidate to the bit. That holds because
+    # `StrictFake` is deterministic: its fresh-seeded final evaluation returns the same E[T]
+    # as the loop's, so the reported zeta and the zeta that caused the stop coincide. It is
+    # NOT a general property of the stop, and the warning must not claim it is --
+    # test_the_reported_zeta_need_not_reproduce_the_refused_candidate is the stochastic arm.
+    nxt = allocate(stations, C, result.zeta)
+    assert nxt[0] * stations[0].mu == stations[0].gamma
+    with pytest.raises(InstabilityError):
+        analyzer.evaluate(stations, nxt)
+
+
+class FreshSkewFake(StrictFake):
+    """`StrictFake` whose fresh-seeded final evaluation lands on a different sample path.
+
+    The loop itself sees the unperturbed analytic E[T], so the run stays deterministic and
+    the refused candidate is reproducible; only the `fresh_seed=True` call is scaled, which
+    is what an independently seeded final evaluation does to a real analyzer's numbers.
+    """
+
+    def __init__(self, factors):
+        super().__init__()
+        self.factors = factors
+
+    def evaluate(self, stations, S, *, fresh_seed=False):
+        evaluation = super().evaluate(stations, S, fresh_seed=fresh_seed)
+        if fresh_seed:
+            evaluation.sojourn_times[:] = [
+                T * f for T, f in zip(evaluation.sojourn_times, self.factors)
+            ]
+        return evaluation
+
+
+def test_the_reported_zeta_need_not_reproduce_the_refused_candidate():
+    """`Result.zeta` is recomputed from the FINAL evaluation, which is a different sample.
+
+    Review round 6. The stop was diagnosed as "eq 21 at the reported zeta puts it there",
+    which holds only where the reported zeta IS the loop's zeta: a deterministic analyzer,
+    which is why the test above passes, or `final_evaluation=False`, which reports the last
+    loop iterate's numbers (measured: reported zeta_dd = 2.1314343731725096e-26, the loop's
+    value to the bit, and the round trip closes at x = 0.0). With a fresh-seeded final
+    evaluation the two are different numbers: measured here, the stop was caused by
+    zeta_dd = 2.131434e-26, whose eq-21 share rounds away entirely and lands the station on
+    its boundary, while the reported zeta_dd is 2.131434e-14 and eq 21 on it keeps a share --
+    leaving S_dd 4.6e-12 ABOVE the boundary, strictly inside the analyzer's domain.
+
+    So the warning may not attribute the stop to the reported zeta. What it can say instead
+    costs nothing to verify: the refused point is named outright, because every station it
+    lists sits at exactly its own `gamma/mu`.
+
+    The factor 1e12 is large for a seed change, and deliberately so -- but NOT because a
+    smaller skew makes a smaller version of the same discrepancy. At 1.05 the reported zeta
+    still moves (2.238006e-26 against the loop's 2.131434e-26) and eq 21 on it still collapses
+    the share entirely, so the round trip lands back on the boundary at x = 0.0 exactly and
+    the false claim comes out accidentally true. That is the second arm below. What the large
+    factor buys is a reported zeta big enough for the share to SURVIVE, which is the only
+    regime where the difference is observable at all.
+    """
+    stations = _boundary_pair()
+    C = 1.01 * min_feasible_budget(stations)
+    analyzer = FreshSkewFake([1e12, 1.0])
+    with pytest.warns(RuntimeWarning, match="refuses to evaluate") as caught:
+        result = Optimizer(stations, C, analyzer=analyzer, damping=1.0,
+                           tol=5e-324, max_iter=200).run()
+    assert result.stop_reason == "analyzer-domain"
+
+    # The premise: the loop's own zeta DID put the next candidate on the boundary. Re-derived
+    # from the returned capacities, which are the vector that zeta was measured at.
+    loop_zeta = [
+        st.zeta_from(st.sojourn_time(Si), Si)
+        for st, Si in zip(stations, result.capacities)
+    ]
+    assert loop_zeta[0] == pytest.approx(2.131434e-26, rel=1e-5)
+    assert allocate(stations, C, loop_zeta)[0] * stations[0].mu == stations[0].gamma
+
+    # And the reported zeta does not: it is 12 orders of magnitude up, and eq 21 on it stays
+    # strictly inside the domain the run stopped at the edge of.
+    assert result.zeta[0] == pytest.approx(2.131434e-14, rel=1e-5)
+    again = allocate(stations, C, result.zeta)
+    assert again[0] * stations[0].mu > stations[0].gamma
+    assert again[0] - 0.6 == pytest.approx(4.6e-12, rel=0.05)
+    optimizer = Optimizer(stations, C, analyzer=analyzer)
+    assert optimizer._refused_by_analyzer(stations, again) == []
+
+    # The message therefore attributes the stop to the loop's zeta, says what `result.zeta`
+    # is instead, and names the refused point directly. Selected by content, not by index:
+    # the declined warm start warns first on this network and matches "refuses to evaluate"
+    # too.
+    stop_messages = [
+        str(w.message) for w in caught if "stopped after" in str(w.message)
+    ]
+    assert len(stop_messages) == 1
+    message = stop_messages[0]
+    assert "last zeta the LOOP measured" in message
+    assert "result.zeta is recomputed" in message
+    assert "exactly its own gamma/mu" in message
+    assert "at the reported zeta" not in message
+
+    # Second arm: a plausible few-percent skew moves the reported zeta but not the outcome of
+    # the round trip, because the share collapses either way. A test built on that factor
+    # would have confirmed the wrong message instead of catching it.
+    stations = _boundary_pair()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        small = Optimizer(stations, C, analyzer=FreshSkewFake([1.05, 1.0]), damping=1.0,
+                          tol=5e-324, max_iter=200).run()
+    assert small.stop_reason == "analyzer-domain"
+    assert small.zeta[0] == pytest.approx(2.238006e-26, rel=1e-5)     # not the loop's zeta
+    assert allocate(stations, C, small.zeta)[0] * stations[0].mu == stations[0].gamma
+
+    # Third arm: `final_evaluation=False` reports the loop's own numbers, so there the reported
+    # zeta IS the triggering one -- to the bit, at any skew.
+    stations = _boundary_pair()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        last = Optimizer(stations, C, analyzer=FreshSkewFake([1e12, 1.0]), damping=1.0,
+                         tol=5e-324, max_iter=200, final_evaluation=False).run()
+    assert last.zeta[0] == 2.1314343731725096e-26
+    assert allocate(stations, C, last.zeta)[0] * stations[0].mu == stations[0].gamma
+
+
+def test_a_first_candidate_outside_the_analyzers_domain_raises_naming_the_input():
+    """With nothing evaluated yet there is nothing to report, so this one raises.
+
+    Eq 21 on a validated zeta does not land on the boundary by itself; it gets there by
+    rounding a station's whole share away, which needs a weight ratio around 1e30 at a
+    budget 1.01x the floor (1e20 leaves x = 1.7e-12 and runs). That is a statement about
+    the INPUT, which the message says -- a bare preflight error from inside `evaluate`
+    would have named the station and nothing else.
+    """
+    stations = _boundary_pair(weight=1e30)
+    C = 1.01 * min_feasible_budget(stations)
+    assert allocate(stations, C, [st.default_zeta for st in stations])[0] == 0.6
+    analyzer = StrictFake()
+    # Both guards fire in order: the warm start is declined for being outside the domain,
+    # then the cold start it fell back to turns out to be outside as well.
+    with pytest.warns(RuntimeWarning, match="warm start"):
+        with pytest.raises(InstabilityError, match="first capacity vector"):
+            Optimizer(stations, C, analyzer=analyzer).run()
+    assert analyzer.calls == 0                   # not one simulation spent on it
+
+    # A decade less skew keeps the share, and the same run converges.
+    stations = _boundary_pair(weight=1e20)
+    C = 1.01 * min_feasible_budget(stations)
+    assert allocate(stations, C, [st.default_zeta for st in stations])[0] - 0.6 > 0.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        assert Optimizer(stations, C, analyzer=StrictFake()).run().capacities[0] > 0.6
+
+
+def test_the_domain_guard_is_inert_for_an_analyzer_that_accepts_the_boundary():
+    """`AnalyticAnalyzer` prices `rho == 1` for a deterministic station, so nothing stops.
+
+    This is the same network and the same budget as the two tests above, run with the
+    default analyzer: it converges onto the boundary and reports it, which is the behaviour
+    `3bb34d6` exists to allow. The guard keys on the analyzer's declared domain and not on
+    the station, so it must not fire here.
+    """
+    stations = _boundary_pair()
+    C = 1.01 * min_feasible_budget(stations)
+    result = Optimizer(stations, C).run()
+    assert result.stop_reason == "tol"
+    assert result.converged is True
+    assert result.capacities[0] * stations[0].mu == stations[0].gamma
+    assert Optimizer(stations, C)._refused_by_analyzer(stations, result.capacities) == []
+
+
+class RecordingStrictFake(StrictFake):
+    """`StrictFake` that records the full state each evaluation actually ran against.
+
+    Capacities alone are not that state. A tuned fork-join's ray is read by `alloc_cost`,
+    `sojourn_time` and `zeta_from` alike, so an evaluation is the pair (capacities, policy
+    state) and these tests compare both.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.seen = []        # (fresh_seed, capacities, per-station policy state)
+
+    def evaluate(self, stations, S, *, fresh_seed=False):
+        self.seen.append(
+            (fresh_seed, list(S), [st.policy_state() for st in stations])
+        )
+        return super().evaluate(stations, S, fresh_seed=fresh_seed)
+
+
+def _boundary_trio(mm_weight=1e6, fj_weight=1000.0):
+    """`_boundary_pair` plus a TUNED fork-join, which carries mutable policy state.
+
+    The deterministic station and the weight-carrying M/M/1 are what walk the iteration
+    onto `S*mu == gamma`; the fork-join is there because its ray is run state that a
+    declined warm start and an abandoned candidate both have to account for.
+    """
+    dd, mm = _boundary_pair(weight=mm_weight)
+    return [
+        dd,
+        mm,
+        ForkJoinStation(gamma=0.45, mu=1.0, weight=fj_weight, r=2.0, c1=1.0, c2=1.0,
+                        r_star=R_STAR_TUNED, name="fj"),
+    ]
+
+
+def test_a_declined_warm_start_discards_the_pre_solves_policy_state():
+    """Declining a warm start has to discard the retunes it applied, not just its answer.
+
+    The pre-solve runs on the SAME station objects and mutates a tuned fork-join's ray, so
+    eq 21 in the fallback would otherwise price that station on the ray the DECLINED answer
+    converged to -- neither the documented cold allocation nor what `warm_start=False`
+    produces. Measured before the fix: the fallback allocated at r_star = 1.0002380061
+    against a cold run's constructed 1.0, and the two first capacity vectors differed in
+    the 5th significant digit (0.4154041385 against 0.4154535915 at the M/M/1).
+
+    The assertion is bitwise equality with the `warm_start=False` run, which is the
+    documented meaning of the fallback, and it is made on the pair (capacities, ray) rather
+    than on capacities alone -- the ray is what was wrong.
+    """
+    stations = _boundary_trio()
+    C = 1.01 * min_feasible_budget(stations)
+
+    # The premise: the pre-solve really does both refuse AND mutate.
+    pre = Optimizer(stations, C, tol=1e-9).run()
+    assert stations[2].r_star != 1.0
+    assert Optimizer(stations, C, analyzer=StrictFake())._refused_by_analyzer(
+        stations, pre.capacities
+    ) == ["dd"]
+
+    warm = RecordingStrictFake()
+    stations = _boundary_trio()
+    # Recorded rather than `pytest.warns`, because `max_iter=1` also warns about
+    # non-convergence and both runs here are deliberately cut to one iteration.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", RuntimeWarning)
+        warm_result = Optimizer(stations, C, analyzer=warm, max_iter=1).run()
+    assert any("warm start" in str(w.message) for w in caught)
+
+    cold = RecordingStrictFake()
+    stations = _boundary_trio()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # max_iter=1 cannot converge
+        cold_result = Optimizer(stations, C, analyzer=cold, warm_start=False,
+                                max_iter=1).run()
+
+    assert warm.seen[0] == cold.seen[0]                   # capacities AND ray, bitwise
+    assert warm.seen[0][2] == [None, None, 1.0]           # the constructed ray
+    assert warm_result.warm_start_iterations == 0
+    assert warm_result.capacities == cold_result.capacities
+
+
+def test_an_abandoned_candidates_retune_is_rolled_back_with_it():
+    """Rolling back to the last accepted capacities has to roll back the station too.
+
+    The retune that produced the refused candidate has already run by the time the guard
+    sees it -- it is applied at the bottom of the previous iteration -- so restoring
+    capacities alone leaves the reported vector priced and measured on one ray while the
+    station is exposed on another. Measured before the fix: the last accepted evaluation
+    ran at r_star = 1.0002380171 and the final evaluation of the SAME capacities at
+    1.0002380065, and the reported spend came back 2.4e-09 under a budget eq 21 had
+    exhausted, because `alloc_cost` had moved under it.
+
+    Three consequences are pinned, all of the same restore: the final evaluation runs the
+    state its capacities were accepted under, the reported capacities exhaust the budget
+    again, and the station a caller reads afterwards is the one the Result describes.
+    """
+    stations = _boundary_trio()
+    C = 1.01 * min_feasible_budget(stations)
+    analyzer = RecordingStrictFake()
+    with pytest.warns(RuntimeWarning, match="refuses to evaluate"):
+        result = Optimizer(stations, C, analyzer=analyzer, damping=1.0,
+                           tol=5e-324, max_iter=200).run()
+
+    assert result.stop_reason == "analyzer-domain"
+    accepted, final = analyzer.seen[-2], analyzer.seen[-1]
+    assert accepted[0] is False and final[0] is True     # ...the fresh-seed evaluation
+    assert final[1] == accepted[1] == list(result.capacities)
+    assert final[2] == accepted[2]                       # same ray, which was the bug
+    assert stations[2].r_star == accepted[2][2]          # and that is what is exposed
+
+    # The rescale is what makes this visible in a reported number: eq 21 exhausts C at the
+    # ray it allocated on, so a stale ray leaves `alloc_cost` and the capacities describing
+    # different stations. 1e-15 relative is well inside the 1.4e-09 the stale ray cost.
+    spend = sum(st.alloc_cost * Si for st, Si in zip(stations, result.capacities))
+    assert spend == pytest.approx(C, rel=1e-15)
+
+    # Same restore covers `final_evaluation=False`, where the reported sojourn times come
+    # from the last accepted evaluation and zeta/phi are recomputed afterwards: both must
+    # read the same station state.
+    stations = _boundary_trio()
+    quiet = RecordingStrictFake()
+    with pytest.warns(RuntimeWarning, match="refuses to evaluate"):
+        no_final = Optimizer(stations, C, analyzer=quiet, damping=1.0, tol=5e-324,
+                             max_iter=200, final_evaluation=False).run()
+    assert quiet.seen[-1][0] is False                    # no fresh-seed call happened
+    assert quiet.seen[-1][1] == list(no_final.capacities)
+    assert stations[2].r_star == quiet.seen[-1][2][2]

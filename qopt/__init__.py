@@ -26,6 +26,7 @@ from qopt.optimizer import Optimizer, Result
 from qopt.qsim.analyzer import SimulationAnalyzer
 from qopt.qsim.client import QsimClient
 from qopt.station import ForkJoinStation, GG1Station, SingleServerStation, Station
+from qopt.zeta import ZETA_LEVEL, ZETA_MODES, ZETA_SHAPE_TOL, ZETA_SLOPE, resolve_zeta_mode
 
 __all__ = [
     "QOptError",
@@ -47,6 +48,11 @@ __all__ = [
     "R_STAR_TUNED",
     "R_STAR_FIXED",
     "optimal_ray",
+    "ZETA_LEVEL",
+    "ZETA_SLOPE",
+    "ZETA_MODES",
+    "ZETA_SHAPE_TOL",
+    "resolve_zeta_mode",
     "allocate",
     "min_feasible_budget",
     "noise_floor",

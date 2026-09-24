@@ -1,7 +1,11 @@
 # Slope-calibrated ζ
 
-**Status: proposal. Not implemented.** `main` ships eq 22's level calibration; this argues for
-replacing it and records what that would cost.
+**Status: implemented** (2026-09-22) as a per-station opt-in; the default is still eq 22's level
+calibration, and the paper is unchanged. What follows is the argument as it was made, in its own
+conditional tense -- read its "would" and "if it proceeds" as the proposal's, not as a
+description of shipped behaviour. Both its analysis and its rollout survived: §8 step 3 proposed
+exactly the per-station opt-in that was built. What §8 step 2 left open was the paper question,
+answered by documenting a deliberate divergence rather than amending eq 22.
 
 Equation numbers follow [`../paper-map.md`](../paper-map.md): `eq 21` (the allocation rule) and
 `eq 22` (the ζ inversion) mean `docs/analysis.pdf`, the snapshot committed in `37a3a11`. Every
@@ -184,7 +188,7 @@ so the check exists.
 
 The gain tracks how far `φ` is from 1, not the station type: **0.0002–0.039%** where only
 fork-join stations deviate, **up to 0.515%** once the single-server stations are not M/M/1, and
-**1.59%** on the §7 stress network. It is largest at moderate load and vanishes as the budget
+**1.59%** on the §6 stress network. It is largest at moderate load and vanishes as the budget
 loosens.
 
 ## 5. φ, and where the existing derivative helper cannot be used
@@ -271,7 +275,7 @@ even a 100% overcorrection (`f=2`) beats doing nothing. An approximate `φ` is s
   `E[T] = 1/m` with no queueing term, so extra capacity buys it little.
 - `zeta_from` stays **linear in T**, so `Optimizer._noise_floor` keeps working unchanged: it
   propagates a CI half-width through the same hook, and `φ` is noise-free.
-- Convergence is unaffected: 13 budgets from `1.0001×` to `1e4×` the floor, iterations 5–18 vs
+- Convergence is unaffected: 13 budgets from `1.0001×` to `1e4×` the floor, iterations 5–17 vs
   6–18, **0 failures and 0 off-optimum rows**.
 
 **What it costs**
@@ -356,6 +360,7 @@ merely compatible with it — worth knowing before anyone reorders that loop.
 
 1. Land this directory as analysis only — no behaviour change. (This PR.)
 2. Decide the paper question: is eq 22 amended, or does qopt document a deliberate divergence?
-3. If it proceeds: implement behind a per-station opt-in so the default path stays bit-for-bit
-   identical, with the two closed forms and a test that pins `φ ≡ 1` for M/M/1.
+3. ~~If it proceeds: implement behind a per-station opt-in so the default path stays bit-for-bit
+   identical, with the two closed forms and a test that pins `φ ≡ 1` for M/M/1.~~ **Done** —
+   `qopt/zeta.py`, `Station.dT_dS`/`phi`, `tests/test_zeta.py`.
 4. Redo the contraction argument for the new map.

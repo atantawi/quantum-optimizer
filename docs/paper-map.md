@@ -138,3 +138,13 @@ The working draft uses `κ_i` for the sojourn-time functional form (new eq 21, 2
 in this repo that needs a symbol for something else should avoid `κ`;
 [`slope-calibrated-zeta/`](slope-calibrated-zeta/findings.md) uses `φ` for its slope-correction
 factor for exactly that reason.
+
+## Where qopt deliberately diverges
+
+Not every cited equation is implemented exactly as written; this section tracks where qopt
+knowingly departs from the paper's own equation, and why.
+
+- **eq 22 (ζ inversion).** qopt implements this as the DEFAULT (`ZETA_LEVEL`) and also
+  offers a deliberate divergence, `ZETA_SLOPE`, which calibrates ζ to the slope of E[T]
+  rather than its level. The paper is unchanged; see `docs/slope-calibrated-zeta/` and
+  `docs/superpowers/specs/2026-09-22-slope-calibrated-zeta-design.md`.

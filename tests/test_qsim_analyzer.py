@@ -1,11 +1,15 @@
 import pytest
 
 from conftest import FakeTransport
+from qopt.allocator import min_feasible_budget
+from qopt.analyzer import AnalyticAnalyzer
 from qopt.exceptions import InstabilityError, SimulationQualityError
 from qopt.network import Network, Route
+from qopt.optimizer import Optimizer
 from qopt.qsim.analyzer import FRESH_SEED_OFFSET, SimulationAnalyzer
 from qopt.qsim.client import QsimClient
 from qopt.station import ForkJoinStation, GG1Station
+from qopt.zeta import ZETA_SLOPE
 
 
 def _network():
@@ -214,3 +218,146 @@ def test_strict_also_raises_on_a_degraded_measure(sim_response):
     with pytest.warns(RuntimeWarning, match="completed=false"):
         with pytest.raises(SimulationQualityError, match="completed=false"):
             analyzer.evaluate(network.stations, S_OK)
+
+
+def test_the_simulation_preflight_refuses_the_boundary_a_deterministic_station_admits(
+    sim_response,
+):
+    """`admits_full_utilization` is a statement about the ANALYTIC model, and stops there.
+
+    A `cov_a == cov_s == 0` G/G/1 has `E[T] = 1/(S*mu)`, finite at rho == 1, so
+    `Station.check_stable` prices `S*mu == gamma` for it. The simulator is given no such
+    station: `Network.to_model_dict` builds the arrival distribution from
+    `Network.arrival_scv` and the routing, and only `cov_s` reaches the service node, so
+    `cov_a` is never emitted at all. With the default `arrival_scv == 1.0` the model that
+    would go over the wire at that capacity is a SATURATED M/D/1 -- exponential arrivals at
+    0.6 against deterministic service with mean 1/0.6 -- which is exactly the shape spec 7.3
+    added this guard to refuse before spending minutes on it.
+
+    So `evaluate` passes `strict=True` and the boundary is refused here while the analytic
+    path keeps it. The message says which of the two domains rejected the point, because the
+    same station at the same capacity is legal one call away.
+
+    Relaxing this would take showing the EMITTED arrival process deterministic at that
+    station, which is a property of `arrival_scv` and the routing together and is not
+    currently derived anywhere in qopt.
+    """
+    import math
+
+    dd = GG1Station(mu=1.0, c=1.0, cov_a=0.0, cov_s=0.0, name="dd")
+    network = Network(
+        [dd],
+        [Route(Network.SOURCE, "dd", 1.0), Route("dd", Network.SINK, 1.0)],
+        arrival_rate=0.6,
+        name="dd-net",
+    )
+    assert dd.gamma == 0.6
+    boundary = dd.gamma / dd.mu
+
+    # The analytic side admits it, and is unchanged by this test's subject.
+    assert dd.admits_full_utilization is True
+    dd.check_stable(boundary)
+    assert dd.sojourn_time(boundary) == 1.0 / (boundary * dd.mu)
+
+    # What the simulator would be sent there: arrivals from arrival_scv, not from cov_a.
+    assert network.arrival_scv == 1.0
+    nodes = network.to_model_dict([boundary])["nodes"]
+    assert nodes[0]["arrivals"]["jobs"]["distribution"] == {
+        "type": "exponential", "rate": 0.6
+    }
+    assert nodes[1]["service"]["jobs"]["distribution"] == {
+        "type": "deterministic", "value": 1.0 / 0.6
+    }
+
+    response = sim_response(
+        sojourn={"dd": 1.9}, throughput={"dd": 0.6}, system=1.9, model_name="dd-net"
+    )
+    analyzer, transport = _analyzer(network, response)
+    with pytest.raises(InstabilityError) as exc:
+        analyzer.evaluate(network.stations, [boundary])
+    assert "ANALYTIC" in str(exc.value)          # names which domain refused it
+    assert transport.requests == []              # no simulation time was spent
+
+    # Strict means strict only AT the boundary: one ulp above it still runs.
+    analyzer.evaluate(network.stations, [math.nextafter(boundary, 1.0)])
+    assert len(transport.requests) == 1
+
+    # And the relaxation is still available to a caller that asks for the analytic domain.
+    assert dd.check_stable(boundary, strict=False) is None
+    with pytest.raises(InstabilityError):
+        dd.check_stable(boundary, strict=True)
+
+
+def test_the_strict_preflight_is_declared_as_this_analyzers_domain(sim_response):
+    """The preflight's strictness is a class attribute, not a literal inside `evaluate`.
+
+    `Optimizer.run` has to know where this analyzer's domain ends -- its iterates come from
+    eq 21 against the ANALYTIC domain, which is wider -- so both read one flag. Dropping the
+    attribute would silently relax the preflight, which is why `evaluate` is checked here
+    through the flag and not only for its own behaviour.
+    """
+    assert SimulationAnalyzer.requires_strict_stability is True
+    assert AnalyticAnalyzer.requires_strict_stability is False
+
+    dd = GG1Station(mu=1.0, c=1.0, cov_a=0.0, cov_s=0.0, name="dd")
+    network = Network(
+        [dd],
+        [Route(Network.SOURCE, "dd", 1.0), Route("dd", Network.SINK, 1.0)],
+        arrival_rate=0.6,
+        name="dd-net",
+    )
+    response = sim_response(
+        sojourn={"dd": 1.9}, throughput={"dd": 0.6}, system=1.9, model_name="dd-net"
+    )
+    analyzer, transport = _analyzer(network, response)
+    with pytest.raises(InstabilityError):
+        analyzer.evaluate(network.stations, [dd.gamma / dd.mu])
+    assert transport.requests == []
+
+    # The analytic analyzer prices that same capacity, which is what the flag distinguishes.
+    assert AnalyticAnalyzer().evaluate(network.stations, [dd.gamma / dd.mu]).sojourn_times \
+        == [1.0 / dd.gamma]
+
+
+def test_a_default_simulated_run_reaches_the_post_on_a_boundary_optimum(sim_response):
+    """The reported failure, end to end: `Optimizer(..., analyzer=SimulationAnalyzer(...))`.
+
+    With `warm_start=True` -- the default -- the analytic pre-solve ran first and handed its
+    capacities straight to `evaluate`. On this network that answer is S_dd = gamma/mu
+    exactly, so a normal run raised InstabilityError after ZERO POSTs. The warm start is now
+    declined when it falls outside the analyzer's domain and the loop starts from eq 21 on
+    the initial zeta instead, so the run reaches the simulator.
+
+    The first request is asserted to carry the COLD capacity, not the warm one: the emitted
+    service rate is `S*mu`, and at the boundary that would be exactly gamma.
+    """
+    dd = GG1Station(gamma=None, mu=1.0, weight=1.0, c=1.0, cov_a=0.0, cov_s=0.0,
+                    zeta_mode=ZETA_SLOPE, name="dd")
+    mm = GG1Station.mm1(gamma=None, mu=3.0, weight=3e5, c=1.0, name="mm")
+    network = Network(
+        [dd, mm],
+        [Route(Network.SOURCE, "dd", 1 / 3), Route(Network.SOURCE, "mm", 2 / 3),
+         Route("dd", Network.SINK, 1.0), Route("mm", Network.SINK, 1.0)],
+        arrival_rate=1.8,
+        name="boundary-net",
+    )
+    assert [st.gamma for st in network.stations] == [0.6, 1.2]
+    C = 1.01 * min_feasible_budget(network.stations)
+
+    # The warm start is the boundary, to the bit -- the premise of the whole test.
+    assert Optimizer(network.stations, C).run().capacities[0] == 0.6
+
+    response = sim_response(
+        sojourn={"dd": 1.7, "mm": 0.9}, throughput={"dd": 0.6, "mm": 1.2},
+        system=2.6, model_name="boundary-net",
+    )
+    analyzer, transport = _analyzer(network, response)
+    with pytest.warns(RuntimeWarning, match="warm start"):
+        result = Optimizer(network.stations, C, analyzer=analyzer).run()
+
+    assert transport.requests                      # it got to the simulator at all
+    rate = transport.requests[0]["model"]["nodes"][1]["service"]["jobs"]["distribution"]
+    assert rate["value"] == pytest.approx(1.0 / 0.6000315230918326, rel=1e-15)
+    assert rate["value"] != 1.0 / 0.6              # not the warm start's saturated rate
+    assert result.warm_start_iterations == 0
+    assert result.sim_calls == len(transport.requests) > 0

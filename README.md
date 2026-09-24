@@ -63,6 +63,77 @@ qsim-service request, issues one `POST /simulate` per optimizer iteration, and t
 the response's measures back into the same `(E[T], ζ)` shape — so the allocator and the loop
 never know which analyzer is running.
 
+### ζ calibration: level (default) or slope
+
+`ζ` is the one free parameter that carries a station's queueing behaviour into eq 21.
+Eq 22 fixes it by matching the *level* of the sojourn-time curve, `ζ = E[T]·(Sμ − γ)`, and
+that is what `qopt` does by default.
+
+Eq 21, though, water-fills on *marginal* returns: it reads the surrogate `T̂ = ζ/x` only
+through its derivative and never evaluates it. Matching the slope instead,
+
+    ζ = φ·E[T]·x,    φ = |dE[T]/dS|·x/(μ·E[T])
+
+makes the loop's fixed point the coupled optimum exactly rather than an approximation of
+it. Select it per station:
+
+```python
+from qopt import GG1Station, ZETA_SLOPE
+
+st = GG1Station(0.6, 1.5, c=2.0, cov_a=2.0, cov_s=2.0, zeta_mode=ZETA_SLOPE)
+```
+
+`φ ≡ 1` for M/M/1 — algebraically exactly, and to within one ulp in floating point, so an
+all-M/M/1 network under slope mode reproduces level mode to machine precision rather than
+bitwise. (The *default* path's guarantee is the bitwise one, and narrower: the level arm
+computes `E[T]·(Sμ − γ)` in exactly today's operations and order, so a run with no
+`zeta_mode` set returns the same floats as before this existed.) The gain tracks
+`|φ − 1|`: 0.0002–0.039% where only fork-join stations deviate, up to 0.515% once
+single-server stations are not M/M/1, and 1.59% on the stress network of
+`docs/slope-calibrated-zeta/findings.md` §6. `Result.zeta` is the ζ implied by the
+*reported* `E[T]` at the converged capacities — on a stochastic run that means the
+fresh-seed FINAL evaluation, a different sample path from the CRN iterate that actually set
+those capacities, and the last loop iterate only when `final_evaluation=False` suppresses
+that run. `Result.zeta_phi` and `Result.zeta_mode` sit alongside it, so eq 22's value
+for the reported `E[T]` is recoverable as
+`0.0 if zeta_phi[i] == 0.0 else zeta[i]/zeta_phi[i]`. The guard covers exactly one case, a
+station that admits full utilization sitting on `S*mu == gamma`, where eq 22's value is
+`E[T]*x == 0` and `phi` is zero too; see `Result.zeta_phi`.
+
+On convergence: the contraction proof behind `qopt`'s convergence argument is for the
+level map. Slope mode changes that map, so its convergence is so far empirical — across the
+13 budgets of `docs/slope-calibrated-zeta/findings.md` §7, from `1.0001×` to `1e4×` the
+floor, both modes converge in at most 18 iterations and never more than three apart, with
+0 failures and 0 off-optimum rows. Redoing the proof for the new map is tracked as step 4
+of that file's §8.
+
+This is a deliberate divergence from eq 22, not an amendment to it — see
+`docs/slope-calibrated-zeta/` for the derivation and the measurements.
+
+**One caveat worth reading before switching a simulated run.** φ is computed from the
+station's *analytic* model even when `E[T]` is measured, which is what keeps the simulator
+in control of the allocation's level. That promotes `cov_a` from nearly decorative to a
+live input: it is never sent to the simulator and never measured back, so under slope
+calibration it must describe the arrival process the station *actually* sees, internal
+traffic included. **When it is unknown, the assumption that forfeits the gain rather than
+overshooting past it is the one that reproduces level calibration** — and that is *not*
+`cov_a = 1` in general. φ depends on the two coefficients of variation only through
+`k = (cov_a² + cov_s²)/2`, is strictly increasing in `k`, and equals 1 exactly at `k = 1`.
+So the level-equivalent choice is `cov_a = √(2 − cov_s²)` — `1` for an M/M/1-shaped
+service, but `√2 ≈ 1.414` for a deterministic-service station (`cov_s = 0`, the service
+shape of the shipped `md1` preset), where assuming `cov_a = 1` gives `k = 0.5` and φ < 1 at
+every load (≈ 0.833 at ρ = 0.5) — the far side of 1 from any truth with `k > 1`, and
+measurably worse than eq 22 rather than gracefully degraded. When `cov_s > √2` no arrival
+process reaches `k = 1` at all and φ > 1 whatever you assume; `cov_a = 0` is then the
+closest approach. Overstating `k` in either variable is the direction that overshoots.
+`Optimizer` cross-checks measured against analytic `E[T]` for slope stations and reports
+disagreements in `Result.zeta_shape_flags` (tolerance: `zeta_shape_tol`, default 25%). That
+check runs inside the loop, against the iterate that produced each allocation — not after
+the final fresh-seeded evaluation — so on a stochastic run `zeta_shape_flags` warrants the
+trajectory that set the capacities, not the `E[T]` values `Result` goes on to report. If
+you know the true arrival variability but cannot express it as a `cov_a`, override `phi(S)`
+on a subclass.
+
 ## Scope & limitations
 
 By default, each station is analyzed **independently** (`AnalyticAnalyzer`) from its own
@@ -197,6 +268,19 @@ result = Optimizer(
 print(result.capacities, result.sojourn_ci, result.sim_calls, result.stop_reason)
 ```
 
+A simulated run has one more way to stop than an analytic one. A station with
+`cov_a == cov_s == 0` may be priced at `S*mu == gamma` analytically — `E[T] = 1/(S*mu)` is
+finite there — but the simulator takes its arrival process from the network's `arrival_scv`
+and the routing rather than from the station's `cov_a`, so at the default `arrival_scv=1.0`
+that station is a saturated M/D/1 and `SimulationAnalyzer` refuses the capacity. When the iteration
+walks onto it, `run()` stops before evaluating it, reports `stop_reason="analyzer-domain"`
+with `converged=False`, warns, and returns the last capacities the analyzer actually
+evaluated — together with the station state they were evaluated under, so a tuned fork-join
+goes back onto the ray those capacities were priced on and the reported spend still exhausts
+the budget. The same check declines an analytic warm start that lands there, falling back to
+the cold eq-21 allocation; station policies are reset to their constructed values first, so
+that fallback is bit-for-bit what `warm_start=False` produces.
+
 Runnable versions: `examples/simulated_tandem.py`,
 `examples/simulated_mixed_network.py`, and `examples/qcsc_network.py` — the paper's
 14-station QCSC network under three workloads (balanced, quantum-dominant,
@@ -222,9 +306,9 @@ See also:
 - `docs/paper-map.md` — which paper `eq N` refers to, and the crosswalk to the newer draft.
 - `docs/forkjoin-coupled-vs-separate/findings.md` — why each fork-join station's `r*` is solved
   on its own rather than as one coupled problem. Analysis only; no change proposed.
-- `docs/slope-calibrated-zeta/findings.md` — a proposal to calibrate ζ to the slope of E[T]
-  rather than its level, which would make the eq-21 fixed point exactly optimal. Not
-  implemented.
+- `docs/slope-calibrated-zeta/findings.md` — the derivation behind `zeta_mode=ZETA_SLOPE`
+  and the measurements backing it: exact recovery of the coupled optimum, gains up to
+  0.515%, and why the default stays level-calibrated.
 
 ## License
 

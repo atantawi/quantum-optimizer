@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from qopt.exceptions import InstabilityError
 from qopt.forkjoin_approx import t_ul
 from qopt.forkjoin_policy import R_STAR_TUNED, optimal_ray, resolve_r_star
+from qopt.zeta import ZETA_LEVEL, ZETA_SLOPE, resolve_zeta_mode
 
 
 def distribution_dict(rate, scv):
@@ -20,6 +21,29 @@ def distribution_dict(rate, scv):
     if scv == 0.0:
         return {"type": "deterministic", "value": 1.0 / rate}
     return {"mean": 1.0 / rate, "scv": scv}
+
+
+_FD_STEP = 1e-7
+"""Central-difference step for `Station.dT_dS`, as a FRACTION OF SPARE CAPACITY.
+
+Scaled to spare capacity rather than to S, which is what keeps `S - h` inside the stability
+region for a station run close to its boundary. Not ARBITRARILY close: below a spare
+capacity of about ulp(S)/1e-7 the step underflows and `S - h` rounds back to S -- inside
+the region still, but no longer a distinct point. `dT_dS` widens there; see its docstring
+for why the nominal step stops being the divisor at that point.
+
+1e-7 is near the cube-root-of-epsilon optimum for a central difference. Against the closed
+forms it agrees to 1.5e-08 relative at the three loads
+docs/slope-calibrated-zeta/probe-output.txt section 1 tabulates, and to 6.8e-08 worst case
+/ 6.7e-10 median over a 1800-point sweep of six station types across rho 0.02..0.999. That
+probe's own `dT_dS_fd` helper is a local copy of the pre-widening expression and prints
+6.7e-09 for the same three loads: it measures the arithmetic as the design study left it,
+not as `Station.dT_dS` now computes it, so the two figures are not comparable and the
+probe's is not the shipped one. The sweep is what covers the shipped path, and it is where
+the true-spacing divisor measures BETTER than the nominal one on both worst case and
+median -- at those three tabulated loads alone the nominal step happens to look better,
+which is why three points were not enough to choose on.
+"""
 
 
 class Station(ABC):
@@ -49,7 +73,8 @@ class Station(ABC):
     DOT_SHAPE = "box"
     """Graphviz node shape used by Network.to_dot()."""
 
-    def __init__(self, gamma=None, mu=None, weight=1.0, *, name=None):
+    def __init__(self, gamma=None, mu=None, weight=1.0, *, name=None,
+                 zeta_mode=ZETA_LEVEL):
         # `isfinite` first: NaN passes every ordering comparison, so `nan <= 0` is False.
         if gamma is not None and (not math.isfinite(gamma) or gamma <= 0):
             raise ValueError(f"gamma must be a finite number > 0, got {gamma}")
@@ -64,6 +89,9 @@ class Station(ABC):
         self.mu = mu
         self.weight = weight
         self.name = name
+        # Validated here so `zeta_from` can branch on ZETA_SLOPE alone and treat
+        # anything else as level -- an unknown mode cannot reach the hot path.
+        self._zeta_mode = resolve_zeta_mode(zeta_mode)
 
     @property
     def gamma(self):
@@ -99,11 +127,22 @@ class Station(ABC):
             )
         self._gamma = value
 
+    @property
+    def zeta_mode(self):
+        """Which ζ calibration this station uses (a qopt.ZETA_* constant).
+
+        Read-only and fixed at construction, for the reason `ForkJoinStation.policy` is:
+        a run prices iterations against a calibration, so changing it mid-run would leave
+        a converged ζ that no single rule produced.
+        """
+        return self._zeta_mode
+
     @abstractmethod
     def sojourn_time(self, S):
         """Expected sojourn time E[T] under capacity S.
 
-        Raises InstabilityError if S*mu <= gamma. Raises ValueError first if gamma is
+        Raises InstabilityError if S*mu < gamma, and if S*mu == gamma unless this station
+        reports `admits_full_utilization`. Raises ValueError first if gamma is
         unbound (no explicit gamma at construction and not yet bound by a Network) —
         the gamma property itself raises before the stability check can run.
         """
@@ -142,16 +181,180 @@ class Station(ABC):
         """
         return self.alloc_cost * (self.gamma / self.mu)
 
+    def dT_dS(self, S):
+        """dE[T]/dS at capacity S -- negative, since capacity cannot lengthen a queue.
+
+        Only slope-calibrated ζ reads this, so a level-mode station never pays for it.
+
+        Deliberately concrete rather than abstract: slope calibration then works for ANY
+        station, including a user subclass qopt has never seen, and no existing subclass
+        breaks. `GG1Station` and `ForkJoinStation` override it with closed forms, which
+        this default is tested against.
+
+        The step is a fraction of SPARE CAPACITY, `S - gamma/mu`, which buys two things a
+        fixed step does not: `S - h` is inside the stability region by construction for
+        any stable S, and at `S == gamma/mu` the step is 0 so `sojourn_time` raises
+        InstabilityError rather than this dividing by zero. Below the boundary h is
+        negative -- but that costs nothing, because BOTH evaluations are then unstable
+        and this raises whichever of the two runs first. Reordering the calls or taking
+        `abs(h)` therefore changes no OUTCOME at any S -- probed at thirteen capacities
+        spanning both sides of the boundary, the widening branch below, and the ordinary
+        interior; all three raise wherever any of them does, and agree bitwise wherever
+        they return. (Only the `S*mu` quoted in the raised message
+        differs, since the two orders reach _check_stable with the other evaluation
+        point. No test matches on it.) The load-bearing
+        property is the SCALING to spare capacity: scaling to `S`, or a fixed step,
+        raises a hair above the boundary where this returns a derivative. Pinned by
+        test_the_finite_difference_step_stays_inside_the_stability_region.
+
+        Scaling to spare capacity has a floating-point cost of its own, which the widening
+        branch pays: when the spare capacity is small enough that `h` falls below one ulp
+        of S, `S + h` and `S - h` both round back to S, and the difference of two
+        IDENTICAL sojourn times is 0 -- a zero slope at a point where the true slope is
+        enormous, which `zeta_from` then rejects as a non-positive phi while naming the
+        wrong cause. That band is wide, not a corner: for a station at gamma/mu = 0.5 it
+        is every spare capacity below 1.1e-9. Widening to the neighbouring representable
+        capacities fixes it, and the lower one is kept inside the stability region so a
+        station one ulp above its boundary goes one-sided rather than raising while stable.
+
+        The divisor is the endpoints' ACTUAL spacing, `hi - lo` (exact here by Sterbenz),
+        not the nominal `2 * h`. Rounding the endpoints moves their true spacing away from
+        `2 * h`, and dividing by the nominal step misreports the slope by the ratio of the
+        two -- silently, with distinct endpoints and no guard to fire, measured at a clean
+        factor of 2 just above the collapse band. Over a 1800-point sweep of six station
+        types across rho 0.02..0.999 the true spacing is also the more accurate divisor
+        (worst 6.8e-08 vs 1.5e-07, median 6.7e-10 vs 1.0e-09, better at 1188 of 1800
+        points). Both are pinned by
+        test_the_finite_difference_divides_by_the_spacing_it_actually_used.
+
+        What widening cannot buy is resolution in `x = S*mu - gamma`, which is what E[T]
+        actually depends on. Within an ulp or two of the boundary a one-ulp change in S
+        may leave `S*mu` unchanged -- for gamma=0.6, mu=1.5 the two neighbouring
+        capacities either side of the boundary share a single `S*mu` -- so both sojourn
+        times are bitwise equal and this returns 0 again. That is the measured slope at
+        the finest resolution the number line offers, and it is indistinguishable from a
+        genuinely flat E[T], so it is reported rather than guessed at: `zeta_from` refuses
+        the point. "Two ulps" is measured, not estimated: over a 25x25 grid of (gamma, mu),
+        90 pairs produce such a zero and the largest distance above the boundary at which
+        one appears is exactly 2 ulps, with none at any spare capacity from 1e-9 up to 10.
+        `allocate` reaches it only with a collapsed share (see `min_feasible_budget`), and
+        no shipped station reaches it at all -- `GG1Station` and `ForkJoinStation` both
+        override this with closed forms. Pinned by
+        test_the_finite_difference_reports_a_zero_it_cannot_resolve.
+
+        The step width can also be exactly 0.0 on a station that is perfectly stable, and
+        that case used to CRASH rather than misreport. `h` scales to `S - gamma/mu` while
+        stability tests `S * mu > gamma`, and the two expressions disagree at the boundary:
+        for gamma=0.1, mu=0.39 the capacity `gamma/mu` is stable -- x = 1.4e-17 -- with a
+        step of exactly zero, so `/ (2.0 * h)` raised ZeroDivisionError from inside a
+        derivative, naming no station. 148 (gamma, mu) pairs on a 59x59 grid do this;
+        widening gives all of them a one-sided difference and a finite negative slope.
+        Pinned by test_the_finite_difference_survives_a_zero_width_step.
+
+        For a fork-join this differences along the station's FIXED CURRENT RAY, because
+        `sojourn_time` scales both servers with S. That is the radial derivative slope
+        calibration needs (see ForkJoinStation.dT_dS), so the default cannot accidentally
+        reproduce the `forkjoin_policy._dt_dm1` defect.
+        """
+        h = _FD_STEP * (S - self.gamma / self.mu)
+        hi = S + h
+        lo = S - h
+        if hi == lo:
+            # h underflowed relative to S. Widen to the neighbouring representable
+            # capacities, keeping the lower one inside the stability region -- one ulp
+            # above the boundary there is nothing below S to use, so the difference goes
+            # one-sided rather than raising on a station that is stable.
+            hi = math.nextafter(S, math.inf)
+            lo = math.nextafter(S, -math.inf)
+            if not lo * self.mu > self.gamma:
+                lo = S
+        return (self.sojourn_time(hi) - self.sojourn_time(lo)) / (hi - lo)
+
+    def phi(self, S):
+        """Elasticity of E[T] in spare capacity: -d log T / d log x, with x = S*mu - gamma.
+
+        The ratio of the true slope to the one eq 22's level calibration implies, so
+        `phi == 1` means eq 22 is already slope-correct at S and the two calibrations
+        agree. Identically 1 for M/M/1; exactly `1 - rho` for a cov = 0 station; up to
+        1.64 for G/G/1 with cov = 5.
+
+        Uses this station's ANALYTIC `sojourn_time`, always -- including on the simulated
+        path, where `zeta_from` receives a MEASURED E[T] and this supplies only the shape.
+        That hybrid is load-bearing in both directions (spec section 4.4): a fully
+        analytic slope ζ cancels T and would cut the simulator out of the allocation
+        entirely, while a secant slope from consecutive loop iterates degenerates to 0/0
+        as they converge. It also costs no simulation calls.
+
+        Overridable: a user who knows the true arrival variability but cannot express it
+        as a constructor `cov_a` should override this rather than reach for a new API.
+        """
+        x = S * self.mu - self.gamma
+        return -self.dT_dS(S) * x / (self.mu * self.sojourn_time(S))
+
     def zeta_from(self, T, S):
-        """Invert the functional form (eq 22) for an externally supplied E[T].
+        """Invert the functional form for an externally supplied E[T].
 
         Pure station arithmetic, independent of where E[T] came from — the analytic
-        sojourn time or a simulation run.
+        sojourn time or a simulation run. The single point at which either calibration is
+        applied, so the branch lives here and nowhere else.
+
+        LEVEL (eq 22, the default) makes the surrogate zeta/x pass through (S, T). SLOPE
+        matches its derivative instead, which is the only thing eq 21 reads -- see
+        qopt/zeta.py. The level arm is the shipped expression, operation for operation, so
+        the default path does not move by one ulp.
+
+        Both arms are LINEAR IN T, which `Optimizer._noise_floor` depends on: it passes a
+        CI half-width in the T position and needs the result to be the correspondingly
+        scaled perturbation of zeta.
+
+        No clamp on phi. It is legitimately tiny -- exactly `1 - rho` for a cov = 0
+        station, measured down to 1e-6 -- and `allocate` requires only that zeta be
+        finite and positive.
         """
-        return T * (S * self.mu - self.gamma)
+        x = S * self.mu - self.gamma
+        if self._zeta_mode == ZETA_SLOPE:
+            phi = self.phi(S)
+            if phi == 0.0 and self.admits_full_utilization and S * self.mu == self.gamma:
+                # The one place phi is legitimately zero, and the honest zeta there is zero
+                # too. A station whose E[T] is finite at rho == 1, sitting exactly there:
+                # `phi = -dT/dS * x / (mu*T)` carries the factor x, so it vanishes with the
+                # spare capacity even though the slope `-mu/(S*mu)^2` does not.
+                #
+                # Returning 0 is not a degradation, it is the FIXED POINT. Eq 21 gives this
+                # station a share of exactly zero, putting it back on the boundary it is
+                # already optimally on, so the loop stops moving. `allocate` accepts a zero
+                # zeta from a station that admits full utilization, and only from one -- for
+                # any other station a zero share lands on an unstable capacity, which is the
+                # hole its check was added to close.
+                #
+                # The alternative considered was clamping to `ZETA_FLOOR`, and it was
+                # rejected on measurement: the clamped map has its own fixed point, but at
+                # x = 3.577705e-11 rather than at 0, and that number is a function of
+                # `ZETA_FLOOR` rather than of the problem -- every x whose raw zeta falls
+                # under the floor (x = 0, 3.6e-11 and 1e-9 all measured) maps straight to
+                # it in one step. It costs 4.5e-09 of relative objective on the reference
+                # network, far less than level's 3.1e-07 there, so this is a choice of
+                # exactness over a magic constant and not an accuracy rescue. An earlier
+                # version of this note called the clamped map a period-3 cycle; that was
+                # hand arithmetic and is wrong -- it is a one-step fixed point. Pinned by
+                # test_a_deterministic_station_may_sit_exactly_on_its_boundary, which
+                # requires x == 0 exactly and so still fails under the clamp.
+                return 0.0
+            if not (math.isfinite(phi) and phi > 0.0):
+                raise ValueError(
+                    f"station {self.name!r}: slope-calibrated zeta needs a finite, "
+                    f"strictly positive phi, got {phi} at S={S}: phi is non-positive "
+                    f"when E[T] does not strictly decrease in capacity, and non-finite "
+                    f"when its derivative is unbounded or undefined."
+                )
+            return phi * T * x
+        return T * x
 
     def zeta(self, S):
-        """Eq 22 evaluated at this station's own analytic sojourn time."""
+        """This station's own calibration, evaluated at its own analytic sojourn time.
+
+        Level (eq 22) or slope, whichever `zeta_from` selects for this station's mode.
+        """
         return self.zeta_from(self.sojourn_time(S), S)
 
     def retune(self, S):
@@ -186,27 +389,115 @@ class Station(ABC):
         nothing -- this hook costs every other station type exactly nothing.
         """
 
-    def check_stable(self, S):
+    def policy_state(self):
+        """Opaque snapshot of every mutable policy parameter, for `restore_policy`.
+
+        A capacity vector only means something together with the policy state it was
+        priced and evaluated under: `retune` rewrites the coefficients `allocate`,
+        `sojourn_time` and `zeta_from` all read, so a capacity carried back across a
+        retune describes a station that no longer exists. `reset_policy` is not the tool
+        for that -- it goes to the CONSTRUCTED value, which is a different point again.
+
+        The Optimizer pairs one of these with every capacity vector the analyzer accepts,
+        so that abandoning a later candidate rolls the station back to the state its
+        reported numbers were measured at.
+
+        A station with no free parameter has no state, so the default returns None and
+        `restore_policy(None)` is a no-op -- this hook costs every other station type
+        exactly nothing.
+        """
+        return None
+
+    def restore_policy(self, state):
+        """Put this station back on the state `policy_state` returned earlier.
+
+        Raises rather than ignoring a state it cannot apply: a subclass that snapshots
+        something and does not restore it would otherwise silently keep the mutation,
+        which is exactly the failure this pair exists to prevent.
+        """
+        if state is not None:
+            raise ValueError(
+                f"{type(self).__name__} has no mutable policy state, so it cannot "
+                f"restore {state!r}; override restore_policy alongside policy_state"
+            )
+
+    def check_stable(self, S, *, strict=False):
         """Raise InstabilityError if capacity S leaves this station unstable.
 
         Public counterpart to `_check_stable`, which takes the already-computed
         effective rate. Lets a caller fail fast before spending an expensive
         evaluation (spec 7.3) without reimplementing the check or its message.
-        """
-        self._check_stable(S * self.mu)
 
-    def _check_stable(self, mu_eff):
-        if mu_eff <= self.gamma:
+        "Unstable" is `S*mu < gamma`, plus `S*mu == gamma` for every station whose E[T]
+        diverges there -- which is every station except a G/G/1 parameterised with
+        `cov_a == cov_s == 0`. See
+        `admits_full_utilization`; the strict half is never relaxed.
+
+        `strict=True` refuses `S*mu == gamma` for EVERY station, including one that admits
+        full utilization, and says so in the message. It exists for callers whose own model
+        is not the one `admits_full_utilization` describes. The only such caller today is
+        `SimulationAnalyzer.evaluate`: `cov_a` is an input to the analytic formula and is
+        never emitted to the simulator, where the arrival process comes from
+        `Network.arrival_scv` and the routing instead -- so a `cov_a == 0` station in a
+        network with the default `arrival_scv == 1.0` would send qsim a saturated M/D/1, and
+        the guard that exists to fail before spending minutes on one would have passed it.
+        Pinned by test_the_simulation_preflight_refuses_the_boundary_a_deterministic_station_
+        admits.
+        """
+        self._check_stable(S * self.mu, strict=strict)
+
+    @property
+    def admits_full_utilization(self):
+        """Whether rho == 1 is a point of this station's domain rather than its boundary.
+
+        False for every queue that has a congestion term, which in this library is every
+        station except a G/G/1 parameterised with `cov_a == cov_s == 0`: E[T]
+        carries a `1/(1-rho)` factor and diverges, so `S*mu == gamma` is not a capacity the
+        model can price. True only where that factor is multiplied by zero -- a G/G/1 with
+        `cov_a == cov_s == 0`, for which `E[T] = 1/(S*mu)` exactly, finite and smooth at
+        rho == 1 with a bounded derivative `-mu/(S*mu)^2`.
+
+        That distinction is not pedantry, it decides an OPTIMUM. For a deterministic station
+        E[T] is strictly decreasing with no asymptote, so a weighted objective's infimum over
+        a budget simplex can sit exactly on `S*mu == gamma`; refusing the point makes the
+        infimum unattained and the optimizer fails on the answer instead of returning it.
+        Measured on a two-station network (dd at gamma=0.6/mu=1.0/cov=0, an M/M/1 at weight
+        3e5): the infimum is 6250001.667 AT the boundary, and slope-calibrated zeta converges
+        onto it -- because zeta_slope goes as x^2 there, making eq 21's share map a
+        contraction whose fixed point IS the boundary. Level calibration stops 2.5e-9 short
+        and reports 6250003.607; further out the same gap is worth 1.9% of the objective
+        (test_a_deterministic_station_may_sit_exactly_on_its_boundary).
+
+        Kept as a property rather than a `k == 0` test inside `_check_stable` because the
+        base class has no k, and because a subclass with a bounded E[T] of its own should be
+        able to say so without touching this guard. ForkJoinStation does not: it has no cov
+        parameters, both its branches are M/M/1, so it inherits False.
+        """
+        return False
+
+    def _check_stable(self, mu_eff, strict=False):
+        at_boundary = mu_eff == self.gamma
+        if mu_eff < self.gamma or (
+            at_boundary and (strict or not self.admits_full_utilization)
+        ):
+            detail = ""
+            if at_boundary and strict and self.admits_full_utilization:
+                detail = (
+                    " -- rho == 1 is a point of this station's ANALYTIC domain, but this"
+                    " caller requires strict stability"
+                )
             raise InstabilityError(
                 f"station {self.name!r} unstable: S*mu={mu_eff} <= gamma={self.gamma}"
+                f"{detail}"
             )
 
 
 class SingleServerStation(Station):
     """Abstract base for one-server queues. Concrete subclasses supply sojourn_time."""
 
-    def __init__(self, gamma=None, mu=None, weight=1.0, *, c, name=None):
-        super().__init__(gamma, mu, weight, name=name)
+    def __init__(self, gamma=None, mu=None, weight=1.0, *, c, name=None,
+                 zeta_mode=ZETA_LEVEL):
+        super().__init__(gamma, mu, weight, name=name, zeta_mode=zeta_mode)
         if not math.isfinite(c) or c <= 0:
             raise ValueError(f"c must be a finite number > 0, got {c}")
         self.c = c
@@ -228,8 +519,9 @@ class GG1Station(SingleServerStation):
     with mu_eff = S*mu and rho = gamma/mu_eff. Exact for any M/G/1 (cov_a == 1).
     """
 
-    def __init__(self, gamma=None, mu=None, weight=1.0, *, c, cov_a, cov_s, name=None):
-        super().__init__(gamma, mu, weight, c=c, name=name)
+    def __init__(self, gamma=None, mu=None, weight=1.0, *, c, cov_a, cov_s, name=None,
+                 zeta_mode=ZETA_LEVEL):
+        super().__init__(gamma, mu, weight, c=c, name=name, zeta_mode=zeta_mode)
         if not math.isfinite(cov_a) or cov_a < 0:
             raise ValueError(f"cov_a must be a finite number >= 0, got {cov_a}")
         if not math.isfinite(cov_s) or cov_s < 0:
@@ -237,22 +529,92 @@ class GG1Station(SingleServerStation):
         self.cov_a = cov_a
         self.cov_s = cov_s
 
+    @property
+    def admits_full_utilization(self):
+        """True exactly when k == 0, i.e. `cov_a == cov_s == 0` (D/D/1).
+
+        `k = (cov_a^2 + cov_s^2)/2` multiplies the whole Allen-Cunneen congestion term, so at
+        k == 0 there is no `1/(1-rho)` left to diverge and `E[T] = 1/(S*mu)` is finite at
+        Written as a test on k rather than on `cov_a == 0 and cov_s == 0`. The constructor
+        validates both covs as non-negative, so for this class the two are equivalent; k is
+        preferred because k is the quantity the licence actually depends on -- it is what
+        multiplies the divergent term -- so the condition sits next to its own reason.
+
+        Compared to 0.0 exactly rather than against a tolerance: k is what appears in the
+        formula, and a k of 1e-300 really does diverge, just further out. The band of
+        near-deterministic stations is not a problem to paper over here -- for every k > 0,
+        zeta tends to `k*rho` rather than to zero, so no such station's share is driven to
+        zero BY THE CALIBRATION (measured 1.0e-02 at k = 0.01,
+        test_zeta_is_bounded_away_from_zero_at_the_boundary_unless_k_is_zero). Eq 21's own
+        rounding can still lose one, and for those stations that remains an error -- which is
+        the point of keeping this property false for them.
+        """
+        return (self.cov_a ** 2 + self.cov_s ** 2) / 2.0 == 0.0
+
     def sojourn_time(self, S):
         mu_eff = S * self.mu
         self._check_stable(mu_eff)
-        rho = self.gamma / mu_eff
         k = (self.cov_a ** 2 + self.cov_s ** 2) / 2.0
+        if k == 0.0:
+            # D/D/1: no congestion term at all, so E[T] is just the service time -- finite
+            # and smooth right up to rho == 1, which `admits_full_utilization` lets through.
+            # Written as a branch rather than folded into the expression below because that
+            # expression evaluates `k * rho / (1.0 - rho)` as `(k*rho) / (1-rho)`, which is
+            # 0.0/0.0 at the boundary and raised ZeroDivisionError there. Bit-exact against
+            # the shipped expression for k == 0 at every one of 14406 (gamma, mu, S) points
+            # tested, since `(1/m) * (1.0 + 0.0)` is `1/m`.
+            return 1.0 / mu_eff
+        rho = self.gamma / mu_eff
         return (1.0 / mu_eff) * (1.0 + k * rho / (1.0 - rho))
 
-    @classmethod
-    def mm1(cls, gamma=None, mu=None, weight=1.0, *, c, name=None):
-        """M/M/1 preset (cov_a = cov_s = 1); zeta is identically 1."""
-        return cls(gamma, mu, weight, c=c, cov_a=1.0, cov_s=1.0, name=name)
+    def dT_dS(self, S):
+        """Closed form of the Allen-Cunneen derivative.
+
+            E[T] = 1/m + k*gamma/(m*x),   m = S*mu,  x = m - gamma,  k = (cov_a^2+cov_s^2)/2
+
+        differentiated in S:
+
+            dT/dS = -mu * [ 1/m^2 + k*gamma*(2m - gamma)/(m*x)^2 ]
+
+        Every term is negative, so no sign can cancel silently. At k = 1 this gives
+        phi == 1 algebraically exactly, and to within one ulp in floating point --
+        the M/M/1 invariant; at k = 0 it gives phi = 1 - rho.
+        """
+        m = S * self.mu
+        self._check_stable(m)
+        k = (self.cov_a ** 2 + self.cov_s ** 2) / 2.0
+        if k == 0.0:
+            # Same short-circuit as `sojourn_time`, for the same reason: the k term below
+            # divides by `(m*x)**2`, which is 0.0 at the boundary this station is allowed to
+            # reach. Bit-exact against the shipped expression for k == 0 on the same 14406
+            # points, since `1.0/m**2 + 0.0` is `1.0/m**2`.
+            return -self.mu * (1.0 / m ** 2)
+        x = m - self.gamma
+        return -self.mu * (
+            1.0 / m ** 2 + k * self.gamma * (2.0 * m - self.gamma) / (m * x) ** 2
+        )
 
     @classmethod
-    def md1(cls, gamma=None, mu=None, weight=1.0, *, c, name=None):
+    def mm1(cls, gamma=None, mu=None, weight=1.0, *, c, name=None,
+            zeta_mode=ZETA_LEVEL):
+        """M/M/1 preset (cov_a = cov_s = 1); zeta is identically 1.
+
+        phi is identically 1 too, so `zeta_mode` makes almost no difference on this
+        station -- the two calibrations agree algebraically exactly, and to within one ulp
+        in floating point (phi measures 1.0000000000000004 at some S, which can move a
+        capacity in its last bit; "bit-for-bit" is reserved for the DEFAULT path, where no
+        derivative is evaluated at all). It is accepted so a network can be switched
+        wholesale without special-casing its M/M/1 members.
+        """
+        return cls(gamma, mu, weight, c=c, cov_a=1.0, cov_s=1.0, name=name,
+                   zeta_mode=zeta_mode)
+
+    @classmethod
+    def md1(cls, gamma=None, mu=None, weight=1.0, *, c, name=None,
+            zeta_mode=ZETA_LEVEL):
         """M/D/1 preset (cov_a = 1, cov_s = 0); zeta = 1 - rho/2."""
-        return cls(gamma, mu, weight, c=c, cov_a=1.0, cov_s=0.0, name=name)
+        return cls(gamma, mu, weight, c=c, cov_a=1.0, cov_s=0.0, name=name,
+                   zeta_mode=zeta_mode)
 
     def sim_node(self, S, job_class):
         return {
@@ -313,7 +675,7 @@ class ForkJoinStation(Station):
     DOT_SHAPE = "box3d"
 
     def __init__(self, gamma=None, mu=None, weight=1.0, *, r, c1, c2, r_star=None,
-                 name=None):
+                 name=None, zeta_mode=ZETA_LEVEL):
         if not math.isfinite(r) or r < 1:
             raise ValueError(f"r must be a finite number >= 1, got {r}")
         self._policy, r_star = resolve_r_star(r_star, r)
@@ -328,7 +690,8 @@ class ForkJoinStation(Station):
         # 2, since `_check_stable(S*mu)` guards only one of them -- lives in `_anchor`.
         # `mu` may be None here -- pass it through so Station raises the canonical error.
         k = min(1.0, r_star)
-        super().__init__(gamma, mu if mu is None else mu * k, weight, name=name)
+        super().__init__(gamma, mu if mu is None else mu * k, weight, name=name,
+                         zeta_mode=zeta_mode)
         if not math.isfinite(c1) or c1 <= 0:
             raise ValueError(f"c1 must be a finite number > 0, got {c1}")
         if not math.isfinite(c2) or c2 <= 0:
@@ -410,6 +773,25 @@ class ForkJoinStation(Station):
         """
         self._anchor(self._initial_r_star)
 
+    def policy_state(self):
+        """The ray this station is currently on.
+
+        `r_star` is the whole of the mutable state: `_anchor` derives `mu` and `r` from it
+        by the same expressions `__init__` used, so restoring the ray restores the
+        station bit-for-bit -- pinned by
+        test_a_policy_snapshot_restores_the_station_bit_for_bit.
+        """
+        return self.r_star
+
+    def restore_policy(self, state):
+        """Move back onto the ray `policy_state` recorded, undoing later retunes.
+
+        Unlike `reset_policy` this is not a return to the constructed ray: it is a return
+        to a ray the run itself passed through, which is what the Optimizer needs when it
+        abandons a candidate whose retune has already been applied.
+        """
+        self._anchor(state)
+
     def _spend_floor_on(self, r_star):
         """`alloc_cost * gamma / mu` for the ray `r_star`, without moving onto it.
 
@@ -471,6 +853,39 @@ class ForkJoinStation(Station):
         m2 = S * self.r * self.mu  # faster server
         self._check_stable(m1)
         return t_ul(self.gamma, m1, m2)
+
+    def dT_dS(self, S):
+        """Radial derivative of `t_ul` along this station's CURRENT ray.
+
+        Both effective rates scale with S, so this differentiates
+        t_ul(gamma, a*S, b*S) in S with a = mu and b = mu*r held fixed. That is the
+        derivative slope calibration needs, and it equals the true marginal of the
+        coupled problem only ON the optimal ray -- which the Optimizer guarantees by
+        calling `retune` LAST in each iteration.
+
+        `t_bot` needs no max() here. `_anchor` pairs `mu` with the slower server and
+        keeps `r >= 1`, so m1 <= m2 always and `t_ul`'s max() resolves to 1/x1 at every
+        point of the ray. The branch therefore never switches and this is smooth, which
+        is also why differencing `sojourn_time` agrees with it.
+
+        NOT `forkjoin_policy._dt_dm1`: that takes the non-bottleneck branch at m1 == m2
+        and drops the alpha*t_bot term, which is fine for the measure-zero kink inside
+        `_min_on_spend_line` but wrong for pricing dT/d(spend) -- a 17.3% error at
+        spend/floor = 1.05, and r_star = 1 is where tight budgets sit.
+
+        alpha is homogeneous of degree -1 in S, hence the -alpha/S term.
+        """
+        a, b = self.mu, self.mu * self.r      # effective rates: a binds, b >= a
+        m1, m2 = a * S, b * S
+        self._check_stable(m1)
+        x1, x2 = m1 - self.gamma, m2 - self.gamma
+        D = x1 + x2
+        t_ub = 1.0 / x1 + 1.0 / x2 - 1.0 / D
+        t_bot = 1.0 / x1
+        alpha = (self.gamma / m1 + self.gamma / m2) / 8.0
+        d_ub = -a / x1 ** 2 - b / x2 ** 2 + (a + b) / D ** 2
+        d_bot = -a / x1 ** 2
+        return (alpha / S) * (t_ub - t_bot) + (1.0 - alpha) * d_ub + alpha * d_bot
 
     def sim_node(self, S, job_class):
         """The ray's two effective rates as branches joined on "all".

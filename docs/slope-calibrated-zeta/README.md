@@ -1,11 +1,13 @@
 # Slope-calibrated ζ
 
-A proposal, with evidence. **Nothing here is implemented** — `qopt` on `main` ships the
-level-calibrated ζ of eq 22 and this directory argues for changing that.
+The derivation, the evidence, and the outcome. **Implemented** as a per-station opt-in:
+`zeta_mode=ZETA_SLOPE`, with the default still the level-calibrated ζ of eq 22 that `qopt` has
+shipped all along. See `docs/superpowers/specs/2026-09-22-slope-calibrated-zeta-design.md`.
+This directory made the case and records what it cost; the paper is unchanged.
 
 | file | what it is |
 |---|---|
-| `findings.md` | the write-up: the claim, the derivation, the costs, and what implementing it would touch |
+| `findings.md` | the write-up: the claim, the derivation, the costs, and what implementing it touched |
 | `probe.py` | every check the write-up cites, self-contained (imports only `qopt` and the stdlib) |
 | `probe-output.txt` | captured output of `probe.py`, so the numbers in `findings.md` are checkable without running anything |
 | [`../audit-selfcheck.py`](../audit-selfcheck.py) | checks that `probe.py`'s optimum-confirming audit can actually fail, and has not drifted from the copy in `../forkjoin-coupled-vs-separate/` |
