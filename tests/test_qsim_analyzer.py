@@ -351,6 +351,10 @@ def test_a_default_simulated_run_reaches_the_post_on_a_boundary_optimum(sim_resp
         sojourn={"dd": 1.7, "mm": 0.9}, throughput={"dd": 0.6, "mm": 1.2},
         system=2.6, model_name="boundary-net",
     )
+    # dd is zeta_mode=ZETA_SLOPE, so it now requests interarrival-time too; mean 1/gamma
+    # (gamma=0.6) with variance 0.0 reproduces dd's own constructor cov_a=0.0 exactly, so
+    # this fixture keeps testing what it tested before the measure existed.
+    response = _with_interarrival(response, dd=(1 / 0.6, 0.0))
     analyzer, transport = _analyzer(network, response)
     with pytest.warns(RuntimeWarning, match="warm start"):
         result = Optimizer(network.stations, C, analyzer=analyzer).run()
