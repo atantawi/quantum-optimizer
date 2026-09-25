@@ -7,6 +7,7 @@ running (typically its Docker image) and each takes seconds to minutes.
         tests/test_integration_qsim.py -v
 """
 
+import math
 import os
 
 import pytest
@@ -15,6 +16,7 @@ from qopt.network import Network, Route
 from qopt.qsim.analyzer import SimulationAnalyzer
 from qopt.qsim.client import QsimClient
 from qopt.station import ForkJoinStation, GG1Station
+from qopt.zeta import ZETA_SLOPE
 
 QSIM_URL = os.environ.get("QOPT_QSIM_URL")
 
@@ -294,3 +296,46 @@ def test_qcsc_visit_weighted_sojourn_matches_the_services_system_response_time()
     assert visit_ratio_weighted(network, evaluation.sojourn_times) == pytest.approx(
         mean, rel=0.02
     )
+
+
+# --- measured arrival cov_a (task 6) -----------------------------------------
+
+
+def _tandem(up, down, arrival_rate, name):
+    return Network(
+        [up, down],
+        [Route(Network.SOURCE, up.name), Route(up.name, down.name),
+         Route(down.name, Network.SINK)],
+        arrival_rate=arrival_rate, name=name,
+    )
+
+
+def test_burke_an_mm1_feeds_its_successor_poisson_arrivals(client):
+    # Burke: an M/M/1's departures are Poisson, so the successor's interarrival SCV is 1.
+    # For iid exponential samples the SCV estimator's standard error is 2/sqrt(n) (delta
+    # method: Var = 4/n). n >= minSamples/2 after warm-up discards is a conservative
+    # floor, and the tolerance is 5 standard errors at that floor.
+    up = GG1Station.mm1(mu=1.0, c=1.0, name="up")
+    down = GG1Station.mm1(mu=1.0, c=1.0, name="down", zeta_mode=ZETA_SLOPE)
+    network = _tandem(up, down, 0.5, "burke-tandem")
+    ev = SimulationAnalyzer(network, client).evaluate(network.stations, [0.625, 1.0])
+    assert ev.arrival_cov[0] is None                   # level station: not measured
+    scv = ev.arrival_cov[1] ** 2
+    tol = 5 * 2 / math.sqrt(STOPPING["minSamples"] / 2)
+    assert abs(scv - 1.0) <= tol, (scv, tol)
+
+
+def test_deterministic_service_smooths_the_successors_arrivals(client):
+    # For an M/G/1 the MARGINAL interdeparture SCV is exactly 1 - rho^2 (1 - cs^2):
+    # condition on the queue being empty after a departure. At cs = 0, rho = 0.9 that is
+    # 0.19 (an independent 390k-sample Python simulation gave 0.194). Successive
+    # interdepartures are correlated, so the iid error understates this estimate's; the
+    # 0.05 band is a judgement, and the direction (< 0.5, well below Poisson's 1) is the
+    # claim that matters for phi.
+    up = GG1Station.md1(mu=1.0, c=1.0, name="up")
+    down = GG1Station.mm1(mu=1.0, c=1.0, name="down", zeta_mode=ZETA_SLOPE)
+    network = _tandem(up, down, 0.5, "smoothing-tandem")
+    ev = SimulationAnalyzer(network, client).evaluate(network.stations, [0.5 / 0.9, 1.0])
+    scv = ev.arrival_cov[1] ** 2
+    assert scv < 0.5, scv
+    assert abs(scv - 0.19) <= 0.05, scv
