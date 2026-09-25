@@ -319,6 +319,7 @@ def test_a_shape_error_at_the_measured_cov_names_the_measurement():
     message = res.zeta_shape_flags[0]
     assert "measured arrival cov_a=0" in message
     assert "check the station's parameters" not in message   # not today's advice
+    assert "sampling noise" in message   # hedges the cause; a stochastic run's T is noisy too
 
 
 def test_an_old_signature_sojourn_time_override_survives_the_shape_check():

@@ -406,9 +406,10 @@ class Optimizer:
                                 f"cov_a={c:g} by {disagreement:.1f}%, above "
                                 f"zeta_shape_tol={self.zeta_shape_tol:g}. The arrival "
                                 f"variability is measured here, not assumed, so the "
-                                f"disagreement is in the model's shape itself -- the G/G/1 "
-                                f"approximation at this load -- and slope-calibrated zeta "
-                                f"takes its phi from that shape."
+                                f"disagreement is either in the model's shape -- the G/G/1 "
+                                f"approximation at this load, from which slope-calibrated "
+                                f"zeta takes its phi -- or, on a stochastic run, sampling "
+                                f"noise in this evaluation's E[T] or measured cov_a."
                             )
                         zeta_shape_flags.append(message)
                         warnings.warn(message, RuntimeWarning, stacklevel=2)
