@@ -258,3 +258,24 @@ def test_an_old_signature_phi_override_survives_a_measured_run():
     budget = 2.0 * min_feasible_budget(stations)
     res = Optimizer(stations, budget, analyzer=CovFake(loop=[None, 0.3]), **NAIVE).run()
     assert res.arrival_cov == [None, 0.3]
+
+
+def test_an_old_signature_zeta_from_override_survives_a_measured_run():
+    # optimizer._zeta_from must not pass cov_a=None to a station whose zeta_from
+    # predates the keyword: Legacy is unmeasured ([None, 0.3]), so a leaked keyword
+    # raises TypeError -- in the loop, in _noise_floor (half_width set, so it runs), and
+    # in the final block. noise_kappa=1.0 (NAIVE sets it to 0.0) so _noise_floor does not
+    # short-circuit before reaching its own _zeta_from call.
+    class Legacy(GG1Station):
+        reads_arrival_cov = False               # a user type qopt knows nothing about
+        def zeta_from(self, T, S):
+            return super().zeta_from(T, S)
+
+    stations = [
+        Legacy(0.6, 1.5, c=2.0, cov_a=1.0, cov_s=0.0, name="legacy", zeta_mode=ZETA_SLOPE),
+        GG1Station(1.2, 3.0, c=0.5, cov_a=1.0, cov_s=0.0, name="g", zeta_mode=ZETA_SLOPE),
+    ]
+    budget = 2.0 * min_feasible_budget(stations)
+    fake = CovFake(loop=[None, 0.3], half_width=0.02)
+    res = Optimizer(stations, budget, analyzer=fake, **dict(NAIVE, noise_kappa=1.0)).run()
+    assert res.arrival_cov == [None, 0.3]
