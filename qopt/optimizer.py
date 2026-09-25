@@ -15,6 +15,26 @@ from qopt.network import Network
 from qopt.zeta import ZETA_SHAPE_TOL, ZETA_SLOPE
 
 
+def _measured(evaluation, n):
+    """Per-station measured cov_a from `evaluation`, or n Nones when it measured nothing.
+
+    Read from THE evaluation whose E[T] is being inverted, every time -- never carried
+    over from an earlier one, because a downstream station's true cov_a moves with S.
+    """
+    return [None] * n if evaluation.arrival_cov is None else list(evaluation.arrival_cov)
+
+
+def _zeta_from(st, T, S, cov_a):
+    """`st.zeta_from`, passing `cov_a` only when one was measured, so a station type whose
+    `zeta_from` predates the keyword keeps working wherever nothing is measured."""
+    return st.zeta_from(T, S) if cov_a is None else st.zeta_from(T, S, cov_a=cov_a)
+
+
+def _phi(st, S, cov_a):
+    """`st.phi`, under the same rule as `_zeta_from`."""
+    return st.phi(S) if cov_a is None else st.phi(S, cov_a=cov_a)
+
+
 @dataclass
 class Result:
     """Outcome of an optimization run (lists aligned to the station order)."""
@@ -100,6 +120,16 @@ class Result:
     A MODEL-SPECIFICATION signal, kept out of `degraded` deliberately: `degraded` is the
     simulation-quality audit and `strict=True` raises on any entry, which would abort
     runs whose simulation was fine. See `Optimizer.zeta_shape_tol`.
+    """
+    arrival_cov: list = field(default_factory=list)
+    """Per-station arrival cov_a MEASURED by the evaluation `zeta` was recomputed from, or
+    None where that station was priced at its constructor cov_a -- it uses no measurement
+    (`Station.uses_measured_cov_a`), or its measurement was unusable. Empty when nothing was
+    measured: the analytic path, `measure_cov_a=False`, or no station that uses one.
+
+    Like `zeta`, it comes from the FINAL evaluation, which on a stochastic path is a
+    different sample from the loop iterate that set the capacities: it describes the
+    reported zeta, not the trajectory.
     """
 
 
@@ -315,6 +345,7 @@ class Optimizer:
             # without a free parameter.
             S_accepted = list(S)
             policy_accepted = [st.policy_state() for st in stations]
+            arrival_cov = _measured(evaluation, len(stations))
             if stochastic:
                 sim_calls += 1
             degraded.extend(evaluation.degraded)
@@ -366,12 +397,12 @@ class Optimizer:
                         warnings.warn(message, RuntimeWarning, stacklevel=2)
 
             zeta = [
-                st.zeta_from(T, Si)
-                for st, T, Si in zip(stations, evaluation.sojourn_times, S)
+                _zeta_from(st, T, Si, c)
+                for st, T, Si, c in zip(stations, evaluation.sojourn_times, S, arrival_cov)
             ]                                                    # eq 22
             S_target = allocate(stations, self.budget, zeta)      # eq 21
 
-            floor = self._noise_floor(stations, S, zeta, evaluation.ci)
+            floor = self._noise_floor(stations, S, zeta, evaluation.ci, arrival_cov)
             if self.damping == 1.0:
                 S_new = S_target       # explicit, so the analytic path adds no arithmetic
             else:
@@ -545,18 +576,21 @@ class Optimizer:
             evaluation = self.analyzer.evaluate(stations, S)
 
         sojourn_times = list(evaluation.sojourn_times)
+        arrival_cov = _measured(evaluation, len(stations))
         zeta = [
-            st.zeta_from(T, Si) for st, T, Si in zip(stations, sojourn_times, S)
+            _zeta_from(st, T, Si, c)
+            for st, T, Si, c in zip(stations, sojourn_times, S, arrival_cov)
         ]
         # Recomputed HERE rather than captured in the loop: this runs after the last
         # retune -- or, on the analyzer-domain path, after the rollback that undid the
         # retune belonging to the refused candidate -- at the same S and the same station
         # state as the zeta_from call above, so it is the phi that produced the reported
         # zeta bit-for-bit. A level station reports the literal 1.0 -- no derivative is
-        # evaluated on the default path.
+        # evaluated on the default path. The measured cov_a is this same final
+        # evaluation's, for the same reason.
         zeta_phi = [
-            st.phi(Si) if st.zeta_mode == ZETA_SLOPE else 1.0
-            for st, Si in zip(stations, S)
+            _phi(st, Si, c) if st.zeta_mode == ZETA_SLOPE else 1.0
+            for st, Si, c in zip(stations, S, arrival_cov)
         ]
         zeta_mode = [st.zeta_mode for st in stations]
         objective = sum(st.weight * T for st, T in zip(stations, sojourn_times))
@@ -582,6 +616,7 @@ class Optimizer:
             zeta_phi=zeta_phi,
             zeta_mode=zeta_mode,
             zeta_shape_flags=zeta_shape_flags,
+            arrival_cov=[] if evaluation.arrival_cov is None else list(evaluation.arrival_cov),
         )
 
     def _refused_by_analyzer(self, stations, S):
@@ -608,7 +643,7 @@ class Optimizer:
             if st.admits_full_utilization and Si * st.mu == st.gamma
         ]
 
-    def _noise_floor(self, stations, S, zeta, ci):
+    def _noise_floor(self, stations, S, zeta, ci, arrival_cov=None):
         """Propagate CI half-widths into zeta and measure the spread in S (spec 6.4).
 
         A station's `ci` entry is None when its response-time measure had no confidence
@@ -616,11 +651,16 @@ class Optimizer:
         so it contributes no noise instead of crashing on the missing bounds. If every
         entry is None, every dzeta is 0 and the floor comes out 0.0 - correctly meaning
         "no noise information", not "no noise".
+
+        arrival_cov is the measurement the zeta was computed under; the half-width goes
+        through the same override, or the propagation is not the linear map it assumes.
         """
         if ci is None or self.noise_kappa <= 0.0:
             return None
+        if arrival_cov is None:
+            arrival_cov = [None] * len(stations)
         dzeta = [
-            0.0 if entry is None else st.zeta_from(0.5 * (entry[1] - entry[0]), Si)
-            for st, Si, entry in zip(stations, S, ci)
+            0.0 if entry is None else _zeta_from(st, 0.5 * (entry[1] - entry[0]), Si, c)
+            for st, Si, entry, c in zip(stations, S, ci, arrival_cov)
         ]
         return noise_floor(stations, self.budget, zeta, dzeta)
