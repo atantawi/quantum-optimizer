@@ -36,7 +36,7 @@ evaluation that measured it.
 |---|---|---|
 | D1 | Lifetime of a measured `cov_a` | **Per evaluation.** Used only at that evaluation's `S`; the constructor `cov_a` is never written. A downstream station's true `cov_a` moves with the upstream capacities, so it is a function of `S`, not a constant to pin once. |
 | D2 | Analytic path | **Unchanged.** The constructor `cov_a` remains the analytic model's value and the user's responsibility. Deriving a merged `cov_a` from the routing (superposition / QNA) is out of scope. |
-| D3 | When to request the measure | **Only when needed**, with an opt-out: requested iff `SimulationAnalyzer(measure_cov_a=True)` (the default) **and** some station has `zeta_mode == ZETA_SLOPE` and `reads_arrival_cov`. |
+| D3 | When to request the measure | **Only when needed**, with an opt-out: requested iff `SimulationAnalyzer(measure_cov_a=True)` (the default) **and** some station has `uses_measured_cov_a` (§4: it reads `cov_a` *and* is slope-mode). |
 | D4 | The `zeta_shape_tol` cross-check | **Compares against the measured `cov_a`** when one was used, so it tests the G/G/1 approximation's shape, not the constructor argument. |
 | D5 | Plumbing | **A keyword threaded through the calls** (`cov_a=None`), carried on `Evaluation`. No station state, no copies. |
 
@@ -99,7 +99,7 @@ calls it does today.
 New function `extract_arrival_cov(response, stations, job_class) -> (arrival_cov, degraded)`.
 `extract` is unchanged.
 
-For each station with `reads_arrival_cov`, find `(st.name, job_class, "interarrival-time")`:
+For each station with `uses_measured_cov_a`, find `(st.name, job_class, "interarrival-time")`:
 
 | Condition | Entry | Audit |
 |---|---|---|
@@ -112,8 +112,12 @@ For each station with `reads_arrival_cov`, find `(st.name, job_class, "interarri
 
 - A measured SCV of exactly 0 is valid (deterministic arrivals) and is returned as `0.0`.
 - The missing CI is the documented contract, so it is **not** flagged.
-- A station without `reads_arrival_cov` gets `None` silently, even if the response carries the
-  measure for it (it does: the measure list is network-wide).
+- A station without `uses_measured_cov_a` — a level-mode `GG1Station` included — gets `None`
+  silently, even though the response carries the measure for it (the measure list is
+  network-wide). Reading it would record a measurement that enters nothing, and flag a missing
+  one that costs nothing.
+- `mean**2` is never formed: the SCV is `variance / mean / mean`, so a tiny `mean` overflows to
+  a rejected `inf` instead of underflowing `mean**2` to a `ZeroDivisionError`.
 - Every warning names the station and the reason, and says the constructor `cov_a` is used for
   that station in that evaluation.
 
@@ -145,18 +149,20 @@ floor is updated.
 ## 4. The station layer — `qopt/station.py`
 
 - New class attribute `Station.reads_arrival_cov = False`; `GG1Station.reads_arrival_cov = True`.
+- New property `Station.uses_measured_cov_a = reads_arrival_cov and zeta_mode == ZETA_SLOPE`: the
+  single predicate both the request trigger (§3.3) and the extraction (§3.2) read.
 - `Station.phi(S, *, cov_a=None)`: the base implementation ignores `cov_a` (no base-class model
   reads one).
 - `Station.zeta_from(T, S, *, cov_a=None)`: the slope arm calls `self.phi(S, cov_a=cov_a)` when
   `cov_a` is not `None` and `self.phi(S)` otherwise; the level arm never reads it.
 - `GG1Station`:
-  - The bodies of `sojourn_time(S)` and `dT_dS(S)` move into private `_sojourn_time(S, k)` and
-    `_dT_dS(S, k)`. The public methods call them with the constructor `k`, computed by the same
-    expression as today, so the default arithmetic is unchanged and the existing tests pin it.
-  - `sojourn_time(S, *, cov_a=None)` — widened, not bypassed, so the optimizer's shape check
-    calls a public method.
-  - `phi(S, *, cov_a=None)` overrides the base: with an override, `k = (cov_a² + cov_s²)/2` and
-    the private pair are used; without one, it defers to the base arithmetic.
+  - `sojourn_time(S, *, cov_a=None)` and `dT_dS(S, *, cov_a=None)` — widened, not bypassed, so
+    the optimizer's shape check calls a public method. Both take `k` from one private
+    `_k(cov_a)`, which for `None` evaluates today's expression on the constructor `cov_a`, so the
+    default arithmetic is unchanged and the existing tests pin it. An override is validated like
+    the constructor argument (finite, `>= 0`).
+  - `phi(S, *, cov_a=None)` overrides the base: without an override it defers to the base
+    arithmetic; with one it evaluates the same expression on the widened pair.
   - `admits_full_utilization` stays on the constructor `k`. The `phi == 0` boundary branch in
     `zeta_from` cannot be reached on the simulated path, because `S*mu == gamma` is refused by
     the analyzer first; a comment says so rather than a guard.
@@ -259,10 +265,11 @@ TDD. Every new test is mutation-checked by reverting the code it covers and watc
 - **Live** (skips without `QOPT_QSIM_URL`; run with `run_in_background`):
   - *Burke:* an M/M/1 feeding a downstream station; the downstream measured `cov_a` is 1 within a
     tolerance derived from the run's `samplesAnalyzed` and stated in the test.
-  - *Reshaping:* Poisson arrivals through a `cov_s = 0` station at high utilization into a slope
-    `GG1Station`; the downstream measured `cov_a` sits well below 1. The expected value is only
-    approximate (QNA's departure-SCV formula `rho²·cs² + (1 − rho²)·ca²`), so the assertion is a
-    direction-and-margin one, not an equality, and says so.
+  - *Reshaping:* Poisson arrivals through a `cov_s = 0` station at `rho = 0.9` into a slope
+    `GG1Station`. For an M/G/1 the *marginal* interdeparture SCV is exactly
+    `1 − rho²(1 − cs²)` (condition on the queue being empty after a departure), here `0.19`.
+    Successive interdeparture times are correlated, so the iid standard error understates the
+    estimate's; the assertion is a stated tolerance around 0.19 plus the direction (`< 0.5`).
 
 ---
 
