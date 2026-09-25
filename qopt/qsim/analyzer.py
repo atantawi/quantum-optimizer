@@ -3,14 +3,17 @@
 import warnings
 
 from qopt.analyzer import Analyzer, Evaluation
-from qopt.exceptions import SimulationQualityError
-from qopt.qsim.measures import extract
-from qopt.qsim.spec import build_request
+from qopt.exceptions import SimulationQualityError, SimulationRequestError
+from qopt.qsim.measures import extract, extract_arrival_cov
+from qopt.qsim.spec import COV_A_MEASURE, MEASURES, build_request
 
 FRESH_SEED_OFFSET = 1_000_000
 """Offset for the final independently-seeded evaluation (spec 6.5)."""
 
 _SEED_POLICIES = ("fixed", "vary", None)
+
+_OLD_SERVICE_REJECTION = f"unsupported measure type: '{COV_A_MEASURE}'"
+"""What a qsim-service older than 8e7358b says to a request carrying the measure."""
 
 
 class SimulationAnalyzer(Analyzer):
@@ -22,6 +25,12 @@ class SimulationAnalyzer(Analyzer):
     raises after the whole loop plus the final evaluation have run, so it can report the
     whole run's accumulated audit trail at once. Both are deliberate (finding 7); this
     class's strict does not propagate to or from the optimizer's.
+
+    `measure_cov_a=True` asks qsim for each slope G/G/1 station's interarrival moments
+    whenever the network has one (`Station.uses_measured_cov_a`), so `phi` prices the
+    arrival variability the station actually sees rather than its constructor `cov_a`. It
+    costs roughly 25-30% wall clock and needs qsim-service 8e7358b+; False sends exactly
+    the pre-measurement request and prices every station at its constructor `cov_a`.
     """
 
     is_stochastic = True
@@ -29,7 +38,7 @@ class SimulationAnalyzer(Analyzer):
     """`rho == 1` is outside what this analyzer can simulate; see `evaluate`'s preflight."""
 
     def __init__(self, network, client, *, seed=20260729, seed_policy="fixed",
-                 strict=False):
+                 strict=False, measure_cov_a=True):
         if seed_policy not in _SEED_POLICIES:
             raise ValueError(
                 f"seed_policy must be 'fixed', 'vary', or None, got {seed_policy!r}"
@@ -39,7 +48,16 @@ class SimulationAnalyzer(Analyzer):
         self.seed = seed
         self.seed_policy = seed_policy
         self.strict = strict
+        self.measure_cov_a = measure_cov_a
         self.iteration = 0
+
+    def _measures_cov_a(self, stations):
+        """Ask for interarrival moments only when some station will use them.
+
+        For every other network the request -- and its cost -- is exactly what it was
+        before the measure existed.
+        """
+        return self.measure_cov_a and any(st.uses_measured_cov_a for st in stations)
 
     def _seed_for(self, fresh_seed):
         if self.seed_policy is None:
@@ -78,12 +96,25 @@ class SimulationAnalyzer(Analyzer):
             # duplicating the test.
             st.check_stable(Si, strict=self.requires_strict_stability)
 
+        measure_cov_a = self._measures_cov_a(stations)
         request = build_request(
             self.network, S,
             seed=self._seed_for(fresh_seed),
             stopping=self.client.stopping,
+            measures=MEASURES + (COV_A_MEASURE,) if measure_cov_a else MEASURES,
         )
-        response = self.client.post_simulate(request)
+        try:
+            response = self.client.post_simulate(request)
+        except SimulationRequestError as exc:
+            # No retry without the measure: that would quietly price every station at its
+            # constructor cov_a, the assumption this measurement exists to replace.
+            if measure_cov_a and _OLD_SERVICE_REJECTION in str(exc):
+                raise SimulationRequestError(
+                    f"{exc} -- measuring arrival cov_a needs qsim-service 8e7358b or "
+                    f"later; pass SimulationAnalyzer(measure_cov_a=False) to run against "
+                    f"this service on the stations' constructor cov_a instead"
+                ) from exc
+            raise
         if not fresh_seed:
             self.iteration += 1               # the final evaluation is not an iteration
 
@@ -93,10 +124,19 @@ class SimulationAnalyzer(Analyzer):
         degraded.extend(_conservation_misses(stations, extras["throughput"]))
         extras["seed"] = response.get("seed")
         extras["wallClockSeconds"] = response.get("wallClockSeconds")
+
+        arrival_cov = None
+        if measure_cov_a:
+            arrival_cov, cov_degraded = extract_arrival_cov(
+                response, stations, self.network.job_class
+            )
+            degraded.extend(cov_degraded)
+
         if self.strict and degraded:
             raise SimulationQualityError("; ".join(degraded))
         return Evaluation(
-            sojourn_times=sojourn_times, ci=ci, degraded=degraded, extras=extras
+            sojourn_times=sojourn_times, ci=ci, degraded=degraded, extras=extras,
+            arrival_cov=arrival_cov,
         )
 
 
