@@ -73,6 +73,15 @@ class Station(ABC):
     DOT_SHAPE = "box"
     """Graphviz node shape used by Network.to_dot()."""
 
+    reads_arrival_cov = False
+    """Does this station's analytic model read the arrival process's coefficient of variation?
+
+    If it does, a MEASURED one can stand in for the constructor's: `phi` and `zeta_from`
+    take it as `cov_a=` for one evaluation. False here because the base class has no model
+    to put one in, and on ForkJoinStation because `t_ul` has none. A subclass that sets it
+    must accept `cov_a` in `phi`, and in `sojourn_time` to take part in the shape check.
+    """
+
     def __init__(self, gamma=None, mu=None, weight=1.0, *, name=None,
                  zeta_mode=ZETA_LEVEL):
         # `isfinite` first: NaN passes every ordering comparison, so `nan <= 0` is False.
@@ -136,6 +145,16 @@ class Station(ABC):
         a converged ζ that no single rule produced.
         """
         return self._zeta_mode
+
+    @property
+    def uses_measured_cov_a(self):
+        """Should a simulated evaluation measure this station's arrival `cov_a`?
+
+        Only a slope-mode station reads `phi`, and only a station that `reads_arrival_cov`
+        has a `phi` a measurement changes. The one predicate both SimulationAnalyzer's
+        request trigger and `extract_arrival_cov` read, so they cannot disagree.
+        """
+        return self.reads_arrival_cov and self._zeta_mode == ZETA_SLOPE
 
     @abstractmethod
     def sojourn_time(self, S):
@@ -270,7 +289,7 @@ class Station(ABC):
                 lo = S
         return (self.sojourn_time(hi) - self.sojourn_time(lo)) / (hi - lo)
 
-    def phi(self, S):
+    def phi(self, S, *, cov_a=None):
         """Elasticity of E[T] in spare capacity: -d log T / d log x, with x = S*mu - gamma.
 
         The ratio of the true slope to the one eq 22's level calibration implies, so
@@ -287,11 +306,14 @@ class Station(ABC):
 
         Overridable: a user who knows the true arrival variability but cannot express it
         as a constructor `cov_a` should override this rather than reach for a new API.
+
+        `cov_a` is a measured arrival coefficient of variation for ONE evaluation (see
+        `reads_arrival_cov`). The base model has none to replace, so it is ignored here.
         """
         x = S * self.mu - self.gamma
         return -self.dT_dS(S) * x / (self.mu * self.sojourn_time(S))
 
-    def zeta_from(self, T, S):
+    def zeta_from(self, T, S, *, cov_a=None):
         """Invert the functional form for an externally supplied E[T].
 
         Pure station arithmetic, independent of where E[T] came from — the analytic
@@ -310,10 +332,15 @@ class Station(ABC):
         No clamp on phi. It is legitimately tiny -- exactly `1 - rho` for a cov = 0
         station, measured down to 1e-6 -- and `allocate` requires only that zeta be
         finite and positive.
+
+        `cov_a`, when not None, is the arrival cov measured by the evaluation that produced
+        T; only the slope arm reads it, through `phi`.
         """
         x = S * self.mu - self.gamma
         if self._zeta_mode == ZETA_SLOPE:
-            phi = self.phi(S)
+            # Passed only when there is one, so an override of `phi(self, S)` written before
+            # this keyword existed keeps working on every path that measures nothing.
+            phi = self.phi(S) if cov_a is None else self.phi(S, cov_a=cov_a)
             if phi == 0.0 and self.admits_full_utilization and S * self.mu == self.gamma:
                 # The one place phi is legitimately zero, and the honest zeta there is zero
                 # too. A station whose E[T] is finite at rho == 1, sitting exactly there:
@@ -339,6 +366,10 @@ class Station(ABC):
                 # hand arithmetic and is wrong -- it is a one-step fixed point. Pinned by
                 # test_a_deterministic_station_may_sit_exactly_on_its_boundary, which
                 # requires x == 0 exactly and so still fails under the clamp.
+                #
+                # `admits_full_utilization` reads the CONSTRUCTOR k even when `cov_a` is a
+                # measurement. The simulated path, the only one that measures, never gets
+                # here: its analyzer refuses `S*mu == gamma` before evaluating.
                 return 0.0
             if not (math.isfinite(phi) and phi > 0.0):
                 raise ValueError(
@@ -519,6 +550,8 @@ class GG1Station(SingleServerStation):
     with mu_eff = S*mu and rho = gamma/mu_eff. Exact for any M/G/1 (cov_a == 1).
     """
 
+    reads_arrival_cov = True
+
     def __init__(self, gamma=None, mu=None, weight=1.0, *, c, cov_a, cov_s, name=None,
                  zeta_mode=ZETA_LEVEL):
         super().__init__(gamma, mu, weight, c=c, name=name, zeta_mode=zeta_mode)
@@ -551,10 +584,23 @@ class GG1Station(SingleServerStation):
         """
         return (self.cov_a ** 2 + self.cov_s ** 2) / 2.0 == 0.0
 
-    def sojourn_time(self, S):
+    def _k(self, cov_a):
+        """k = (cov_a^2 + cov_s^2)/2, with a measured `cov_a` in place of the constructor's.
+
+        None evaluates today's expression on the constructor value, so every default call
+        is bit-for-bit what it was. A measurement is validated like the constructor
+        argument: a NaN would otherwise pass every comparison and price silently.
+        """
+        if cov_a is None:
+            cov_a = self.cov_a
+        elif not math.isfinite(cov_a) or cov_a < 0:
+            raise ValueError(f"cov_a must be a finite number >= 0, got {cov_a}")
+        return (cov_a ** 2 + self.cov_s ** 2) / 2.0
+
+    def sojourn_time(self, S, *, cov_a=None):
         mu_eff = S * self.mu
         self._check_stable(mu_eff)
-        k = (self.cov_a ** 2 + self.cov_s ** 2) / 2.0
+        k = self._k(cov_a)
         if k == 0.0:
             # D/D/1: no congestion term at all, so E[T] is just the service time -- finite
             # and smooth right up to rho == 1, which `admits_full_utilization` lets through.
@@ -567,7 +613,7 @@ class GG1Station(SingleServerStation):
         rho = self.gamma / mu_eff
         return (1.0 / mu_eff) * (1.0 + k * rho / (1.0 - rho))
 
-    def dT_dS(self, S):
+    def dT_dS(self, S, *, cov_a=None):
         """Closed form of the Allen-Cunneen derivative.
 
             E[T] = 1/m + k*gamma/(m*x),   m = S*mu,  x = m - gamma,  k = (cov_a^2+cov_s^2)/2
@@ -582,7 +628,7 @@ class GG1Station(SingleServerStation):
         """
         m = S * self.mu
         self._check_stable(m)
-        k = (self.cov_a ** 2 + self.cov_s ** 2) / 2.0
+        k = self._k(cov_a)
         if k == 0.0:
             # Same short-circuit as `sojourn_time`, for the same reason: the k term below
             # divides by `(m*x)**2`, which is 0.0 at the boundary this station is allowed to
@@ -593,6 +639,18 @@ class GG1Station(SingleServerStation):
         return -self.mu * (
             1.0 / m ** 2 + k * self.gamma * (2.0 * m - self.gamma) / (m * x) ** 2
         )
+
+    def phi(self, S, *, cov_a=None):
+        """Station.phi, with a measured `cov_a` when one is given.
+
+        The same expression as the base, evaluated on the widened pair, so a station built
+        with cov_a=c and one measured at c agree exactly (test_arrival_cov.py pins it).
+        """
+        if cov_a is None:
+            return super().phi(S)
+        x = S * self.mu - self.gamma
+        return (-self.dT_dS(S, cov_a=cov_a) * x
+                / (self.mu * self.sojourn_time(S, cov_a=cov_a)))
 
     @classmethod
     def mm1(cls, gamma=None, mu=None, weight=1.0, *, c, name=None,
