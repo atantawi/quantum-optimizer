@@ -279,3 +279,61 @@ def test_an_old_signature_zeta_from_override_survives_a_measured_run():
     fake = CovFake(loop=[None, 0.3], half_width=0.02)
     res = Optimizer(stations, budget, analyzer=fake, **dict(NAIVE, noise_kappa=1.0)).run()
     assert res.arrival_cov == [None, 0.3]
+
+
+# --- the shape check compares against the measured model -----------------------
+
+from qopt.zeta import ZETA_SHAPE_TOL
+
+
+def _mismatched():
+    # Constructor cov_a = 2 at cov_s = 0 (k = 2); measured 0 (k = 0). E[T] under the two
+    # differs by a factor 1 + 2*rho/(1-rho): far past the 25% tolerance at any load.
+    return [
+        GG1Station(0.6, 1.5, c=2.0, cov_a=2.0, cov_s=0.0, name="gg", zeta_mode=ZETA_SLOPE),
+        GG1Station.mm1(1.2, 3.0, c=0.5, name="mm1"),
+    ]
+
+
+def test_a_correct_measurement_silences_a_check_the_constructor_would_fail():
+    stations = _mismatched()
+    budget = 2.0 * min_feasible_budget(stations)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        res = Optimizer(stations, budget, analyzer=CovFake(loop=[0.0, None]),
+                        **dict(NAIVE, zeta_shape_tol=ZETA_SHAPE_TOL)).run()
+    assert res.zeta_shape_flags == []
+    # Anti-vacuity: against the CONSTRUCTOR model this E[T] is far outside tolerance.
+    st, Si, T = stations[0], res.capacities[0], res.sojourn_times[0]
+    assert abs(T / st.sojourn_time(Si) - 1.0) > ZETA_SHAPE_TOL
+
+
+def test_a_shape_error_at_the_measured_cov_names_the_measurement():
+    stations = _mismatched()
+    budget = 2.0 * min_feasible_budget(stations)
+    with pytest.warns(RuntimeWarning, match="gg"):
+        res = Optimizer(stations, budget,
+                        analyzer=CovFake(loop=[0.0, None], factor=4.0),
+                        **dict(NAIVE, zeta_shape_tol=ZETA_SHAPE_TOL)).run()
+    assert len(res.zeta_shape_flags) == 1
+    message = res.zeta_shape_flags[0]
+    assert "measured arrival cov_a=0" in message
+    assert "check the station's parameters" not in message   # not today's advice
+
+
+def test_an_old_signature_sojourn_time_override_survives_the_shape_check():
+    # The shape check must call sojourn_time(Si, cov_a=c) only when c is not None: an
+    # unconditional keyword would raise TypeError against a pre-existing subclass whose
+    # sojourn_time predates the keyword.
+    class Legacy(GG1Station):
+        def sojourn_time(self, S):
+            return super().sojourn_time(S)
+
+    stations = [
+        Legacy(0.6, 1.5, c=2.0, cov_a=1.0, cov_s=0.0, name="legacy", zeta_mode=ZETA_SLOPE),
+        GG1Station(1.2, 3.0, c=0.5, cov_a=1.0, cov_s=0.0, name="g", zeta_mode=ZETA_SLOPE),
+    ]
+    budget = 2.0 * min_feasible_budget(stations)
+    res = Optimizer(stations, budget, analyzer=CovFake(loop=[None, 0.3]),
+                    **dict(NAIVE, zeta_shape_tol=ZETA_SHAPE_TOL)).run()
+    assert res.arrival_cov == [None, 0.3]

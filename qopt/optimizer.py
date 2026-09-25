@@ -357,6 +357,9 @@ class Optimizer:
             # symptom of its own. Comparing the two E[T] values tests exactly that
             # assumption, costs one analytic evaluation, and AMPLIFIES what it detects:
             # a 24% error in phi shows up as a 268% error in E[T].
+            # When the analyzer measured this station's cov_a, the model is evaluated AT
+            # the measurement, so the check then tests the approximation's shape rather
+            # than the constructor argument.
             #
             # Here and not in `zeta_from`, because `_noise_floor` calls that hook with a
             # CI HALF-WIDTH in the T position -- a shape check inside it would compare a
@@ -370,29 +373,43 @@ class Optimizer:
             # the run, which is part of why the flag is advisory and kept out of
             # `degraded` rather than treated as a hard quality signal.
             if self.zeta_shape_tol is not None:
-                for st, T, Si in zip(stations, evaluation.sojourn_times, S):
+                for st, T, Si, c in zip(stations, evaluation.sojourn_times, S, arrival_cov):
                     if st.zeta_mode != ZETA_SLOPE or id(st) in shape_checked:
                         continue
-                    T_model = st.sojourn_time(Si)
+                    T_model = (st.sojourn_time(Si) if c is None
+                               else st.sojourn_time(Si, cov_a=c))
                     if abs(T / T_model - 1.0) > self.zeta_shape_tol:
                         # Mark on FLAG, not on check: an unflagged slope station is
                         # re-examined every iteration, because on a stochastic path one
                         # can cross the tolerance only on a later iterate and must still
                         # be reported. Hoisting this above the `if` would silence those.
                         shape_checked.add(id(st))
-                        message = (
-                            f"station {st.name!r}: measured E[T]={T:g} disagrees with "
-                            f"its analytic model's {T_model:g} by "
-                            f"{abs(T / T_model - 1.0) * 100:.1f}%, above "
-                            f"zeta_shape_tol={self.zeta_shape_tol:g}. Slope-calibrated "
-                            f"zeta takes the SHAPE of E[T] from that model, so check the "
-                            f"station's parameters -- most often cov_a, which is never "
-                            f"sent to the simulator and must describe the arrival process "
-                            f"the station actually sees, internal traffic included. "
-                            f"When it is unknown, the assumption that reproduces level "
-                            f"calibration is cov_a**2 + cov_s**2 == 2 -- which is cov_a=1 "
-                            f"only for cov_s=1."
-                        )
+                        disagreement = abs(T / T_model - 1.0) * 100
+                        if c is None:
+                            message = (
+                                f"station {st.name!r}: measured E[T]={T:g} disagrees with "
+                                f"its analytic model's {T_model:g} by "
+                                f"{disagreement:.1f}%, above "
+                                f"zeta_shape_tol={self.zeta_shape_tol:g}. Slope-calibrated "
+                                f"zeta takes the SHAPE of E[T] from that model, so check the "
+                                f"station's parameters -- most often cov_a, which is never "
+                                f"sent to the simulator and must describe the arrival process "
+                                f"the station actually sees, internal traffic included. "
+                                f"When it is unknown, the assumption that reproduces level "
+                                f"calibration is cov_a**2 + cov_s**2 == 2 -- which is cov_a=1 "
+                                f"only for cov_s=1."
+                            )
+                        else:
+                            message = (
+                                f"station {st.name!r}: measured E[T]={T:g} disagrees with "
+                                f"its analytic model's {T_model:g} at the measured arrival "
+                                f"cov_a={c:g} by {disagreement:.1f}%, above "
+                                f"zeta_shape_tol={self.zeta_shape_tol:g}. The arrival "
+                                f"variability is measured here, not assumed, so the "
+                                f"disagreement is in the model's shape itself -- the G/G/1 "
+                                f"approximation at this load -- and slope-calibrated zeta "
+                                f"takes its phi from that shape."
+                            )
                         zeta_shape_flags.append(message)
                         warnings.warn(message, RuntimeWarning, stacklevel=2)
 
