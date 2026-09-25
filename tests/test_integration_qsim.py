@@ -315,6 +315,10 @@ def test_burke_an_mm1_feeds_its_successor_poisson_arrivals(client):
     # For iid exponential samples the SCV estimator's standard error is 2/sqrt(n) (delta
     # method: Var = 4/n). n >= minSamples/2 after warm-up discards is a conservative
     # floor, and the tolerance is 5 standard errors at that floor.
+    #
+    # This validates the estimator against a known truth, but 1 is also what a
+    # wrong-station read, a silent cov_a=1 fallback, or an SCV/COV mix-up would return
+    # here -- so it does not witness indexing or the sqrt. The smoothing test below does.
     up = GG1Station.mm1(mu=1.0, c=1.0, name="up")
     down = GG1Station.mm1(mu=1.0, c=1.0, name="down", zeta_mode=ZETA_SLOPE)
     network = _tandem(up, down, 0.5, "burke-tandem")
