@@ -13,12 +13,16 @@ class Evaluation:
         ci: (lower, upper) per station, or None on a deterministic path.
         degraded: audit strings — weak measures, gamma-conservation misses (spec 6.8).
         extras: diagnostics — system_response_time, throughput, seed, wallClockSeconds.
+        arrival_cov: measured arrival cov_a per station, aligned to the station order,
+            each a float or None (not measured, or unusable -- priced at the constructor
+            cov_a); the whole field None when nothing was measured.
     """
 
     sojourn_times: list
     ci: list | None = None
     degraded: list = field(default_factory=list)
     extras: dict = field(default_factory=dict)
+    arrival_cov: list | None = None
 
 
 class Analyzer(ABC):

@@ -14,6 +14,18 @@ success: true and no warning. The list is closed because nothing outside these t
 enters eq 21, eq 22, the objective, or the fixed point.
 """
 
+COV_A_MEASURE = "interarrival-time"
+"""Per-station interarrival moments, from which a measured `cov_a` is computed.
+
+Requested only when some station has `uses_measured_cov_a` (SimulationAnalyzer). Facts
+from qsim-service's README at 8e7358b: it reports `mean`, `variance` and `stdDev` of the
+interarrival time, so SCV = variance/mean**2; it reports NO confidence interval, because
+JMT's is on the rate; it switches on JMT's per-sample logging for itself alone, roughly
+25-30% wall clock plus temporary disk -- which is why `secondMoments` is never sent, since
+that would put every other measure on the same cost; and on a fork-join node it is taken
+at the fork. A service older than 8e7358b rejects it as an unsupported measure type.
+"""
+
 
 def build_request(network, S, *, seed, stopping, measures=MEASURES):
     """Wrap network.to_model_dict(S) in qsim's seed / stopping / measures envelope.

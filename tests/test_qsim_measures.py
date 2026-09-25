@@ -1,3 +1,6 @@
+import math
+import warnings
+
 import pytest
 
 from qopt.exceptions import MeasureMissingError
@@ -189,3 +192,101 @@ def test_wrong_job_class_is_treated_as_missing(sim_response):
     )
     with pytest.raises(MeasureMissingError):
         extract(response, stations, "jobs")
+
+
+# --- measured arrival cov_a (spec 2026-09-25 §3.2) ------------------------------
+
+from qopt.analyzer import Evaluation
+from qopt.qsim.measures import extract_arrival_cov
+from qopt.qsim.spec import COV_A_MEASURE
+from qopt.station import ForkJoinStation, GG1Station
+from qopt.zeta import ZETA_SLOPE
+
+
+def _ia(station, mean, variance, *, success=True, job_class="jobs"):
+    """An interarrival-time entry in the shape qsim-service's SolutionsParser emits at
+    8e7358b: lower/upper null (JMT's CI is on the rate), variance and stdDev populated."""
+    std = variance ** 0.5 if isinstance(variance, float) and variance >= 0 else None
+    return {
+        "station": station, "class": job_class, "type": COV_A_MEASURE,
+        "mean": mean, "lower": None, "upper": None, "alpha": 0.05, "precision": 0.02,
+        "success": success, "samplesAnalyzed": 40000, "samplesDiscarded": 1000,
+        "variance": variance, "stdDev": std,
+    }
+
+
+def _cov_stations():
+    return [
+        GG1Station.md1(0.4, 1.0, c=1.0, name="md1", zeta_mode=ZETA_SLOPE),
+        GG1Station.mm1(0.6, 1.0, c=2.0, name="mm1"),                  # level
+        ForkJoinStation(0.5, 1.0, r=2.0, c1=1.0, c2=1.0, name="fj", zeta_mode=ZETA_SLOPE),
+    ]
+
+
+def _cov_response(*entries):
+    return {"completed": True, "measures": list(entries)}
+
+
+def test_evaluation_arrival_cov_defaults_to_none():
+    assert Evaluation(sojourn_times=[1.0]).arrival_cov is None
+
+
+def test_cov_a_is_the_square_root_of_variance_over_mean_squared():
+    response = _cov_response(_ia("md1", 2.0, 1.0), _ia("mm1", 1.0, 1.0), _ia("fj", 1.0, 1.0))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")          # the missing CI must NOT warn
+        cov, degraded = extract_arrival_cov(response, _cov_stations(), "jobs")
+    assert cov == [0.5, None, None]             # level mm1 and fork-join: silently None
+    assert degraded == []
+
+
+def test_a_zero_scv_is_deterministic_arrivals_not_a_failure():
+    cov, degraded = extract_arrival_cov(
+        _cov_response(_ia("md1", 2.0, 0.0)), _cov_stations(), "jobs")
+    assert cov[0] == 0.0
+    assert degraded == []
+
+
+def test_a_station_that_uses_no_measurement_is_not_flagged_when_it_has_none():
+    cov, degraded = extract_arrival_cov(
+        _cov_response(_ia("md1", 2.0, 1.0)), _cov_stations(), "jobs")
+    assert cov == [0.5, None, None]
+    assert degraded == []
+
+
+@pytest.mark.parametrize("entry", [
+    None,                                     # measure absent
+    _ia("md1", 2.0, 1.0, job_class="other"),  # present, but for another class
+    _ia("md1", None, 1.0),
+    _ia("md1", 0.0, 1.0),
+    _ia("md1", -1.0, 1.0),
+    _ia("md1", math.nan, 1.0),
+    _ia("md1", math.inf, 1.0),                # variance/inf/inf would be a bogus 0.0
+    _ia("md1", 2.0, None),
+    _ia("md1", 2.0, -0.1),
+    _ia("md1", 2.0, math.nan),
+    _ia("md1", 2.0, math.inf),
+    _ia("md1", 1e-200, 1.0),                  # mean**2 underflows; must not divide by 0
+], ids=["absent", "other-class", "mean-none", "mean-zero", "mean-neg", "mean-nan",
+        "mean-inf", "var-none", "var-neg", "var-nan", "var-inf", "mean-tiny"])
+def test_an_unusable_measurement_falls_back_and_is_recorded(entry):
+    response = _cov_response(*([] if entry is None else [entry]))
+    with pytest.warns(RuntimeWarning, match="md1"):
+        cov, degraded = extract_arrival_cov(response, _cov_stations(), "jobs")
+    assert cov[0] is None
+    assert len(degraded) == 1 and "md1" in degraded[0]
+    assert "constructor cov_a" in degraded[0]
+
+
+def test_a_tiny_mean_with_zero_variance_is_still_zero():
+    cov, degraded = extract_arrival_cov(
+        _cov_response(_ia("md1", 1e-200, 0.0)), _cov_stations(), "jobs")
+    assert cov[0] == 0.0 and degraded == []
+
+
+def test_a_weak_measurement_is_used_and_flagged():
+    with pytest.warns(RuntimeWarning, match="success=false"):
+        cov, degraded = extract_arrival_cov(
+            _cov_response(_ia("md1", 2.0, 1.0, success=False)), _cov_stations(), "jobs")
+    assert cov[0] == 0.5
+    assert len(degraded) == 1 and "success=false" in degraded[0]
