@@ -113,9 +113,14 @@ This is a deliberate divergence from eq 22, not an amendment to it — see
 **One caveat worth reading before switching a simulated run.** φ is computed from the
 station's *analytic* model even when `E[T]` is measured, which is what keeps the simulator
 in control of the allocation's level. That promotes `cov_a` from nearly decorative to a
-live input: it is never sent to the simulator and never measured back, so under slope
-calibration it must describe the arrival process the station *actually* sees, internal
-traffic included. **When it is unknown, the assumption that forfeits the gain rather than
+live input: it is never sent to the simulator. **On a simulated run it is measured back**:
+`SimulationAnalyzer` asks qsim-service for each slope-mode `GG1Station`'s interarrival
+moments and prices `phi` at the measured `cov_a` for that evaluation
+(`Result.arrival_cov` reports the final one). That needs qsim-service `8e7358b` or later
+and costs roughly 25–30% wall clock; `SimulationAnalyzer(measure_cov_a=False)` turns it
+off. **On the analytic path, or with measurement off,** `cov_a` must describe the arrival
+process the station *actually* sees, internal traffic included. **When it is unknown, the
+assumption that forfeits the gain rather than
 overshooting past it is the one that reproduces level calibration** — and that is *not*
 `cov_a = 1` in general. φ depends on the two coefficients of variation only through
 `k = (cov_a² + cov_s²)/2`, is strictly increasing in `k`, and equals 1 exactly at `k = 1`.
@@ -130,9 +135,12 @@ closest approach. Overstating `k` in either variable is the direction that overs
 disagreements in `Result.zeta_shape_flags` (tolerance: `zeta_shape_tol`, default 25%). That
 check runs inside the loop, against the iterate that produced each allocation — not after
 the final fresh-seeded evaluation — so on a stochastic run `zeta_shape_flags` warrants the
-trajectory that set the capacities, not the `E[T]` values `Result` goes on to report. If
-you know the true arrival variability but cannot express it as a `cov_a`, override `phi(S)`
-on a subclass.
+trajectory that set the capacities, not the `E[T]` values `Result` goes on to report. With
+a measurement, the cross-check evaluates the model *at* the measured `cov_a`, so a flag then
+names the G/G/1 approximation's shape at that load, or, on a stochastic run, sampling noise
+in that evaluation's `E[T]` or measured `cov_a` -- not the constructor argument. If you know
+the true arrival variability but cannot express it as a `cov_a`, override
+`phi(S, *, cov_a=None)` on a subclass.
 
 ## Scope & limitations
 

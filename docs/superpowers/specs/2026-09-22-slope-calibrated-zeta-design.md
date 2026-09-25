@@ -568,6 +568,9 @@ consume it to close the loop? Worth asking rather than guessing — `MEASURES` i
 and adding to it has known fork-join hazards (two of qsim's own defaults come back as
 join-station numbers with `success: true` and no warning).
 
+**Consumed 2026-09-25:** qsim-service#15 shipped as `interarrival-time` (`8e7358b`); see
+`2026-09-25-measured-arrival-cov-design.md`.
+
 ### 8.7 The analyzer's domain is narrower than the model's
 
 *Amended 2026-09-23, post-implementation, after the fourth review of PR #26.*

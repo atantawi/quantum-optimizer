@@ -22,7 +22,8 @@ station, and reaches 1.64 for G/G/1 with cov = 5.
 This is a deliberate divergence from eq 22, not an amendment to it -- the paper is
 unchanged. See docs/slope-calibrated-zeta/findings.md for the derivation, the measured
 payoff, and why the SIMULATED path needs phi from the analytic model while E[T] stays
-measured.
+measured. On that path cov_a is measured too (qsim-service interarrival-time, spec
+2026-09-25), so phi's model sees the arrival variability each station actually gets.
 """
 
 ZETA_LEVEL = "level"
@@ -48,6 +49,11 @@ simulated disagreement is within +/-1.1% across the 14 stations of
 docs/qcsc-example/live-run.log, while a wrong `cov_a` is hundreds of percent. It is
 deliberately configurable, because that evidence contains no G/G/1 with cov != 1 -- the
 very station type slope calibration most benefits.
+
+When the analyzer measured a station's cov_a, the analytic side is evaluated AT the
+measurement, so the check then bounds the G/G/1 approximation's own error, or, on a
+stochastic run, sampling noise in that evaluation's E[T] or measured cov_a -- not a wrong
+constructor argument.
 """
 
 

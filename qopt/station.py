@@ -305,7 +305,10 @@ class Station(ABC):
         as they converge. It also costs no simulation calls.
 
         Overridable: a user who knows the true arrival variability but cannot express it
-        as a constructor `cov_a` should override this rather than reach for a new API.
+        as a constructor `cov_a` should override this rather than reach for a new API --
+        on the analytic path, or with `SimulationAnalyzer(measure_cov_a=False)`; a
+        simulated run otherwise measures it. An override should accept `cov_a=None` if its
+        class sets `reads_arrival_cov`.
 
         `cov_a` is a measured arrival coefficient of variation for ONE evaluation (see
         `reads_arrival_cov`). The base model has none to replace, so it is ignored here.

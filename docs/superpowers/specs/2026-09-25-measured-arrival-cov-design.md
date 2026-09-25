@@ -1,7 +1,7 @@
 # Design Spec: Measured arrival `cov_a` on the simulated path
 
 Date: 2026-09-25
-Status: **Design approved in conversation, spec awaiting review.**
+Status: **Implemented on feat/measured-arrival-cov.**
 
 Companion specs:
 
