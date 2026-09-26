@@ -338,3 +338,107 @@ def test_an_old_signature_sojourn_time_override_survives_the_shape_check():
     res = Optimizer(stations, budget, analyzer=CovFake(loop=[None, 0.3]),
                     **dict(NAIVE, zeta_shape_tol=ZETA_SHAPE_TOL)).run()
     assert res.arrival_cov == [None, 0.3]
+
+
+# --- an old-signature override on the REAL simulated path ----------------------
+#
+# CovFake above decides for itself which stations to report, so it cannot see whether
+# SimulationAnalyzer and extract_arrival_cov would measure an old-signature subclass. These
+# run the real analyzer over a canned response instead.
+
+from conftest import FakeTransport
+from qopt.network import Network, Route
+from qopt.qsim.analyzer import SimulationAnalyzer
+from qopt.qsim.client import QsimClient
+from qopt.qsim.spec import COV_A_MEASURE
+
+
+def _sim_measure(station, type_, mean):
+    return {"station": station, "class": "jobs", "type": type_, "mean": mean,
+            "lower": mean - 0.01, "upper": mean + 0.01, "alpha": 0.05, "precision": 0.02,
+            "success": True, "samplesAnalyzed": 40000, "samplesDiscarded": 1000,
+            "variance": 0.01, "stdDev": 0.1}
+
+
+def _ia_measure(station, mean, variance):
+    # Interarrival-time carries moments but no CI (qsim's documented contract).
+    return {"station": station, "class": "jobs", "type": COV_A_MEASURE, "mean": mean,
+            "lower": None, "upper": None, "success": True, "variance": variance,
+            "stdDev": variance ** 0.5}
+
+
+def _real_sim_run(old_cls):
+    """Optimize [old_cls "old", plain slope GG1 "g"] through the real SimulationAnalyzer.
+
+    Both stations are slope mode and neither overrides `reads_arrival_cov`, so the old
+    subclass inherits GG1Station's opt-in; only its signature can keep it unmeasured. The
+    canned response carries an interarrival-time entry for BOTH, so nothing but the
+    station predicate decides who is measured.
+    """
+    old = old_cls(mu=1.0, c=1.0, cov_a=1.0, cov_s=0.5, name="old", zeta_mode=ZETA_SLOPE)
+    g = GG1Station(mu=1.0, c=1.0, cov_a=1.0, cov_s=0.5, name="g", zeta_mode=ZETA_SLOPE)
+    network = Network(
+        [old, g],
+        [Route(Network.SOURCE, "old", 0.4), Route(Network.SOURCE, "g", 0.6),
+         Route("old", Network.SINK, 1.0), Route("g", Network.SINK, 1.0)],
+        arrival_rate=1.0, name="old-signature-net",
+    )
+    response = {
+        "modelName": "old-signature-net", "solutionMethod": "simulation",
+        "seed": 20260729, "wallClockSeconds": 1.0, "completed": True,
+        "measures": [
+            _sim_measure("old", "response-time", 1.1),
+            _sim_measure("g", "response-time", 0.9),
+            _sim_measure("old", "throughput", 0.4),
+            _sim_measure("g", "throughput", 0.6),
+            _sim_measure("", "system-response-time", 1.0),
+            _ia_measure("old", 2.5, 6.25),          # cov 1.0, were it read
+            _ia_measure("g", 2.5, 1.5625),          # cov 0.5 = sqrt(1.5625 / 2.5**2)
+        ],
+    }
+    transport = FakeTransport((200, response))
+    analyzer = SimulationAnalyzer(network, QsimClient("http://qsim.test", transport=transport))
+    budget = 2.0 * min_feasible_budget(network.stations)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # canned T: convergence is not the point
+        result = Optimizer(network.stations, budget, analyzer=analyzer).run()
+    assert transport.requests[0]["measures"][-1] == COV_A_MEASURE   # g still triggers it
+    return result
+
+
+def test_an_old_signature_phi_override_is_not_measured_on_the_real_path():
+    class OldPhi(GG1Station):                   # main's advertised extension path
+        def phi(self, S):
+            return super().phi(S)
+
+    result = _real_sim_run(OldPhi)
+    assert result.arrival_cov[0] is None
+    assert result.arrival_cov[1] == 0.5
+
+
+def test_an_old_signature_sojourn_time_override_is_not_measured_on_the_real_path():
+    class OldSojourn(GG1Station):
+        def sojourn_time(self, S):
+            return super().sojourn_time(S)
+
+    result = _real_sim_run(OldSojourn)
+    assert result.arrival_cov[0] is None
+    assert result.arrival_cov[1] == 0.5
+
+
+def test_an_old_signature_override_of_any_priced_method_opts_out():
+    class OldDerivative(GG1Station):
+        def dT_dS(self, S):
+            return super().dT_dS(S)
+
+    class Kwargs(GG1Station):                   # **kwargs forwards cov_a, so it may opt in
+        def phi(self, S, **kwargs):
+            return super().phi(S, **kwargs)
+
+    def build(cls):
+        return cls(0.6, 1.5, c=2.0, cov_a=1.0, cov_s=0.5, zeta_mode=ZETA_SLOPE)
+
+    assert OldDerivative.reads_arrival_cov is True           # inherited opt-in ...
+    assert build(OldDerivative).uses_measured_cov_a is False  # ... that the signature vetoes
+    assert build(Kwargs).uses_measured_cov_a is True
+

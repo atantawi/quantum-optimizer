@@ -1,5 +1,6 @@
 """Station hierarchy: each station owns its queueing math."""
 
+import inspect
 import math
 from abc import ABC, abstractmethod
 
@@ -7,6 +8,24 @@ from qopt.exceptions import InstabilityError
 from qopt.forkjoin_approx import t_ul
 from qopt.forkjoin_policy import R_STAR_TUNED, optimal_ray, resolve_r_star
 from qopt.zeta import ZETA_LEVEL, ZETA_SLOPE, resolve_zeta_mode
+
+
+def _accepts_cov_a(method):
+    """Can `method` be called with a `cov_a=` keyword?
+
+    True for a parameter named `cov_a` (keyword-passable) or a `**kwargs`. A method whose
+    signature cannot be read is treated as not accepting it, so the station stays unmeasured
+    -- the behaviour it had before the keyword existed.
+    """
+    try:
+        params = inspect.signature(method).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        p.kind is p.VAR_KEYWORD
+        or (p.name == "cov_a" and p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD))
+        for p in params
+    )
 
 
 def distribution_dict(rate, scv):
@@ -78,8 +97,12 @@ class Station(ABC):
 
     If it does, a MEASURED one can stand in for the constructor's: `phi` and `zeta_from`
     take it as `cov_a=` for one evaluation. False here because the base class has no model
-    to put one in, and on ForkJoinStation because `t_ul` has none. A subclass that sets it
-    must accept `cov_a` in `phi`, and in `sojourn_time` to take part in the shape check.
+    to put one in, and on ForkJoinStation because `t_ul` has none. True on GG1Station, and
+    so inherited by every GG1Station subclass, including one written before the keyword
+    existed. That is safe because it is not sufficient: `uses_measured_cov_a` also requires
+    `phi`, `sojourn_time` and `dT_dS` to accept `cov_a`, so a subclass overriding any of
+    them with the old signature `(self, S)` is left unmeasured, priced at its constructor
+    `cov_a` as before.
     """
 
     def __init__(self, gamma=None, mu=None, weight=1.0, *, name=None,
@@ -151,10 +174,23 @@ class Station(ABC):
         """Should a simulated evaluation measure this station's arrival `cov_a`?
 
         Only a slope-mode station reads `phi`, and only a station that `reads_arrival_cov`
-        has a `phi` a measurement changes. The one predicate both SimulationAnalyzer's
-        request trigger and `extract_arrival_cov` read, so they cannot disagree.
+        has a `phi` a measurement changes. And only a station whose bound `phi`,
+        `sojourn_time` and `dT_dS` all accept a `cov_a` keyword (a parameter of that name,
+        or `**kwargs`) can be handed one: a measured station is called as `phi(S, cov_a=c)`
+        and `sojourn_time(S, cov_a=c)`, and GG1Station's `phi` forwards it to `dT_dS` and
+        `sojourn_time`. A subclass overriding one of them as `(self, S)` -- the extension
+        path `phi`'s docstring advertises -- inherits GG1Station's `reads_arrival_cov`, and
+        this check is what keeps it unmeasured and priced at its constructor `cov_a`,
+        rather than raising TypeError.
+
+        The one predicate both SimulationAnalyzer's request trigger and
+        `extract_arrival_cov` read, so they cannot disagree.
         """
-        return self.reads_arrival_cov and self._zeta_mode == ZETA_SLOPE
+        return (
+            self.reads_arrival_cov
+            and self._zeta_mode == ZETA_SLOPE
+            and all(_accepts_cov_a(m) for m in (self.phi, self.sojourn_time, self.dT_dS))
+        )
 
     @abstractmethod
     def sojourn_time(self, S):
@@ -306,9 +342,11 @@ class Station(ABC):
 
         Overridable: a user who knows the true arrival variability but cannot express it
         as a constructor `cov_a` should override this rather than reach for a new API --
-        on the analytic path, or with `SimulationAnalyzer(measure_cov_a=False)`; a
-        simulated run otherwise measures it. An override should accept `cov_a=None` if its
-        class sets `reads_arrival_cov`.
+        on the analytic path, or on a simulated one. A simulated run measures `cov_a` only
+        for a slope station whose `phi`, `sojourn_time` and `dT_dS` all accept `cov_a`
+        (see `uses_measured_cov_a`); an override written as `phi(self, S)` does not accept
+        it, so that station is not measured and keeps its constructor value. To have a
+        measurement passed in, accept `cov_a=None` and use it when it is not None.
 
         `cov_a` is a measured arrival coefficient of variation for ONE evaluation (see
         `reads_arrival_cov`). The base model has none to replace, so it is ignored here.

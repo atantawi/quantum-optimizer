@@ -149,8 +149,10 @@ floor is updated.
 ## 4. The station layer — `qopt/station.py`
 
 - New class attribute `Station.reads_arrival_cov = False`; `GG1Station.reads_arrival_cov = True`.
-- New property `Station.uses_measured_cov_a = reads_arrival_cov and zeta_mode == ZETA_SLOPE`: the
-  single predicate both the request trigger (§3.3) and the extraction (§3.2) read.
+- New property `Station.uses_measured_cov_a = reads_arrival_cov and zeta_mode == ZETA_SLOPE`, and
+  the station's bound `phi`, `sojourn_time` and `dT_dS` each accept a `cov_a` keyword (checked
+  with `inspect.signature`; see §7.3): the single predicate both the request trigger (§3.3) and
+  the extraction (§3.2) read.
 - `Station.phi(S, *, cov_a=None)`: the base implementation ignores `cov_a` (no base-class model
   reads one).
 - `Station.zeta_from(T, S, *, cov_a=None)`: the slope arm calls `self.phi(S, cov_a=cov_a)` when
@@ -217,9 +219,16 @@ the approximation's error, and its "no G/G/1 with cov != 1 in the evidence" cave
 2. **Seed policy.** Under the default `seed_policy="fixed"` (common random numbers) the measured
    SCV is a deterministic function of `S` and adds no iteration-to-iteration noise. Under
    `"vary"` it does, and that noise is not in the floor either.
-3. **Only `GG1Station` consumes it.** `ForkJoinStation`'s model has no arrival variability; a
-   user subclass opts in by setting `reads_arrival_cov = True` and accepting `cov_a` in `phi`
-   (and in `sojourn_time`, if it is to take part in the shape check).
+3. **Only `GG1Station` consumes it.** `ForkJoinStation`'s model has no arrival variability. The
+   opt-in `reads_arrival_cov = True` is set on `GG1Station`, so every `GG1Station` subclass
+   inherits it, including one written before the keyword existed (main's README advertised
+   overriding `phi(S)` on a subclass). What protects such a subclass is a signature check:
+   `uses_measured_cov_a` also requires the bound `phi`, `sojourn_time` and `dT_dS` to accept a
+   `cov_a` keyword (a parameter of that name, or `**kwargs`). A subclass that overrides any of
+   the three as `(self, S)` is therefore not measured: it is priced at its constructor `cov_a`
+   and its `arrival_cov` entry is `None`, as on main. A subclass of `Station` outside the
+   `GG1Station` tree opts in by setting `reads_arrival_cov = True` and accepting `cov_a` in all
+   three methods.
 
 ---
 
@@ -231,7 +240,7 @@ the approximation's error, and its "no G/G/1 with cov != 1 in the evidence" cave
 | `success=false` on the measure | used, flagged via `_flag_weak` |
 | qsim older than `8e7358b` | POST fails loudly; message names `measure_cov_a=False`; no silent retry |
 | `strict=True` | a degraded measurement raises, like any other degradation |
-| Old-signature `phi` / `sojourn_time` overrides | never called with the keyword unless the station declares `reads_arrival_cov` and a value was measured |
+| Old-signature `phi` / `sojourn_time` / `dT_dS` overrides | the station is not measured (the signature check in `uses_measured_cov_a`, §7.3), so it is never called with the keyword; priced at its constructor `cov_a`, `arrival_cov` entry `None` |
 
 ---
 
