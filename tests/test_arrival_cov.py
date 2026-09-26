@@ -288,7 +288,8 @@ from qopt.zeta import ZETA_SHAPE_TOL
 
 def _mismatched():
     # Constructor cov_a = 2 at cov_s = 0 (k = 2); measured 0 (k = 0). E[T] under the two
-    # differs by a factor 1 + 2*rho/(1-rho): far past the 25% tolerance at any load.
+    # differs by a factor 1 + 2*rho/(1-rho): far past the 25% tolerance at the loads these
+    # tests reach.
     return [
         GG1Station(0.6, 1.5, c=2.0, cov_a=2.0, cov_s=0.0, name="gg", zeta_mode=ZETA_SLOPE),
         GG1Station.mm1(1.2, 3.0, c=0.5, name="mm1"),
@@ -442,3 +443,22 @@ def test_an_old_signature_override_of_any_priced_method_opts_out():
     assert build(OldDerivative).uses_measured_cov_a is False  # ... that the signature vetoes
     assert build(Kwargs).uses_measured_cov_a is True
 
+
+# --- an all-None measurement is today's run --------------------------------------
+
+def test_an_all_none_measurement_reproduces_the_unmeasured_run():
+    # Spec §9: every Result field agrees except arrival_cov, which lists the Nones.
+    nones = Optimizer(_pair(), C, analyzer=CovFake(loop=[None, None]), **NAIVE).run()
+    unmeasured = Optimizer(_pair(), C, analyzer=CovFake(loop=None), **NAIVE).run()
+    assert nones.capacities == unmeasured.capacities
+    assert nones.zeta == unmeasured.zeta
+    assert nones.zeta_phi == unmeasured.zeta_phi
+    assert nones.objective == unmeasured.objective
+    assert nones.iterations == unmeasured.iterations
+    assert nones.arrival_cov == [None, None]
+    assert unmeasured.arrival_cov == []
+    # "Every field": the named five above are the ruling's; this backs the rest.
+    import dataclasses
+    others = [f.name for f in dataclasses.fields(nones) if f.name != "arrival_cov"]
+    assert len(others) > 5
+    assert [getattr(nones, n) for n in others] == [getattr(unmeasured, n) for n in others]

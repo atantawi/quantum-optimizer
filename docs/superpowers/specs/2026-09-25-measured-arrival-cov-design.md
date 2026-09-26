@@ -271,7 +271,8 @@ TDD. Every new test is mutation-checked by reverting the code it covers and watc
     evaluation — the fake returns a different value there than in the loop, so a mix-up shows;
   - the shape check uses the measured value and emits the new message; without a value it emits
     today's;
-  - an all-`None` `arrival_cov` reproduces today's `Result` exactly.
+  - an all-`None` `arrival_cov` reproduces today's `Result` in every field except
+    `arrival_cov`, which lists the Nones.
 - **Analytic path.** Existing suite green; one test asserts `Evaluation.arrival_cov is None` and
   an unchanged `Result` on the reference network.
 - **Live** (skips without `QOPT_QSIM_URL`; run with `run_in_background`):
