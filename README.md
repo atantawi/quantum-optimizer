@@ -117,8 +117,10 @@ live input: it is never sent to the simulator. **On a simulated run it is measur
 `SimulationAnalyzer` requests qsim-service's `interarrival-time` measure whenever the
 network has a slope-mode `GG1Station`, and prices each such station's `phi` at its
 measured `cov_a` for that evaluation (`Result.arrival_cov` reports the final one). That
-needs qsim-service `8e7358b` or later and costs roughly 25–30% wall clock;
-`SimulationAnalyzer(measure_cov_a=False)` turns it off. **On the analytic path, or with
+needs qsim-service `8e7358b` or later. qsim's measure list is network-wide, so the measure
+is taken at every station and its cost grows with network size: qsim-service quotes
+25–30% wall clock per measure, and qopt's own runs measured +35% on a 3-station network
+and about +50% on a 14-station one. `SimulationAnalyzer(measure_cov_a=False)` turns it off. **On the analytic path, or with
 measurement off,** `cov_a` must describe the arrival process the station *actually* sees,
 internal traffic included. **When it is unknown, the
 assumption that forfeits the gain rather than

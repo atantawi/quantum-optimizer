@@ -24,6 +24,8 @@ JMT's is on the rate; it switches on JMT's per-sample logging for itself alone, 
 25-30% wall clock plus temporary disk -- which is why `secondMoments` is never sent, since
 that would put every other measure on the same cost; and on a fork-join node it is taken
 at the fork. A service older than 8e7358b rejects it as an unsupported measure type.
+qsim's measure list applies network-wide, so this is taken at every station and its cost
+is per station: it grows with network size (see SimulationAnalyzer for qopt's figures).
 """
 
 

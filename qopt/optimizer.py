@@ -365,13 +365,15 @@ class Optimizer:
             # CI HALF-WIDTH in the T position -- a shape check inside it would compare a
             # half-width against a sojourn time and fire on every stochastic iteration.
             #
-            # Warned once per station: the cause is a constructor argument and cannot
-            # heal between iterations. Vacuous on the analytic path, where `evaluate`
-            # returns this same `sojourn_time` at this same S. On a stochastic path,
-            # though, an early noisy measurement can push a station whose model is fine
-            # past the tolerance -- warn-once then makes that flag stick for the rest of
-            # the run, which is part of why the flag is advisory and kept out of
-            # `degraded` rather than treated as a hard quality signal.
+            # Warned once per station. For an unmeasured station the suspected cause is a
+            # constructor argument, which cannot heal between iterations. Vacuous on the
+            # analytic path, where `evaluate` returns this same `sojourn_time` at this
+            # same S. On a stochastic path, though, an early noisy E[T] can push a station
+            # whose model is fine past the tolerance, and for a measured station the
+            # measured cov_a the model is evaluated at is noisy too, so a flag can be
+            # transient. Warn-once then makes that transient flag stick for the rest of the
+            # run, which is part of why the flag is advisory and kept out of `degraded`
+            # rather than treated as a hard quality signal.
             if self.zeta_shape_tol is not None:
                 for st, T, Si, c in zip(stations, evaluation.sojourn_times, S, arrival_cov):
                     if st.zeta_mode != ZETA_SLOPE or id(st) in shape_checked:

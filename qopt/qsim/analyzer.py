@@ -29,7 +29,10 @@ class SimulationAnalyzer(Analyzer):
     `measure_cov_a=True` asks qsim for each slope G/G/1 station's interarrival moments
     whenever the network has one (`Station.uses_measured_cov_a`), so `phi` prices the
     arrival variability the station actually sees rather than its constructor `cov_a`. It
-    costs roughly 25-30% wall clock and needs qsim-service 8e7358b+; False sends exactly
+    needs qsim-service 8e7358b+. The measure list is network-wide, so the measure is taken
+    at every station, not only at the ones that use it, and its cost grows with network
+    size: qsim-service quotes 25-30% wall clock per measure, and qopt's own runs measured
+    +35% on a 3-station network and about +50% on a 14-station one. False sends exactly
     the pre-measurement request and prices every station at its constructor `cov_a`.
     """
 

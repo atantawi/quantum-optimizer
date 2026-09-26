@@ -88,8 +88,11 @@ calls it does today.
 - `MEASURES` is unchanged.
 - New constant `COV_A_MEASURE = "interarrival-time"`, documented with the qsim-service README
   facts it relies on: the measure turns on JMT's per-sample logging for itself (≈25–30% wall
-  clock and temp disk), reports `mean`/`variance`/`stdDev`, reports **no CI** (JMT's interval is
-  on the rate), and on a fork-join node is measured at the fork.
+  clock and temp disk per measure, in qsim-service's README), reports `mean`/`variance`/`stdDev`,
+  reports **no CI** (JMT's interval is on the rate), and on a fork-join node is measured at the
+  fork. The measure list is network-wide, so the measure is taken at every station, not only at
+  the ones that use it, and its cost grows with network size: qopt's own runs at a fixed seed
+  measured +35% wall clock on a 3-station network and about +50% on a 14-station one.
 - `build_request` keeps its signature; the analyzer passes the extended tuple.
 - `secondMoments: true` is **never** sent. `interarrival-time` enables sample logging for itself
   alone; the flag would put every other measure on the logging cost too.
