@@ -114,12 +114,13 @@ This is a deliberate divergence from eq 22, not an amendment to it — see
 station's *analytic* model even when `E[T]` is measured, which is what keeps the simulator
 in control of the allocation's level. That promotes `cov_a` from nearly decorative to a
 live input: it is never sent to the simulator. **On a simulated run it is measured back**:
-`SimulationAnalyzer` asks qsim-service for each slope-mode `GG1Station`'s interarrival
-moments and prices `phi` at the measured `cov_a` for that evaluation
-(`Result.arrival_cov` reports the final one). That needs qsim-service `8e7358b` or later
-and costs roughly 25–30% wall clock; `SimulationAnalyzer(measure_cov_a=False)` turns it
-off. **On the analytic path, or with measurement off,** `cov_a` must describe the arrival
-process the station *actually* sees, internal traffic included. **When it is unknown, the
+`SimulationAnalyzer` requests qsim-service's `interarrival-time` measure whenever the
+network has a slope-mode `GG1Station`, and prices each such station's `phi` at its
+measured `cov_a` for that evaluation (`Result.arrival_cov` reports the final one). That
+needs qsim-service `8e7358b` or later and costs roughly 25–30% wall clock;
+`SimulationAnalyzer(measure_cov_a=False)` turns it off. **On the analytic path, or with
+measurement off,** `cov_a` must describe the arrival process the station *actually* sees,
+internal traffic included. **When it is unknown, the
 assumption that forfeits the gain rather than
 overshooting past it is the one that reproduces level calibration** — and that is *not*
 `cov_a = 1` in general. φ depends on the two coefficients of variation only through

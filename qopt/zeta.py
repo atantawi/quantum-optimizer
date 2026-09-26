@@ -23,7 +23,8 @@ This is a deliberate divergence from eq 22, not an amendment to it -- the paper 
 unchanged. See docs/slope-calibrated-zeta/findings.md for the derivation, the measured
 payoff, and why the SIMULATED path needs phi from the analytic model while E[T] stays
 measured. On that path cov_a is measured too (qsim-service interarrival-time, spec
-2026-09-25), so phi's model sees the arrival variability each station actually gets.
+2026-09-25), so phi's model sees the arrival variability each slope-mode G/G/1 station
+actually gets.
 """
 
 ZETA_LEVEL = "level"
