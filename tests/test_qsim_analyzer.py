@@ -319,11 +319,6 @@ def test_the_strict_preflight_is_declared_as_this_analyzers_domain(sim_response)
         == [1.0 / dd.gamma]
 
 
-# The canned E[T] is not dd's model at cov_a = 1, so the realistic measurement below draws a
-# shape flag, and the loop over a constant response stops just short of tol. Neither is what
-# this test is about; both are filtered by message so any other warning still surfaces.
-@pytest.mark.filterwarnings("ignore:station 'dd'.*disagrees with its analytic model")
-@pytest.mark.filterwarnings("ignore:Optimizer did not converge")
 def test_a_default_simulated_run_reaches_the_post_on_a_boundary_optimum(sim_response):
     """The reported failure, end to end: `Optimizer(..., analyzer=SimulationAnalyzer(...))`.
 
@@ -356,12 +351,14 @@ def test_a_default_simulated_run_reaches_the_post_on_a_boundary_optimum(sim_resp
         sojourn={"dd": 1.7, "mm": 0.9}, throughput={"dd": 0.6, "mm": 1.2},
         system=2.6, model_name="boundary-net",
     )
-    # dd is zeta_mode=ZETA_SLOPE, so it now requests interarrival-time too. The network
-    # feeds dd a Bernoulli split of a Poisson source, so its arrivals are Poisson: mean
-    # 1/gamma (gamma=0.6) with variance mean**2, i.e. a measured cov_a of 1. That differs
-    # from dd's constructor cov_a=0.0, which moves phi and so the later iterates, but not
-    # what this test asserts: the first POST is sent before any measurement exists.
-    response = _with_interarrival(response, dd=(1 / 0.6, (1 / 0.6) ** 2))
+    # dd is zeta_mode=ZETA_SLOPE, so it now requests interarrival-time too. Variance 0 is
+    # chosen to make the measurement INERT -- measured cov_a 0.0 equals dd's constructor
+    # cov_a -- not because qsim would report it: the network feeds dd a Bernoulli split of
+    # a Poisson source, so a real run would measure about 1. This stub already returns one
+    # E[T] at every capacity, which no simulator does, and what the test asserts is the
+    # first POST, sent before any measurement exists. A cov_a of 1 here would only put a
+    # shape flag and a non-convergence warning on a constant stub.
+    response = _with_interarrival(response, dd=(1 / 0.6, 0.0))
     analyzer, transport = _analyzer(network, response)
     with pytest.warns(RuntimeWarning, match="warm start"):
         result = Optimizer(network.stations, C, analyzer=analyzer).run()
