@@ -91,7 +91,7 @@ computes `E[T]·(Sμ − γ)` in exactly today's operations and order, so a run 
 `|φ − 1|`: 0.0002–0.039% where only fork-join stations deviate, up to 0.515% once
 single-server stations are not M/M/1, and 1.59% on the stress network of
 `docs/slope-calibrated-zeta/findings.md` §6. `Result.zeta` is the ζ implied by the
-*reported* `E[T]` at the converged capacities — on a stochastic run that means the
+*reported* `E[T]`, at the capacity that evaluation ran at — on a stochastic run that means the
 fresh-seed FINAL evaluation, a different sample path from the CRN iterate that actually set
 those capacities, and the last loop iterate only when `final_evaluation=False` suppresses
 that run. That iterate was measured before the loop's final step, so with

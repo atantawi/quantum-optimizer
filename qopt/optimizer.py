@@ -78,7 +78,8 @@ class Result:
     is that analyzer's optimum. The refused vector is the one named in the warning -- each
     station it lists at exactly its own `gamma/mu` -- and is NOT `zeta` re-run through eq 21:
     `zeta` is recomputed from the final evaluation (see `Result.zeta` in the README), which on
-    a stochastic path is a different sample from the one that caused the stop.
+    a stochastic path is a different sample from the one that caused the stop -- unless
+    `final_evaluation=False`, when it is the loop's own zeta from that same sample.
     See `Optimizer._refused_by_analyzer`.
     """
     warm_start_iterations: int = 0     # analytic iterations before the simulated phase
@@ -122,13 +123,13 @@ class Result:
     runs whose simulation was fine. See `Optimizer.zeta_shape_tol`.
     """
     arrival_cov: list = field(default_factory=list)
-    """Per-station arrival cov_a MEASURED by the evaluation `zeta` was recomputed from, or
+    """Per-station arrival cov_a MEASURED by the evaluation `zeta` was priced from, or
     None where that station was priced at its constructor cov_a -- it uses no measurement
     (`Station.uses_measured_cov_a`), or its measurement was unusable. Empty when nothing was
     measured: the analytic path, `measure_cov_a=False`, or no station that uses one.
 
-    Like `zeta`, it comes from the FINAL evaluation, which on a stochastic path is a
-    different sample from the loop iterate that set the capacities: it describes the
+    Like `zeta`, it comes by default from the FINAL evaluation, which on a stochastic path
+    is a different sample from the loop iterate that set the capacities: it describes the
     reported zeta, not the trajectory.
 
     With `final_evaluation=False` the reported evaluation is the last LOOP one, taken at
@@ -596,7 +597,8 @@ class Optimizer:
                 f"LOOP measured put it there. Returned capacities are the last vector this "
                 f"analyzer did evaluate; result.zeta is recomputed at those capacities from "
                 f"the final evaluation, so on a stochastic path it comes from a different "
-                f"sample path and re-running eq 21 on it need not reach the boundary again. "
+                f"sample path and re-running eq 21 on it need not reach the boundary again "
+                f"(with final_evaluation=False it is instead the loop's own zeta). "
                 f"The refused point itself is fully named above: each station listed sits at "
                 f"exactly its own gamma/mu.",
                 RuntimeWarning,
