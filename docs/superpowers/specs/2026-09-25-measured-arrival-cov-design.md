@@ -186,13 +186,19 @@ four places that read `phi`, each time with the evaluation whose `E[T]` is being
    position and relies on `zeta_from` being linear in `T`; that holds only if the half-width goes
    through the **same** map, i.e. the same override;
 3. the shape check (§6);
-4. the final `zeta` and `zeta_phi` recomputation.
+4. the final `zeta` and `zeta_phi` recomputation. With `final_evaluation=False` there is no
+   recomputation: the reported evaluation is the last loop one, taken before the final step, so
+   the loop keeps the `zeta` and `phi` it priced from it — at the capacity it measured and under
+   the station state it ran under — and `Result` reports those (PR #28 review, `d20642e`).
 
 New `Result.arrival_cov`: per-station measured `cov_a` that produced the reported `zeta`, `None`
 where the constructor value was used, and an empty list when nothing was measured (matching how
-the other defaulted diagnostic lists are constructed). Like `Result.zeta` it comes from the
-**final** evaluation, which on a stochastic path is a different sample from the loop iterate that
-set the capacities — the round-6 scoping rule, stated in the field's docstring.
+the other defaulted diagnostic lists are constructed). Like `Result.zeta` it comes by default
+from the **final** evaluation, which on a stochastic path is a different sample from the loop
+iterate that set the capacities — the round-6 scoping rule, stated in the field's docstring. With
+`final_evaluation=False` it, `sojourn_times`, `zeta` and `zeta_phi` all describe the last loop
+evaluation's capacity, which differs from `Result.capacities` by the final step except on the
+analyzer-domain stop.
 
 ---
 
