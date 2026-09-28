@@ -462,3 +462,49 @@ def test_an_all_none_measurement_reproduces_the_unmeasured_run():
     others = [f.name for f in dataclasses.fields(nones) if f.name != "arrival_cov"]
     assert len(others) > 5
     assert [getattr(nones, n) for n in others] == [getattr(unmeasured, n) for n in others]
+
+
+# --- final_evaluation=False pairs zeta with the capacity it was measured at ----
+
+def test_without_a_final_evaluation_zeta_is_priced_where_it_was_measured():
+    # final_evaluation=False reports the last LOOP evaluation, which was measured at the
+    # iterate BEFORE the final step. Its T and cov_a are functions of that capacity, so
+    # zeta and phi must be priced there too -- not at the stepped `capacities`.
+    fake = CovFake(script=[[0.3, None], [0.8, None]])
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        res = Optimizer(_pair(), C, analyzer=fake, final_evaluation=False,
+                        **dict(NAIVE, max_iter=2, damping=0.5)).run()
+    st, S_eval = _pair(), fake.seen[-1]
+    assert res.capacities != S_eval                      # a real final step was taken
+    assert res.arrival_cov == [0.8, None]
+    assert res.zeta == [st[0].zeta_from(res.sojourn_times[0], S_eval[0], cov_a=0.8),
+                        st[1].zeta_from(res.sojourn_times[1], S_eval[1])]
+    assert res.zeta_phi == [st[0].phi(S_eval[0], cov_a=0.8), st[1].phi(S_eval[1])]
+
+
+def test_without_a_final_evaluation_zeta_reads_the_station_state_it_was_measured_under():
+    # A tuned fork-join is retuned at the bottom of every iteration, AFTER its evaluation.
+    # Pricing the reported zeta at the evaluated capacity but under the retuned ray would
+    # pair the measurement with a station it was not taken on.
+    from qopt.forkjoin_policy import R_STAR_TUNED
+
+    def stations():
+        return _pair() + [ForkJoinStation(0.5, 1.0, r=2.0, c1=1.0, c2=1.0, name="fj",
+                                          r_star=R_STAR_TUNED, zeta_mode=ZETA_SLOPE)]
+
+    class StateFake(CovFake):
+        def evaluate(self, stations, S, *, fresh_seed=False):
+            self.states = [s.policy_state() for s in stations]
+            return super().evaluate(stations, S, fresh_seed=fresh_seed)
+
+    budget = 2.0 * min_feasible_budget(stations())
+    fake = StateFake(loop=[0.3, None, None])
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        res = Optimizer(stations(), budget, analyzer=fake, final_evaluation=False,
+                        **dict(NAIVE, max_iter=2, damping=0.5)).run()
+    ref = stations()
+    for s, state in zip(ref, fake.states):
+        s.restore_policy(state)
+    S_eval = fake.seen[-1]
+    assert res.zeta[2] == ref[2].zeta_from(res.sojourn_times[2], S_eval[2])
+    assert res.zeta_phi[2] == ref[2].phi(S_eval[2])

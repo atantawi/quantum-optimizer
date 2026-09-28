@@ -130,6 +130,13 @@ class Result:
     Like `zeta`, it comes from the FINAL evaluation, which on a stochastic path is a
     different sample from the loop iterate that set the capacities: it describes the
     reported zeta, not the trajectory.
+
+    With `final_evaluation=False` the reported evaluation is the last LOOP one, taken at
+    the iterate before the final step. `sojourn_times`, `zeta`, `zeta_phi` and this field
+    then all describe that evaluated capacity and the station state it ran under -- `zeta`
+    and `zeta_phi` are the values the loop priced from it -- while `capacities` is the
+    stepped vector, so the two differ by that last step. On the analyzer-domain path they
+    coincide, because `capacities` is rolled back to it.
     """
 
 
@@ -326,6 +333,9 @@ class Optimizer:
 
         S_accepted = None      # last capacity vector the analyzer actually evaluated
         policy_accepted = None  # ...and the station state it was evaluated under
+        # Only a run that may report a LOOP evaluation needs that evaluation's own zeta/phi.
+        keep_loop_zeta = stochastic and not self.final_evaluation
+        zeta_evaluated = zeta_phi_evaluated = None
 
         for _ in range(self.max_iter):
             # Eq 21 answers against the analytic domain, so an iterate can walk onto a
@@ -420,6 +430,16 @@ class Optimizer:
                 _zeta_from(st, T, Si, c)
                 for st, T, Si, c in zip(stations, evaluation.sojourn_times, S, arrival_cov)
             ]                                                    # eq 22
+            if keep_loop_zeta:
+                # This evaluation may be the one `Result` reports (final_evaluation=False),
+                # so keep its zeta and phi as priced HERE: at the capacity it measured and
+                # under the station state it was measured under, both of which the step and
+                # the retune below are about to move.
+                zeta_evaluated = zeta
+                zeta_phi_evaluated = [
+                    _phi(st, Si, c) if st.zeta_mode == ZETA_SLOPE else 1.0
+                    for st, Si, c in zip(stations, S, arrival_cov)
+                ]
             S_target = allocate(stations, self.budget, zeta)      # eq 21
 
             floor = self._noise_floor(stations, S, zeta, evaluation.ci, arrival_cov)
@@ -583,6 +603,7 @@ class Optimizer:
                 stacklevel=2,
             )
 
+        reported_loop_evaluation = False
         if stochastic:
             if self.final_evaluation or evaluation is None:
                 # One more run at the converged S* with a fresh seed: those numbers are
@@ -590,28 +611,38 @@ class Optimizer:
                 evaluation = self.analyzer.evaluate(stations, S, fresh_seed=True)
                 sim_calls += 1
                 degraded.extend(evaluation.degraded)
-            # Otherwise the last loop iterate's numbers are reported as-is, which is what
-            # final_evaluation=False asks for. They were measured at the pre-damping S.
+            else:
+                # The last loop iterate's numbers are reported as-is, which is what
+                # final_evaluation=False asks for. They were measured at `S_accepted`,
+                # the iterate BEFORE the final step (the same vector on the
+                # analyzer-domain path, which rolled `S` back to it).
+                reported_loop_evaluation = True
         else:
             evaluation = self.analyzer.evaluate(stations, S)
 
         sojourn_times = list(evaluation.sojourn_times)
         arrival_cov = _measured(evaluation, len(stations))
-        zeta = [
-            _zeta_from(st, T, Si, c)
-            for st, T, Si, c in zip(stations, sojourn_times, S, arrival_cov)
-        ]
-        # Recomputed HERE rather than captured in the loop: this runs after the last
-        # retune -- or, on the analyzer-domain path, after the rollback that undid the
-        # retune belonging to the refused candidate -- at the same S and the same station
-        # state as the zeta_from call above, so it is the phi that produced the reported
-        # zeta bit-for-bit. A level station reports the literal 1.0 -- no derivative is
-        # evaluated on the default path. The measured cov_a is this same final
-        # evaluation's, for the same reason.
-        zeta_phi = [
-            _phi(st, Si, c) if st.zeta_mode == ZETA_SLOPE else 1.0
-            for st, Si, c in zip(stations, S, arrival_cov)
-        ]
+        if reported_loop_evaluation:
+            # Reusing a loop evaluation means reusing the zeta and phi the loop priced
+            # from it. Recomputing them here would pair that evaluation's E[T] and
+            # measured cov_a -- both functions of capacity -- with the STEPPED `S`, and
+            # with the station state after the last retune: a zeta no evaluation produced.
+            zeta, zeta_phi = list(zeta_evaluated), list(zeta_phi_evaluated)
+        else:
+            zeta = [
+                _zeta_from(st, T, Si, c)
+                for st, T, Si, c in zip(stations, sojourn_times, S, arrival_cov)
+            ]
+            # Recomputed HERE rather than captured in the loop: the final evaluation ran
+            # at this S after the last retune, so this is the same S and the same
+            # station state as the zeta_from call above -- the phi that produced the
+            # reported zeta bit-for-bit. A level station reports the literal 1.0 -- no
+            # derivative is evaluated on the default path. The measured cov_a is this
+            # same final evaluation's, for the same reason.
+            zeta_phi = [
+                _phi(st, Si, c) if st.zeta_mode == ZETA_SLOPE else 1.0
+                for st, Si, c in zip(stations, S, arrival_cov)
+            ]
         zeta_mode = [st.zeta_mode for st in stations]
         objective = sum(st.weight * T for st, T in zip(stations, sojourn_times))
 
