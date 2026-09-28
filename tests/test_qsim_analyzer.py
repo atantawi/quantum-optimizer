@@ -351,6 +351,14 @@ def test_a_default_simulated_run_reaches_the_post_on_a_boundary_optimum(sim_resp
         sojourn={"dd": 1.7, "mm": 0.9}, throughput={"dd": 0.6, "mm": 1.2},
         system=2.6, model_name="boundary-net",
     )
+    # dd is zeta_mode=ZETA_SLOPE, so it now requests interarrival-time too. Variance 0 is
+    # chosen to make the measurement INERT -- measured cov_a 0.0 equals dd's constructor
+    # cov_a -- not because qsim would report it: the network feeds dd a Bernoulli split of
+    # a Poisson source, so a real run would measure about 1. This stub already returns one
+    # E[T] at every capacity, which no simulator does, and what the test asserts is the
+    # first POST, sent before any measurement exists. A cov_a of 1 here would only put a
+    # shape flag and a non-convergence warning on a constant stub.
+    response = _with_interarrival(response, dd=(1 / 0.6, 0.0))
     analyzer, transport = _analyzer(network, response)
     with pytest.warns(RuntimeWarning, match="warm start"):
         result = Optimizer(network.stations, C, analyzer=analyzer).run()
@@ -361,3 +369,108 @@ def test_a_default_simulated_run_reaches_the_post_on_a_boundary_optimum(sim_resp
     assert rate["value"] != 1.0 / 0.6              # not the warm start's saturated rate
     assert result.warm_start_iterations == 0
     assert result.sim_calls == len(transport.requests) > 0
+
+
+# --- measured arrival cov_a (spec 2026-09-25 §3.3) ------------------------------
+
+from qopt.exceptions import SimulationRequestError
+from qopt.qsim.spec import COV_A_MEASURE, MEASURES
+from qopt.zeta import ZETA_LEVEL
+
+
+def _slope_network(md1_mode=ZETA_SLOPE, fj_mode=ZETA_LEVEL):
+    stations = [
+        GG1Station.mm1(mu=1.0, c=2.0, name="mm1"),
+        GG1Station.md1(mu=1.0, c=1.0, name="md1", zeta_mode=md1_mode),
+        ForkJoinStation(mu=1.0, r=2.0, c1=1.0, c2=1.0, name="fj", zeta_mode=fj_mode),
+    ]
+    routes = [
+        Route(Network.SOURCE, "mm1", 0.6), Route(Network.SOURCE, "md1", 0.4),
+        Route("mm1", "fj", 0.5), Route("mm1", Network.SINK, 0.5),
+        Route("md1", "fj", 0.5), Route("md1", Network.SINK, 0.5),
+        Route("fj", Network.SINK, 1.0),
+    ]
+    return Network(stations, routes, arrival_rate=1.0, name="qopt-mixed-network")
+
+
+def _ia_entry(station, mean, variance):
+    return {"station": station, "class": "jobs", "type": COV_A_MEASURE,
+             "mean": mean, "lower": None, "upper": None, "success": True,
+             "variance": variance, "stdDev": variance ** 0.5}
+
+
+def _with_interarrival(response, **by_station):
+    response = dict(response)
+    response["measures"] = response["measures"] + [
+        _ia_entry(name, mean, var) for name, (mean, var) in by_station.items()
+    ]
+    return response
+
+
+def test_a_network_with_no_slope_gg1_sends_todays_request(sim_response):
+    network = _network()                                  # every station level
+    analyzer, transport = _analyzer(network, _healthy(sim_response))
+    ev = analyzer.evaluate(network.stations, S_OK)
+    assert transport.requests[0]["measures"] == list(MEASURES)
+    assert "secondMoments" not in transport.requests[0]
+    assert ev.arrival_cov is None
+
+
+def test_a_slope_fork_join_alone_does_not_trigger_the_measure(sim_response):
+    network = _slope_network(md1_mode=ZETA_LEVEL, fj_mode=ZETA_SLOPE)
+    analyzer, transport = _analyzer(network, _healthy(sim_response))
+    analyzer.evaluate(network.stations, S_OK)
+    assert transport.requests[0]["measures"] == list(MEASURES)
+
+
+def test_a_slope_gg1_adds_interarrival_time_and_nothing_else(sim_response):
+    network = _slope_network()
+    response = _with_interarrival(_healthy(sim_response), md1=(2.5, 1.5625))
+    analyzer, transport = _analyzer(network, response)
+    ev = analyzer.evaluate(network.stations, S_OK)
+    assert transport.requests[0]["measures"] == list(MEASURES) + [COV_A_MEASURE]
+    assert "secondMoments" not in transport.requests[0]
+    assert ev.arrival_cov == [None, 0.5, None]            # sqrt(1.5625 / 2.5**2)
+    assert ev.degraded == []
+
+
+def test_measure_cov_a_false_restores_todays_request(sim_response):
+    network = _slope_network()
+    analyzer, transport = _analyzer(network, _healthy(sim_response), measure_cov_a=False)
+    ev = analyzer.evaluate(network.stations, S_OK)
+    assert transport.requests[0]["measures"] == list(MEASURES)
+    assert ev.arrival_cov is None
+
+
+def test_a_missing_measurement_degrades_and_strict_raises(sim_response):
+    network = _slope_network()
+    analyzer, _ = _analyzer(network, _healthy(sim_response))      # no interarrival entry
+    with pytest.warns(RuntimeWarning, match="md1"):
+        ev = analyzer.evaluate(network.stations, S_OK)
+    assert ev.arrival_cov == [None, None, None]
+    assert any("md1" in d and "constructor cov_a" in d for d in ev.degraded)
+
+    strict, _ = _analyzer(network, _healthy(sim_response), strict=True)
+    with pytest.warns(RuntimeWarning), pytest.raises(SimulationQualityError, match="md1"):
+        strict.evaluate(network.stations, S_OK)
+
+
+_OLD_SERVICE = (400, {"error": "invalid request", "details": [
+    "unsupported measure type: 'interarrival-time'; supported: [response-time, throughput]"
+]})
+
+
+def test_an_old_service_names_the_opt_out():
+    network = _slope_network()
+    client = QsimClient("http://qsim.test", transport=FakeTransport(_OLD_SERVICE))
+    with pytest.raises(SimulationRequestError, match=r"measure_cov_a=False"):
+        SimulationAnalyzer(network, client).evaluate(network.stations, S_OK)
+
+
+def test_an_unrelated_request_error_gets_no_version_hint():
+    network = _slope_network()
+    other = (400, {"error": "invalid request", "details": ["node name 'x y' is unsafe"]})
+    client = QsimClient("http://qsim.test", transport=FakeTransport(other))
+    with pytest.raises(SimulationRequestError) as info:
+        SimulationAnalyzer(network, client).evaluate(network.stations, S_OK)
+    assert "measure_cov_a" not in str(info.value)

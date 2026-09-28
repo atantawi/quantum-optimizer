@@ -15,6 +15,26 @@ from qopt.network import Network
 from qopt.zeta import ZETA_SHAPE_TOL, ZETA_SLOPE
 
 
+def _measured(evaluation, n):
+    """Per-station measured cov_a from `evaluation`, or n Nones when it measured nothing.
+
+    Read from THE evaluation whose E[T] is being inverted, every time -- never carried
+    over from an earlier one, because a downstream station's true cov_a moves with S.
+    """
+    return [None] * n if evaluation.arrival_cov is None else list(evaluation.arrival_cov)
+
+
+def _zeta_from(st, T, S, cov_a):
+    """`st.zeta_from`, passing `cov_a` only when one was measured, so a station type whose
+    `zeta_from` predates the keyword keeps working wherever nothing is measured."""
+    return st.zeta_from(T, S) if cov_a is None else st.zeta_from(T, S, cov_a=cov_a)
+
+
+def _phi(st, S, cov_a):
+    """`st.phi`, under the same rule as `_zeta_from`."""
+    return st.phi(S) if cov_a is None else st.phi(S, cov_a=cov_a)
+
+
 @dataclass
 class Result:
     """Outcome of an optimization run (lists aligned to the station order)."""
@@ -58,7 +78,8 @@ class Result:
     is that analyzer's optimum. The refused vector is the one named in the warning -- each
     station it lists at exactly its own `gamma/mu` -- and is NOT `zeta` re-run through eq 21:
     `zeta` is recomputed from the final evaluation (see `Result.zeta` in the README), which on
-    a stochastic path is a different sample from the one that caused the stop.
+    a stochastic path is a different sample from the one that caused the stop -- unless
+    `final_evaluation=False`, when it is the loop's own zeta from that same sample.
     See `Optimizer._refused_by_analyzer`.
     """
     warm_start_iterations: int = 0     # analytic iterations before the simulated phase
@@ -100,6 +121,23 @@ class Result:
     A MODEL-SPECIFICATION signal, kept out of `degraded` deliberately: `degraded` is the
     simulation-quality audit and `strict=True` raises on any entry, which would abort
     runs whose simulation was fine. See `Optimizer.zeta_shape_tol`.
+    """
+    arrival_cov: list = field(default_factory=list)
+    """Per-station arrival cov_a MEASURED by the evaluation `zeta` was priced from, or
+    None where that station was priced at its constructor cov_a -- it uses no measurement
+    (`Station.uses_measured_cov_a`), or its measurement was unusable. Empty when nothing was
+    measured: the analytic path, `measure_cov_a=False`, or no station that uses one.
+
+    Like `zeta`, it comes by default from the FINAL evaluation, which on a stochastic path
+    is a different sample from the loop iterate that set the capacities: it describes the
+    reported zeta, not the trajectory.
+
+    With `final_evaluation=False` the reported evaluation is the last LOOP one, taken at
+    the iterate before the final step. `sojourn_times`, `zeta`, `zeta_phi` and this field
+    then all describe that evaluated capacity and the station state it ran under -- `zeta`
+    and `zeta_phi` are the values the loop priced from it -- while `capacities` is the
+    stepped vector, so the two differ by that last step. On the analyzer-domain path they
+    coincide, because `capacities` is rolled back to it.
     """
 
 
@@ -296,6 +334,9 @@ class Optimizer:
 
         S_accepted = None      # last capacity vector the analyzer actually evaluated
         policy_accepted = None  # ...and the station state it was evaluated under
+        # Only a run that may report a LOOP evaluation needs that evaluation's own zeta/phi.
+        keep_loop_zeta = stochastic and not self.final_evaluation
+        zeta_evaluated = zeta_phi_evaluated = None
 
         for _ in range(self.max_iter):
             # Eq 21 answers against the analytic domain, so an iterate can walk onto a
@@ -315,6 +356,7 @@ class Optimizer:
             # without a free parameter.
             S_accepted = list(S)
             policy_accepted = [st.policy_state() for st in stations]
+            arrival_cov = _measured(evaluation, len(stations))
             if stochastic:
                 sim_calls += 1
             degraded.extend(evaluation.degraded)
@@ -326,52 +368,82 @@ class Optimizer:
             # symptom of its own. Comparing the two E[T] values tests exactly that
             # assumption, costs one analytic evaluation, and AMPLIFIES what it detects:
             # a 24% error in phi shows up as a 268% error in E[T].
+            # When the analyzer measured this station's cov_a, the model is evaluated AT
+            # the measurement, so the check then tests the approximation's shape rather
+            # than the constructor argument.
             #
             # Here and not in `zeta_from`, because `_noise_floor` calls that hook with a
             # CI HALF-WIDTH in the T position -- a shape check inside it would compare a
             # half-width against a sojourn time and fire on every stochastic iteration.
             #
-            # Warned once per station: the cause is a constructor argument and cannot
-            # heal between iterations. Vacuous on the analytic path, where `evaluate`
-            # returns this same `sojourn_time` at this same S. On a stochastic path,
-            # though, an early noisy measurement can push a station whose model is fine
-            # past the tolerance -- warn-once then makes that flag stick for the rest of
-            # the run, which is part of why the flag is advisory and kept out of
-            # `degraded` rather than treated as a hard quality signal.
+            # Warned once per station. For an unmeasured station the suspected cause is a
+            # constructor argument, which cannot heal between iterations. Vacuous on the
+            # analytic path, where `evaluate` returns this same `sojourn_time` at this
+            # same S. On a stochastic path, though, an early noisy E[T] can push a station
+            # whose model is fine past the tolerance, and for a measured station the
+            # measured cov_a the model is evaluated at is noisy too, so a flag can be
+            # transient. Warn-once then makes that transient flag stick for the rest of the
+            # run, which is part of why the flag is advisory and kept out of `degraded`
+            # rather than treated as a hard quality signal.
             if self.zeta_shape_tol is not None:
-                for st, T, Si in zip(stations, evaluation.sojourn_times, S):
+                for st, T, Si, c in zip(stations, evaluation.sojourn_times, S, arrival_cov):
                     if st.zeta_mode != ZETA_SLOPE or id(st) in shape_checked:
                         continue
-                    T_model = st.sojourn_time(Si)
+                    T_model = (st.sojourn_time(Si) if c is None
+                               else st.sojourn_time(Si, cov_a=c))
                     if abs(T / T_model - 1.0) > self.zeta_shape_tol:
                         # Mark on FLAG, not on check: an unflagged slope station is
                         # re-examined every iteration, because on a stochastic path one
                         # can cross the tolerance only on a later iterate and must still
                         # be reported. Hoisting this above the `if` would silence those.
                         shape_checked.add(id(st))
-                        message = (
-                            f"station {st.name!r}: measured E[T]={T:g} disagrees with "
-                            f"its analytic model's {T_model:g} by "
-                            f"{abs(T / T_model - 1.0) * 100:.1f}%, above "
-                            f"zeta_shape_tol={self.zeta_shape_tol:g}. Slope-calibrated "
-                            f"zeta takes the SHAPE of E[T] from that model, so check the "
-                            f"station's parameters -- most often cov_a, which is never "
-                            f"sent to the simulator and must describe the arrival process "
-                            f"the station actually sees, internal traffic included. "
-                            f"When it is unknown, the assumption that reproduces level "
-                            f"calibration is cov_a**2 + cov_s**2 == 2 -- which is cov_a=1 "
-                            f"only for cov_s=1."
-                        )
+                        disagreement = abs(T / T_model - 1.0) * 100
+                        if c is None:
+                            message = (
+                                f"station {st.name!r}: measured E[T]={T:g} disagrees with "
+                                f"its analytic model's {T_model:g} by "
+                                f"{disagreement:.1f}%, above "
+                                f"zeta_shape_tol={self.zeta_shape_tol:g}. Slope-calibrated "
+                                f"zeta takes the SHAPE of E[T] from that model, so check the "
+                                f"station's parameters -- most often cov_a, which is never "
+                                f"sent to the simulator and must describe the arrival process "
+                                f"the station actually sees, internal traffic included. "
+                                f"When it is unknown, the assumption that reproduces level "
+                                f"calibration is cov_a**2 + cov_s**2 == 2 -- which is cov_a=1 "
+                                f"only for cov_s=1."
+                            )
+                        else:
+                            message = (
+                                f"station {st.name!r}: measured E[T]={T:g} disagrees with "
+                                f"its analytic model's {T_model:g} at the measured arrival "
+                                f"cov_a={c:g} by {disagreement:.1f}%, above "
+                                f"zeta_shape_tol={self.zeta_shape_tol:g}. The arrival "
+                                f"variability is measured here, not assumed, so the "
+                                f"disagreement is either in the model's shape -- the G/G/1 "
+                                f"approximation at this load, from which slope-calibrated "
+                                f"zeta takes its phi -- or, on a stochastic run, sampling "
+                                f"noise in this evaluation's E[T] or measured cov_a."
+                            )
                         zeta_shape_flags.append(message)
                         warnings.warn(message, RuntimeWarning, stacklevel=2)
 
             zeta = [
-                st.zeta_from(T, Si)
-                for st, T, Si in zip(stations, evaluation.sojourn_times, S)
+                _zeta_from(st, T, Si, c)
+                for st, T, Si, c in zip(stations, evaluation.sojourn_times, S, arrival_cov)
             ]                                                    # eq 22
+            if keep_loop_zeta:
+                # This evaluation may be the one `Result` reports (final_evaluation=False),
+                # so keep its zeta and phi as priced HERE: at the capacity it measured and
+                # under the station state it was measured under, both of which the step and
+                # the retune below are about to move.
+                zeta_evaluated = zeta
+                zeta_phi_evaluated = [
+                    _phi(st, Si, c) if st.zeta_mode == ZETA_SLOPE else 1.0
+                    for st, Si, c in zip(stations, S, arrival_cov)
+                ]
             S_target = allocate(stations, self.budget, zeta)      # eq 21
 
-            floor = self._noise_floor(stations, S, zeta, evaluation.ci)
+            floor = self._noise_floor(stations, S, zeta, evaluation.ci, arrival_cov)
             if self.damping == 1.0:
                 S_new = S_target       # explicit, so the analytic path adds no arithmetic
             else:
@@ -525,13 +597,15 @@ class Optimizer:
                 f"LOOP measured put it there. Returned capacities are the last vector this "
                 f"analyzer did evaluate; result.zeta is recomputed at those capacities from "
                 f"the final evaluation, so on a stochastic path it comes from a different "
-                f"sample path and re-running eq 21 on it need not reach the boundary again. "
+                f"sample path and re-running eq 21 on it need not reach the boundary again "
+                f"(with final_evaluation=False it is instead the loop's own zeta). "
                 f"The refused point itself is fully named above: each station listed sits at "
                 f"exactly its own gamma/mu.",
                 RuntimeWarning,
                 stacklevel=2,
             )
 
+        reported_loop_evaluation = False
         if stochastic:
             if self.final_evaluation or evaluation is None:
                 # One more run at the converged S* with a fresh seed: those numbers are
@@ -539,25 +613,38 @@ class Optimizer:
                 evaluation = self.analyzer.evaluate(stations, S, fresh_seed=True)
                 sim_calls += 1
                 degraded.extend(evaluation.degraded)
-            # Otherwise the last loop iterate's numbers are reported as-is, which is what
-            # final_evaluation=False asks for. They were measured at the pre-damping S.
+            else:
+                # The last loop iterate's numbers are reported as-is, which is what
+                # final_evaluation=False asks for. They were measured at `S_accepted`,
+                # the iterate BEFORE the final step (the same vector on the
+                # analyzer-domain path, which rolled `S` back to it).
+                reported_loop_evaluation = True
         else:
             evaluation = self.analyzer.evaluate(stations, S)
 
         sojourn_times = list(evaluation.sojourn_times)
-        zeta = [
-            st.zeta_from(T, Si) for st, T, Si in zip(stations, sojourn_times, S)
-        ]
-        # Recomputed HERE rather than captured in the loop: this runs after the last
-        # retune -- or, on the analyzer-domain path, after the rollback that undid the
-        # retune belonging to the refused candidate -- at the same S and the same station
-        # state as the zeta_from call above, so it is the phi that produced the reported
-        # zeta bit-for-bit. A level station reports the literal 1.0 -- no derivative is
-        # evaluated on the default path.
-        zeta_phi = [
-            st.phi(Si) if st.zeta_mode == ZETA_SLOPE else 1.0
-            for st, Si in zip(stations, S)
-        ]
+        arrival_cov = _measured(evaluation, len(stations))
+        if reported_loop_evaluation:
+            # Reusing a loop evaluation means reusing the zeta and phi the loop priced
+            # from it. Recomputing them here would pair that evaluation's E[T] and
+            # measured cov_a -- both functions of capacity -- with the STEPPED `S`, and
+            # with the station state after the last retune: a zeta no evaluation produced.
+            zeta, zeta_phi = list(zeta_evaluated), list(zeta_phi_evaluated)
+        else:
+            zeta = [
+                _zeta_from(st, T, Si, c)
+                for st, T, Si, c in zip(stations, sojourn_times, S, arrival_cov)
+            ]
+            # Recomputed HERE rather than captured in the loop: the final evaluation ran
+            # at this S after the last retune, so this is the same S and the same
+            # station state as the zeta_from call above -- the phi that produced the
+            # reported zeta bit-for-bit. A level station reports the literal 1.0 -- no
+            # derivative is evaluated on the default path. The measured cov_a is this
+            # same final evaluation's, for the same reason.
+            zeta_phi = [
+                _phi(st, Si, c) if st.zeta_mode == ZETA_SLOPE else 1.0
+                for st, Si, c in zip(stations, S, arrival_cov)
+            ]
         zeta_mode = [st.zeta_mode for st in stations]
         objective = sum(st.weight * T for st, T in zip(stations, sojourn_times))
 
@@ -582,6 +669,7 @@ class Optimizer:
             zeta_phi=zeta_phi,
             zeta_mode=zeta_mode,
             zeta_shape_flags=zeta_shape_flags,
+            arrival_cov=[] if evaluation.arrival_cov is None else list(evaluation.arrival_cov),
         )
 
     def _refused_by_analyzer(self, stations, S):
@@ -608,7 +696,7 @@ class Optimizer:
             if st.admits_full_utilization and Si * st.mu == st.gamma
         ]
 
-    def _noise_floor(self, stations, S, zeta, ci):
+    def _noise_floor(self, stations, S, zeta, ci, arrival_cov=None):
         """Propagate CI half-widths into zeta and measure the spread in S (spec 6.4).
 
         A station's `ci` entry is None when its response-time measure had no confidence
@@ -616,11 +704,16 @@ class Optimizer:
         so it contributes no noise instead of crashing on the missing bounds. If every
         entry is None, every dzeta is 0 and the floor comes out 0.0 - correctly meaning
         "no noise information", not "no noise".
+
+        arrival_cov is the measurement the zeta was computed under; the half-width goes
+        through the same override, or the propagation is not the linear map it assumes.
         """
         if ci is None or self.noise_kappa <= 0.0:
             return None
+        if arrival_cov is None:
+            arrival_cov = [None] * len(stations)
         dzeta = [
-            0.0 if entry is None else st.zeta_from(0.5 * (entry[1] - entry[0]), Si)
-            for st, Si, entry in zip(stations, S, ci)
+            0.0 if entry is None else _zeta_from(st, 0.5 * (entry[1] - entry[0]), Si, c)
+            for st, Si, entry, c in zip(stations, S, ci, arrival_cov)
         ]
         return noise_floor(stations, self.budget, zeta, dzeta)

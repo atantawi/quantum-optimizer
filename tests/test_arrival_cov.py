@@ -1,0 +1,510 @@
+"""Measured arrival cov_a: station arithmetic and optimizer plumbing.
+
+Spec: docs/superpowers/specs/2026-09-25-measured-arrival-cov-design.md
+"""
+
+import math
+
+import pytest
+
+from qopt.station import ForkJoinStation, GG1Station
+from qopt.zeta import ZETA_LEVEL, ZETA_SLOPE
+
+
+def _gg1(cov_a, mode=ZETA_SLOPE, cov_s=0.5):
+    return GG1Station(0.6, 1.5, c=2.0, cov_a=cov_a, cov_s=cov_s, name="g", zeta_mode=mode)
+
+
+S_GRID = [0.5, 0.8, 1.2, 3.0]          # gamma/mu = 0.4, so every S here is stable
+
+
+# --- station arithmetic -------------------------------------------------------
+
+@pytest.mark.parametrize("S", S_GRID)
+@pytest.mark.parametrize("c", [0.0, 0.3, 1.0, 2.5])
+def test_a_measured_cov_a_prices_exactly_like_a_station_built_with_it(S, c):
+    # Exact, not approx: the override must run the SAME expression on the measured value,
+    # so a station built with cov_a=c is its bit-for-bit reference.
+    built, measured = _gg1(c), _gg1(1.7)
+    assert measured.sojourn_time(S, cov_a=c) == built.sojourn_time(S)
+    assert measured.dT_dS(S, cov_a=c) == built.dT_dS(S)
+    assert measured.phi(S, cov_a=c) == built.phi(S)
+    assert measured.zeta_from(0.9, S, cov_a=c) == built.zeta_from(0.9, S)
+
+
+def test_the_override_moves_slope_zeta():
+    # Anti-vacuity for the test above: if the override were ignored, 1.7 and 0.2 would
+    # still agree there only by coincidence -- they must not.
+    st = _gg1(1.7)
+    for S in S_GRID:
+        assert st.zeta_from(0.9, S, cov_a=0.2) != st.zeta_from(0.9, S)
+
+
+def test_the_override_does_not_persist_on_the_station():
+    st = _gg1(1.7)
+    before = [st.phi(S) for S in S_GRID]
+    for S in S_GRID:
+        st.phi(S, cov_a=0.2)
+        st.zeta_from(0.9, S, cov_a=0.2)
+        st.sojourn_time(S, cov_a=0.2)
+    assert st.cov_a == 1.7
+    assert [st.phi(S) for S in S_GRID] == before
+
+
+def test_the_level_arm_ignores_the_override():
+    st = _gg1(1.7, mode=ZETA_LEVEL)
+    for S in S_GRID:
+        x = S * st.mu - st.gamma
+        assert st.zeta_from(0.9, S, cov_a=0.2) == 0.9 * x
+
+
+def test_a_measured_zero_cov_takes_the_deterministic_branch():
+    # cov_s = 0 and a measured cov_a = 0 give k == 0 from the OVERRIDE, although the
+    # constructor k is 0.5. phi must then be exactly the k == 0 value, 1 - rho.
+    st = _gg1(1.0, cov_s=0.0)
+    for S in S_GRID:
+        rho = st.gamma / (S * st.mu)
+        assert st.phi(S, cov_a=0.0) == pytest.approx(1.0 - rho, rel=1e-12)
+        assert st.sojourn_time(S, cov_a=0.0) == 1.0 / (S * st.mu)
+
+
+@pytest.mark.parametrize("bad", [-0.1, math.nan, math.inf, -math.inf])
+def test_an_invalid_override_is_rejected_like_the_constructor_argument(bad):
+    st = _gg1(1.7)
+    with pytest.raises(ValueError, match="cov_a must be a finite number >= 0"):
+        st.phi(1.0, cov_a=bad)
+    with pytest.raises(ValueError, match="cov_a must be a finite number >= 0"):
+        st.sojourn_time(1.0, cov_a=bad)
+
+
+def test_a_fork_join_station_ignores_the_override():
+    fj = ForkJoinStation(0.5, 1.0, r=2.0, c1=1.0, c2=1.0, name="fj", zeta_mode=ZETA_SLOPE)
+    for S in [0.8, 1.5, 3.0]:
+        assert fj.phi(S, cov_a=0.3) == fj.phi(S)
+        assert fj.zeta_from(0.9, S, cov_a=0.3) == fj.zeta_from(0.9, S)
+
+
+def test_only_a_slope_station_that_reads_cov_a_uses_a_measurement():
+    assert GG1Station.reads_arrival_cov is True
+    assert ForkJoinStation.reads_arrival_cov is False
+    assert _gg1(1.0).uses_measured_cov_a is True
+    assert _gg1(1.0, mode=ZETA_LEVEL).uses_measured_cov_a is False
+    fj = ForkJoinStation(0.5, 1.0, r=2.0, c1=1.0, c2=1.0, zeta_mode=ZETA_SLOPE)
+    assert fj.uses_measured_cov_a is False
+
+
+def test_zeta_from_does_not_pass_the_keyword_when_there_is_no_measurement():
+    # A user subclass written before the keyword existed must keep working on every
+    # path that never measures.
+    class Legacy(GG1Station):
+        def phi(self, S):
+            return super().phi(S)
+
+    st = Legacy(0.6, 1.5, c=2.0, cov_a=1.7, cov_s=0.5, zeta_mode=ZETA_SLOPE)
+    assert st.zeta_from(0.9, 1.0) == _gg1(1.7).zeta_from(0.9, 1.0)
+
+
+# --- optimizer plumbing ---------------------------------------------------------
+
+import warnings
+
+from qopt.allocator import min_feasible_budget, noise_floor
+from qopt.analyzer import Analyzer, Evaluation
+from qopt.optimizer import Optimizer
+
+# zeta_shape_tol=None keeps these plumbing tests independent of Task 5's check, which
+# (before Task 5) would compare against the constructor model and warn.
+NAIVE = dict(warm_start=False, damping=1.0, noise_kappa=0.0, max_iter=1000,
+             zeta_shape_tol=None)
+
+
+def _pair(md1_cov_a=1.0):
+    # md1 is cov_s = 0 with constructor cov_a = 1 (k = 0.5); a measured 0.3 gives k = 0.045,
+    # far enough that phi -- and so the fixed point -- moves.
+    return [
+        GG1Station(0.6, 1.5, c=2.0, cov_a=md1_cov_a, cov_s=0.0, name="md1",
+                   zeta_mode=ZETA_SLOPE),
+        GG1Station.mm1(1.2, 3.0, c=0.5, name="mm1", zeta_mode=ZETA_SLOPE),
+    ]
+
+
+C = 2.0 * min_feasible_budget(_pair())
+
+
+class CovFake(Analyzer):
+    """A stochastic-declared analyzer whose E[T] is the station's model AT the measured
+    cov_a, and which reports that cov_a: a simulator whose measurement is exactly right.
+
+    `loop` is returned by every non-final evaluation (or `script[i]` for the i-th, the last
+    entry repeating), `final` by the fresh-seeded one, so a test can tell which evaluation
+    a Result field came from. `factor` scales E[T], a stand-in for a model-shape error.
+    """
+
+    is_stochastic = True
+
+    def __init__(self, loop=None, final="same", *, script=None, half_width=None,
+                 factor=1.0):
+        self.loop, self.script = loop, script
+        self.final = loop if final == "same" else final
+        self.half_width, self.factor = half_width, factor
+        self.calls, self.seen = 0, []
+
+    def evaluate(self, stations, S, *, fresh_seed=False):
+        if fresh_seed:
+            cov = self.final
+        elif self.script is not None:
+            cov = self.script[min(self.calls, len(self.script) - 1)]
+        else:
+            cov = self.loop
+        if not fresh_seed:
+            self.calls += 1
+            self.seen.append(list(S))
+        covs = [None] * len(stations) if cov is None else cov
+        T = [(st.sojourn_time(Si) if c is None else st.sojourn_time(Si, cov_a=c))
+             * self.factor for st, Si, c in zip(stations, S, covs)]
+        ci = None if self.half_width is None else [
+            (t - self.half_width, t + self.half_width) for t in T]
+        return Evaluation(sojourn_times=T, ci=ci,
+                          arrival_cov=None if cov is None else list(cov))
+
+
+def test_a_measured_run_is_the_analytic_run_of_the_measured_model():
+    # Bitwise: the override path runs the same arithmetic as a station built with the
+    # measured value (Task 1), so the whole loop must be identical. Fails if the LOOP zeta
+    # (point 1) or the FINAL zeta/phi (point 4) ignores the measurement.
+    measured = Optimizer(_pair(), C, analyzer=CovFake(loop=[0.3, None]), **NAIVE).run()
+    reference = Optimizer(_pair(md1_cov_a=0.3), C,
+                          analyzer=CovFake(loop=None), **NAIVE).run()
+    assert measured.capacities == reference.capacities
+    assert measured.iterations == reference.iterations
+    assert measured.zeta == reference.zeta
+    assert measured.zeta_phi == reference.zeta_phi
+    # Anti-vacuity: the measurement really moved the answer.
+    unmeasured = Optimizer(_pair(), C, analyzer=CovFake(loop=None), **NAIVE).run()
+    assert measured.capacities != unmeasured.capacities
+
+
+def test_result_fields_come_from_the_final_evaluation():
+    res = Optimizer(_pair(), C, analyzer=CovFake(loop=[0.3, None], final=[0.8, None]),
+                    **NAIVE).run()
+    st, S0, T0 = _pair()[0], res.capacities[0], res.sojourn_times[0]
+    assert res.arrival_cov == [0.8, None]
+    assert res.zeta[0] == st.zeta_from(T0, S0, cov_a=0.8)
+    assert res.zeta_phi[0] == st.phi(S0, cov_a=0.8)
+    assert res.zeta_phi[0] != st.phi(S0, cov_a=0.3)        # a mix-up would be visible
+
+
+def test_without_a_final_evaluation_the_last_loop_measurement_is_reported():
+    res = Optimizer(_pair(), C, analyzer=CovFake(loop=[0.3, None], final=[0.8, None]),
+                    final_evaluation=False, **NAIVE).run()
+    assert res.arrival_cov == [0.3, None]
+
+
+def test_a_missing_final_measurement_is_not_filled_from_the_loop():
+    # Per evaluation, never cached: a station unmeasured in the final evaluation is priced
+    # at its constructor cov_a there, even though the loop measured it.
+    res = Optimizer(_pair(), C, analyzer=CovFake(loop=[0.3, None], final=[None, None]),
+                    **NAIVE).run()
+    st, S0, T0 = _pair()[0], res.capacities[0], res.sojourn_times[0]
+    assert res.arrival_cov == [None, None]
+    assert res.zeta[0] == st.zeta_from(T0, S0)
+
+
+def test_a_measurement_that_vanishes_mid_run_is_priced_at_the_constructor_then():
+    # Iteration 2 loses md1's measurement. Its capacities must be those of a run that
+    # measured nothing at iteration 2, which a cache of the last good value would break.
+    script = [[0.3, None], [None, None], [0.3, None]]
+    fake = CovFake(script=script)
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        Optimizer(_pair(), C, analyzer=fake, **dict(NAIVE, max_iter=3)).run()
+    S2, S3 = fake.seen[1], fake.seen[2]
+    # S3 = eq 21 at the zeta of iteration 2, which must be the UNMEASURED zeta at S2.
+    from qopt.allocator import allocate
+    st = _pair()
+    zeta2 = [s.zeta_from(s.sojourn_time(Si), Si) for s, Si in zip(st, S2)]
+    assert S3 == allocate(st, C, zeta2)
+
+
+def test_the_noise_floor_goes_through_the_same_override():
+    fake = CovFake(loop=[0.3, None], half_width=0.02)
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        res = Optimizer(_pair(), C, analyzer=fake, warm_start=False, damping=0.5,
+                        max_iter=1, zeta_shape_tol=None).run()
+    st, S = _pair(), fake.seen[0]
+    ev = CovFake(loop=[0.3, None], half_width=0.02).evaluate(st, S)
+    zeta = [st[0].zeta_from(ev.sojourn_times[0], S[0], cov_a=0.3),
+            st[1].zeta_from(ev.sojourn_times[1], S[1])]
+    dzeta = [st[0].zeta_from(0.02, S[0], cov_a=0.3), st[1].zeta_from(0.02, S[1])]
+    assert res.noise_floor == noise_floor(st, C, zeta, dzeta)
+    unmeasured = [st[0].zeta_from(0.02, S[0]), dzeta[1]]
+    assert res.noise_floor != noise_floor(st, C, zeta, unmeasured)   # anti-vacuity
+
+
+def test_nothing_measured_leaves_arrival_cov_empty():
+    assert Optimizer(_pair(), C).run().arrival_cov == []
+    assert Optimizer(_pair(), C, analyzer=CovFake(loop=None), **NAIVE).run().arrival_cov == []
+
+
+def test_an_old_signature_phi_override_survives_a_measured_run():
+    class Legacy(GG1Station):
+        reads_arrival_cov = False               # a user type qopt knows nothing about
+        def phi(self, S):
+            return super().phi(S)
+
+    stations = [
+        Legacy(0.6, 1.5, c=2.0, cov_a=1.0, cov_s=0.0, name="legacy", zeta_mode=ZETA_SLOPE),
+        GG1Station(1.2, 3.0, c=0.5, cov_a=1.0, cov_s=0.0, name="g", zeta_mode=ZETA_SLOPE),
+    ]
+    budget = 2.0 * min_feasible_budget(stations)
+    res = Optimizer(stations, budget, analyzer=CovFake(loop=[None, 0.3]), **NAIVE).run()
+    assert res.arrival_cov == [None, 0.3]
+
+
+def test_an_old_signature_zeta_from_override_survives_a_measured_run():
+    # optimizer._zeta_from must not pass cov_a=None to a station whose zeta_from
+    # predates the keyword: Legacy is unmeasured ([None, 0.3]), so a leaked keyword
+    # raises TypeError -- in the loop, in _noise_floor (half_width set, so it runs), and
+    # in the final block. noise_kappa=1.0 (NAIVE sets it to 0.0) so _noise_floor does not
+    # short-circuit before reaching its own _zeta_from call.
+    class Legacy(GG1Station):
+        reads_arrival_cov = False               # a user type qopt knows nothing about
+        def zeta_from(self, T, S):
+            return super().zeta_from(T, S)
+
+    stations = [
+        Legacy(0.6, 1.5, c=2.0, cov_a=1.0, cov_s=0.0, name="legacy", zeta_mode=ZETA_SLOPE),
+        GG1Station(1.2, 3.0, c=0.5, cov_a=1.0, cov_s=0.0, name="g", zeta_mode=ZETA_SLOPE),
+    ]
+    budget = 2.0 * min_feasible_budget(stations)
+    fake = CovFake(loop=[None, 0.3], half_width=0.02)
+    res = Optimizer(stations, budget, analyzer=fake, **dict(NAIVE, noise_kappa=1.0)).run()
+    assert res.arrival_cov == [None, 0.3]
+
+
+# --- the shape check compares against the measured model -----------------------
+
+from qopt.zeta import ZETA_SHAPE_TOL
+
+
+def _mismatched():
+    # Constructor cov_a = 2 at cov_s = 0 (k = 2); measured 0 (k = 0). E[T] under the two
+    # differs by a factor 1 + 2*rho/(1-rho): far past the 25% tolerance at the loads these
+    # tests reach.
+    return [
+        GG1Station(0.6, 1.5, c=2.0, cov_a=2.0, cov_s=0.0, name="gg", zeta_mode=ZETA_SLOPE),
+        GG1Station.mm1(1.2, 3.0, c=0.5, name="mm1"),
+    ]
+
+
+def test_a_correct_measurement_silences_a_check_the_constructor_would_fail():
+    stations = _mismatched()
+    budget = 2.0 * min_feasible_budget(stations)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        res = Optimizer(stations, budget, analyzer=CovFake(loop=[0.0, None]),
+                        **dict(NAIVE, zeta_shape_tol=ZETA_SHAPE_TOL)).run()
+    assert res.zeta_shape_flags == []
+    # Anti-vacuity: against the CONSTRUCTOR model this E[T] is far outside tolerance.
+    st, Si, T = stations[0], res.capacities[0], res.sojourn_times[0]
+    assert abs(T / st.sojourn_time(Si) - 1.0) > ZETA_SHAPE_TOL
+
+
+def test_a_shape_error_at_the_measured_cov_names_the_measurement():
+    stations = _mismatched()
+    budget = 2.0 * min_feasible_budget(stations)
+    with pytest.warns(RuntimeWarning, match="gg"):
+        res = Optimizer(stations, budget,
+                        analyzer=CovFake(loop=[0.0, None], factor=4.0),
+                        **dict(NAIVE, zeta_shape_tol=ZETA_SHAPE_TOL)).run()
+    assert len(res.zeta_shape_flags) == 1
+    message = res.zeta_shape_flags[0]
+    assert "measured arrival cov_a=0" in message
+    assert "check the station's parameters" not in message   # not today's advice
+    assert "sampling noise" in message   # hedges the cause; a stochastic run's T is noisy too
+
+
+def test_an_old_signature_sojourn_time_override_survives_the_shape_check():
+    # The shape check must call sojourn_time(Si, cov_a=c) only when c is not None: an
+    # unconditional keyword would raise TypeError against a pre-existing subclass whose
+    # sojourn_time predates the keyword.
+    class Legacy(GG1Station):
+        def sojourn_time(self, S):
+            return super().sojourn_time(S)
+
+    stations = [
+        Legacy(0.6, 1.5, c=2.0, cov_a=1.0, cov_s=0.0, name="legacy", zeta_mode=ZETA_SLOPE),
+        GG1Station(1.2, 3.0, c=0.5, cov_a=1.0, cov_s=0.0, name="g", zeta_mode=ZETA_SLOPE),
+    ]
+    budget = 2.0 * min_feasible_budget(stations)
+    res = Optimizer(stations, budget, analyzer=CovFake(loop=[None, 0.3]),
+                    **dict(NAIVE, zeta_shape_tol=ZETA_SHAPE_TOL)).run()
+    assert res.arrival_cov == [None, 0.3]
+
+
+# --- an old-signature override on the REAL simulated path ----------------------
+#
+# CovFake above decides for itself which stations to report, so it cannot see whether
+# SimulationAnalyzer and extract_arrival_cov would measure an old-signature subclass. These
+# run the real analyzer over a canned response instead.
+
+from conftest import FakeTransport
+from qopt.network import Network, Route
+from qopt.qsim.analyzer import SimulationAnalyzer
+from qopt.qsim.client import QsimClient
+from qopt.qsim.spec import COV_A_MEASURE
+
+
+def _sim_measure(station, type_, mean):
+    return {"station": station, "class": "jobs", "type": type_, "mean": mean,
+            "lower": mean - 0.01, "upper": mean + 0.01, "alpha": 0.05, "precision": 0.02,
+            "success": True, "samplesAnalyzed": 40000, "samplesDiscarded": 1000,
+            "variance": 0.01, "stdDev": 0.1}
+
+
+def _ia_measure(station, mean, variance):
+    # Interarrival-time carries moments but no CI (qsim's documented contract).
+    return {"station": station, "class": "jobs", "type": COV_A_MEASURE, "mean": mean,
+            "lower": None, "upper": None, "success": True, "variance": variance,
+            "stdDev": variance ** 0.5}
+
+
+def _real_sim_run(old_cls):
+    """Optimize [old_cls "old", plain slope GG1 "g"] through the real SimulationAnalyzer.
+
+    Both stations are slope mode and neither overrides `reads_arrival_cov`, so the old
+    subclass inherits GG1Station's opt-in; only its signature can keep it unmeasured. The
+    canned response carries an interarrival-time entry for BOTH, so nothing but the
+    station predicate decides who is measured.
+    """
+    old = old_cls(mu=1.0, c=1.0, cov_a=1.0, cov_s=0.5, name="old", zeta_mode=ZETA_SLOPE)
+    g = GG1Station(mu=1.0, c=1.0, cov_a=1.0, cov_s=0.5, name="g", zeta_mode=ZETA_SLOPE)
+    network = Network(
+        [old, g],
+        [Route(Network.SOURCE, "old", 0.4), Route(Network.SOURCE, "g", 0.6),
+         Route("old", Network.SINK, 1.0), Route("g", Network.SINK, 1.0)],
+        arrival_rate=1.0, name="old-signature-net",
+    )
+    response = {
+        "modelName": "old-signature-net", "solutionMethod": "simulation",
+        "seed": 20260729, "wallClockSeconds": 1.0, "completed": True,
+        "measures": [
+            _sim_measure("old", "response-time", 1.1),
+            _sim_measure("g", "response-time", 0.9),
+            _sim_measure("old", "throughput", 0.4),
+            _sim_measure("g", "throughput", 0.6),
+            _sim_measure("", "system-response-time", 1.0),
+            _ia_measure("old", 2.5, 6.25),          # cov 1.0, were it read
+            _ia_measure("g", 2.5, 1.5625),          # cov 0.5 = sqrt(1.5625 / 2.5**2)
+        ],
+    }
+    transport = FakeTransport((200, response))
+    analyzer = SimulationAnalyzer(network, QsimClient("http://qsim.test", transport=transport))
+    budget = 2.0 * min_feasible_budget(network.stations)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # canned T: convergence is not the point
+        result = Optimizer(network.stations, budget, analyzer=analyzer).run()
+    assert transport.requests[0]["measures"][-1] == COV_A_MEASURE   # g still triggers it
+    return result
+
+
+def test_an_old_signature_phi_override_is_not_measured_on_the_real_path():
+    class OldPhi(GG1Station):                   # main's advertised extension path
+        def phi(self, S):
+            return super().phi(S)
+
+    result = _real_sim_run(OldPhi)
+    assert result.arrival_cov[0] is None
+    assert result.arrival_cov[1] == 0.5
+
+
+def test_an_old_signature_sojourn_time_override_is_not_measured_on_the_real_path():
+    class OldSojourn(GG1Station):
+        def sojourn_time(self, S):
+            return super().sojourn_time(S)
+
+    result = _real_sim_run(OldSojourn)
+    assert result.arrival_cov[0] is None
+    assert result.arrival_cov[1] == 0.5
+
+
+def test_an_old_signature_override_of_any_priced_method_opts_out():
+    class OldDerivative(GG1Station):
+        def dT_dS(self, S):
+            return super().dT_dS(S)
+
+    class Kwargs(GG1Station):                   # **kwargs forwards cov_a, so it may opt in
+        def phi(self, S, **kwargs):
+            return super().phi(S, **kwargs)
+
+    def build(cls):
+        return cls(0.6, 1.5, c=2.0, cov_a=1.0, cov_s=0.5, zeta_mode=ZETA_SLOPE)
+
+    assert OldDerivative.reads_arrival_cov is True           # inherited opt-in ...
+    assert build(OldDerivative).uses_measured_cov_a is False  # ... that the signature vetoes
+    assert build(Kwargs).uses_measured_cov_a is True
+
+
+# --- an all-None measurement is today's run --------------------------------------
+
+def test_an_all_none_measurement_reproduces_the_unmeasured_run():
+    # Spec §9: every Result field agrees except arrival_cov, which lists the Nones.
+    nones = Optimizer(_pair(), C, analyzer=CovFake(loop=[None, None]), **NAIVE).run()
+    unmeasured = Optimizer(_pair(), C, analyzer=CovFake(loop=None), **NAIVE).run()
+    assert nones.capacities == unmeasured.capacities
+    assert nones.zeta == unmeasured.zeta
+    assert nones.zeta_phi == unmeasured.zeta_phi
+    assert nones.objective == unmeasured.objective
+    assert nones.iterations == unmeasured.iterations
+    assert nones.arrival_cov == [None, None]
+    assert unmeasured.arrival_cov == []
+    # "Every field": the named five above are the ruling's; this backs the rest.
+    import dataclasses
+    others = [f.name for f in dataclasses.fields(nones) if f.name != "arrival_cov"]
+    assert len(others) > 5
+    assert [getattr(nones, n) for n in others] == [getattr(unmeasured, n) for n in others]
+
+
+# --- final_evaluation=False pairs zeta with the capacity it was measured at ----
+
+def test_without_a_final_evaluation_zeta_is_priced_where_it_was_measured():
+    # final_evaluation=False reports the last LOOP evaluation, which was measured at the
+    # iterate BEFORE the final step. Its T and cov_a are functions of that capacity, so
+    # zeta and phi must be priced there too -- not at the stepped `capacities`.
+    fake = CovFake(script=[[0.3, None], [0.8, None]])
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        res = Optimizer(_pair(), C, analyzer=fake, final_evaluation=False,
+                        **dict(NAIVE, max_iter=2, damping=0.5)).run()
+    st, S_eval = _pair(), fake.seen[-1]
+    assert res.capacities != S_eval                      # a real final step was taken
+    assert res.arrival_cov == [0.8, None]
+    assert res.zeta == [st[0].zeta_from(res.sojourn_times[0], S_eval[0], cov_a=0.8),
+                        st[1].zeta_from(res.sojourn_times[1], S_eval[1])]
+    assert res.zeta_phi == [st[0].phi(S_eval[0], cov_a=0.8), st[1].phi(S_eval[1])]
+
+
+def test_without_a_final_evaluation_zeta_reads_the_station_state_it_was_measured_under():
+    # A tuned fork-join is retuned at the bottom of every iteration, AFTER its evaluation.
+    # Pricing the reported zeta at the evaluated capacity but under the retuned ray would
+    # pair the measurement with a station it was not taken on.
+    from qopt.forkjoin_policy import R_STAR_TUNED
+
+    def stations():
+        return _pair() + [ForkJoinStation(0.5, 1.0, r=2.0, c1=1.0, c2=1.0, name="fj",
+                                          r_star=R_STAR_TUNED, zeta_mode=ZETA_SLOPE)]
+
+    class StateFake(CovFake):
+        def evaluate(self, stations, S, *, fresh_seed=False):
+            self.states = [s.policy_state() for s in stations]
+            return super().evaluate(stations, S, fresh_seed=fresh_seed)
+
+    budget = 2.0 * min_feasible_budget(stations())
+    fake = StateFake(loop=[0.3, None, None])
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        res = Optimizer(stations(), budget, analyzer=fake, final_evaluation=False,
+                        **dict(NAIVE, max_iter=2, damping=0.5)).run()
+    ref = stations()
+    for s, state in zip(ref, fake.states):
+        s.restore_policy(state)
+    S_eval = fake.seen[-1]
+    assert res.zeta[2] == ref[2].zeta_from(res.sojourn_times[2], S_eval[2])
+    assert res.zeta_phi[2] == ref[2].phi(S_eval[2])
