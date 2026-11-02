@@ -159,7 +159,7 @@ arrival rate and coefficients of variation — exact for M/M/1 and M/G/1, an
   capture how one station's departure process shapes the arrival variability of the
   stations downstream of it. `SimulationAnalyzer` obtains `E[T]` from a discrete-event
   simulation of the whole network (one `POST /simulate` per optimizer iteration) via
-  [`qsim-service`](https://github.com/atantawi/qsim-service), so that coupling is
+  [`qsim-service`](https://github.com/modeling-analysis/qsim-service), so that coupling is
   captured directly. `qopt` speaks HTTP/JSON only and declares zero runtime
   dependencies; the service is GPL v2 and stays behind that boundary.
 - **Single open chain only.** One customer chain enters from a source and departs to a
@@ -170,7 +170,7 @@ arrival rate and coefficients of variation — exact for M/M/1 and M/G/1, an
 - **Fork-join measures other than `response-time` are diagnostics only.** JMT defines
   just two fork-join region measures, so `utilization`, `queue-length`, and friends
   report join-station numbers at a fork-join node
-  ([qsim-service#8](https://github.com/atantawi/qsim-service/issues/8)). Nothing
+  ([qsim-service#8](https://github.com/modeling-analysis/qsim-service/issues/8)). Nothing
   outside `response-time` enters eq 22, so this constrains reporting, not results.
 
 See
@@ -262,6 +262,21 @@ last iterate) but sets `converged=False`, records the final `residual` (`‖Sₖ
 emits a `RuntimeWarning` — inspect `result.converged` before trusting the allocation.
 
 ### Simulated evaluation
+
+This path needs a running [`qsim-service`](https://github.com/modeling-analysis/qsim-service),
+built from commit `df45cd1` or later. Earlier builds compute confidence intervals at the wrong
+level and ignore the `minSamples` floor, and neither problem raises an error. Build and run it
+from a clone of that repo with Docker or Podman (the commands are the same):
+
+```bash
+docker build -t qsim-service .            # or: podman build ...
+docker run --rm -p 8080:8080 qsim-service  # or: podman run ...
+curl localhost:8080/health                 # {"status":"ok"}
+```
+
+Then set `QOPT_QSIM_URL=http://localhost:8080` to enable the examples' simulated output and the
+live tests. Leave it unset for plain `pytest` runs, because the live tests take longer and fail
+when the service is down.
 
 ```python
 from qopt import (GG1Station, Network, Optimizer, QsimClient, Route,
